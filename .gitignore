@@ -1,0 +1,17 @@
+**/__pycache__
+**/.ruff_cache/
+**/.pytest_cache/
+**/.idea
+**/*.egg-info
+**/.venv
+**/build
+**/dist
+.vscode
+
+# written by setuptools_scm at build time
+src/wasmhost/_version.py
+# coverage
+.coverage
+.coverage.*
+coverage.xml
+htmlcov/

@@ -1,0 +1,67 @@
+"""JSContextBackend against fake Objective-C bridges (objc_util, rubicon-objc) that drive a real engine.
+
+The real thing only exists on an iOS device; this checks that the backend speaks each bridge's protocol
+(method names, how exceptions are read and cleared) and that everything above it works through it.
+"""
+
+from __future__ import annotations
+
+import sys
+from collections.abc import Iterator
+
+import fake_objc
+import pytest
+import wasm_builder as wb
+
+import wasmhost
+
+
+@pytest.fixture(params=["objc_util", "rubicon"])
+def jscontext(request: pytest.FixtureRequest, monkeypatch: pytest.MonkeyPatch) -> Iterator[wasmhost.JSContextBackend]:
+    engine = fake_objc.real_engine()
+    fake_objc.install(monkeypatch, engine, request.param)
+    backend = wasmhost.JSContextBackend()
+    yield backend
+    backend.close()
+    engine.close()
+
+
+def test_which_bridge(jscontext: wasmhost.JSContextBackend, request: pytest.FixtureRequest) -> None:
+    assert jscontext.bridge == (
+        "objc_util" if request.node.callspec.params["jscontext"] == "objc_util" else "rubicon-objc"
+    )
+
+
+def test_evaluate_and_errors(jscontext: wasmhost.JSContextBackend) -> None:
+    assert jscontext.evaluate("1 + 2") == "3"
+    with pytest.raises(RuntimeError, match=r"^\[JS\] .*boom"):
+        jscontext.evaluate("throw new Error('boom')")
+    assert jscontext.evaluate("'still works'") == "still works"  # the exception was cleared
+
+
+def test_the_api_through_it(jscontext: wasmhost.JSContextBackend) -> None:
+    module, instance = wasmhost.instantiate(wb.arith(), backend=jscontext)
+    assert wasmhost.Module.exports(module)
+    assert instance.exports.add(20, 22) == 42
+    assert instance.exports.add64(2**62, 1) == 2**62 + 1
+    with pytest.raises(wasmhost.Trap):
+        instance.exports.trap()
+    batch = instance.batch()
+    total = batch.call(instance.exports.add, 40, 2)
+    batch.write(instance.exports.memory, total, b"!")
+    echo = batch.read(instance.exports.memory, total, 1)
+    batch.run()
+    assert (total.value, echo.value) == (42, b"!")
+
+
+def test_the_selftest_through_it(jscontext: wasmhost.JSContextBackend) -> None:
+    lines: list[str] = []
+    assert wasmhost.selftest(jscontext, out=lines.append), "\n".join(lines)
+    assert any("bridge: " in line for line in lines)
+
+
+def test_no_bridge_at_all(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setitem(sys.modules, "objc_util", None)
+    monkeypatch.setitem(sys.modules, "rubicon.objc", None)
+    with pytest.raises(ImportError, match="Objective-C bridge"):
+        wasmhost.JSContextBackend()

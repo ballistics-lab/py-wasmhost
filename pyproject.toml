@@ -1,0 +1,80 @@
+[build-system]
+requires = ["setuptools>=77", "setuptools_scm>=8"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "wasmhost"
+dynamic = ["version"]
+description = "WebAssembly for CPython, PyPy and Pythonista, run in JavaScriptCore or Node, with the JavaScript WebAssembly API"
+readme = "README.md"
+authors = [{ name = "o-murphy", email = "thehelixpg@gmail.com" }]
+# 3.10 is what Pythonista runs.
+license = "MIT"
+license-files = ["LICENSE"]
+requires-python = ">=3.10"
+keywords = ["webassembly", "wasm", "javascriptcore", "jscontext", "pythonista", "node"]
+classifiers = [
+    "Intended Audience :: Developers",
+    "Natural Language :: English",
+    "Operating System :: OS Independent",
+    "Operating System :: iOS",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3 :: Only",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Programming Language :: Python :: 3.14",
+    "Programming Language :: Python :: Free Threading :: 3 - Stable",
+    "Programming Language :: Python :: Implementation :: CPython",
+    "Programming Language :: Python :: Implementation :: PyPy",
+    "Topic :: Software Development :: Libraries :: Python Modules",
+    "Typing :: Typed",
+]
+dependencies = []
+
+[project.optional-dependencies]
+wasmtime = ["wasmtime>=49.0.0"]
+
+[tool.setuptools]
+package-dir = { "" = "src" }
+packages = ["wasmhost"]
+
+[tool.setuptools.package-data]
+wasmhost = ["py.typed"]
+
+[tool.setuptools_scm]
+# Until the repo has a tag (or any commit), there is nothing to derive a version from.
+fallback_version = "0.0.0"
+version_file = "src/wasmhost/_version.py"
+
+[dependency-groups]
+dev = [
+    "pre-commit>=4.6.2",
+    "pyright>=1.1.414",
+    "pytest>=9.1.1",
+    "ruff>=0.16.8",
+    "wasmtime>=49.0.0",
+    # wasm3 backend; CPython 3.11+ only, and taken from git (see [tool.uv.sources])
+    "pywasm3; python_version >= '3.11' and platform_python_implementation == 'CPython'",
+]
+
+[tool.uv.sources]
+# pywasm3's PyPI release is years behind the API Wasm3Backend uses; build it from the repo (uv also
+# fetches its wasm3 submodule). Needs a C compiler.
+pywasm3 = { git = "https://github.com/wasm3/pywasm3", rev = "fce65fd7fdffd8b6866a4a6f7612a0a5bc28b018" } # Py_mod_gil support (3790b9b) + merge
+
+[tool.pytest.ini_options]
+minversion = "8.0"
+addopts = "-rf"
+testpaths = ["tests"]
+
+[tool.pyright]
+include = ["src", "tests", "examples"]
+strict = ["src"]
+
+[tool.ruff]
+line-length = 120
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B"]

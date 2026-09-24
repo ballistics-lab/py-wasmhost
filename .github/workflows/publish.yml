@@ -1,0 +1,110 @@
+name: Publish
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+    inputs:
+      testpypi:
+        description: "Publish to TestPyPI"
+        required: false
+        type: boolean
+        default: false
+      version:
+        description: "Override version (e.g. 0.1.0rc1); TestPyPI needs one without a dev/local suffix"
+        required: false
+        type: string
+        default: ""
+
+run-name: >
+  Publish → ${{ github.event_name == 'push' && 'PyPI' ||
+      inputs.testpypi && 'TestPyPI' || 'build only' }}
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: Build sdist + wheel
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0 # setuptools_scm needs tags
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@bec219d24cd3e171d82865faccec33120bb574f4
+
+      - name: Build (the wheel is built from the sdist, so this proves the sdist builds on its own)
+        env:
+          SETUPTOOLS_SCM_PRETEND_VERSION: ${{ inputs.version }}
+          # PyPI/TestPyPI reject local version segments (+g<hash>); keep them on build-only runs.
+          SETUPTOOLS_SCM_OVERRIDES_FOR_WASMHOST: >-
+            ${{ (github.event_name == 'push' || inputs.testpypi) && '{local_scheme = "no-local-version"}' || '' }}
+        run: uv build --out-dir dist
+
+      - name: Smoke-test the wheel in a clean environment
+        run: |
+          uv venv -q /tmp/smoke
+          uv pip install -q --python /tmp/smoke dist/*.whl
+          cd /tmp && WASMHOST_BACKEND=node /tmp/smoke/bin/python -c "
+          import wasmhost as wh
+          wasm = bytes.fromhex('0061736d0100000001070160027f7f017f03020100070701036164640000' '0a09010700200020016a0b')
+          assert wh.instantiate(wasm).instance.exports.add(2, 3) == 5
+          print('ok on', wh.get_backend().name)
+          "
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: dist
+          path: dist
+          retention-days: 14
+
+  publish:
+    needs: build
+    if: github.event_name == 'push' || inputs.testpypi
+    runs-on: ubuntu-latest
+    environment: ${{ github.event_name == 'push' && 'pypi' || 'testpypi' }}
+    permissions:
+      id-token: write
+    steps:
+      - uses: actions/download-artifact@v8
+        with:
+          name: dist
+          path: dist
+
+      - name: Publish to PyPI
+        if: github.event_name == 'push'
+        uses: pypa/gh-action-pypi-publish@release/v1
+        with:
+          skip-existing: true
+
+      - name: Publish to TestPyPI
+        if: github.event_name == 'workflow_dispatch'
+        uses: pypa/gh-action-pypi-publish@release/v1
+        with:
+          skip-existing: true
+          repository-url: https://test.pypi.org/legacy/
+
+  release:
+    needs: build
+    if: github.event_name == 'push'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v8
+        with:
+          path: artifacts
+
+      - name: Create GitHub release (draft)
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "${{ github.ref_name }}" \
+            --repo "${{ github.repository }}" \
+            --title "wasmhost ${{ github.ref_name }}" \
+            --generate-notes \
+            --draft \
+            artifacts/dist/*

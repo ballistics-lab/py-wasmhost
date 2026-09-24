@@ -1,0 +1,105 @@
+name: Tests
+
+# Builds the package from source and runs the suite once per backend, selected with pytest's --wasm-backend
+# (see tests/conftest.py; a backend that can't start fails the step, it is never skipped). Coverage is not
+# collected here: tiny-bclibc-wasm runs the same backends through wasmhost and combines it there.
+#
+#   test:     every OS x CPython oldest/newest (also free-threaded 3.14t) + PyPy, on wasmtime and on Node (both
+#             available on every runner), and on wasm3 where pywasm3 installs (CPython 3.11+; built from git).
+#   jsc:      WebKitGTK's JavaScriptCore -- the engine behind Pythonista's JSContext -- with its JIT
+#             and without it (iOS apps like Pythonista run it without), as the stand-in for an iOS
+#             device.
+
+on:
+  push:
+    paths-ignore: &non-code-paths
+      - "**.md"
+      - "LICENSE"
+  pull_request:
+    paths-ignore: *non-code-paths
+  workflow_dispatch:
+
+concurrency:
+  group: tests-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    name: ${{ matrix.os }} / ${{ matrix.python-version }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
+        python-version: ["3.10", "3.14", "3.14t", "pypy3.11"]
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0 # setuptools_scm needs tags for the package version
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@bec219d24cd3e171d82865faccec33120bb574f4
+        with:
+          python-version: ${{ matrix.python-version }}
+
+      - name: Install
+        run: uv sync --locked
+
+      - name: pytest --wasm-backend wasmtime
+        run: uv run --locked pytest -v --wasm-backend wasmtime
+
+      - name: pytest --wasm-backend node
+        if: ${{ !cancelled() }} # run every backend even if an earlier one failed
+        run: uv run --locked pytest -v --wasm-backend node
+
+      - name: pytest --wasm-backend wasm3
+        # pywasm3 is a dev dependency only on CPython >= 3.11 (see pyproject.toml). Warnings are errors so
+        # that, on 3.14t, an extension turning the GIL back on at import fails the run.
+        if: ${{ !cancelled() && matrix.python-version != '3.10' && !startsWith(matrix.python-version, 'pypy') }}
+        run: uv run --locked pytest -v -W error::RuntimeWarning --wasm-backend wasm3
+
+      - name: Example
+        run: WASMHOST_BACKEND=node uv run --locked python examples/basic.py
+
+  jsc:
+    name: WebKitGTK JavaScriptCore
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+
+      - name: Install JavaScriptCore + PyGObject
+        run: |
+          sudo apt-get update -q
+          sudo apt-get install -y -q gir1.2-javascriptcoregtk-4.1 python3-gi
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@bec219d24cd3e171d82865faccec33120bb574f4
+
+      # python3-gi is built for the distribution's own Python, so use that interpreter with its
+      # site-packages visible.
+      - name: Install into a system-site-packages venv
+        run: |
+          uv venv --system-site-packages --python /usr/bin/python3 .venv
+          uv pip install -e . pytest
+
+      - name: pytest --wasm-backend gi-jsc (JIT on)
+        run: .venv/bin/python -m pytest -v --wasm-backend gi-jsc
+        env:
+          JSC_useJIT: "true"
+
+      - name: pytest --wasm-backend gi-jsc (JIT off, as on iOS)
+        if: ${{ !cancelled() }}
+        run: .venv/bin/python -m pytest -v --wasm-backend gi-jsc
+        env:
+          JSC_useJIT: "false"
+
+      - name: Example
+        run: WASMHOST_BACKEND=gi-jsc .venv/bin/python examples/basic.py
