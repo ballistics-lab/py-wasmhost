@@ -114,6 +114,34 @@ class CApiContext:
         return ctypes.c_void_p(self._ref)  # objc_util hands back a c_void_p
 
 
+class RubiconCApiContext:
+    """The same, in rubicon-objc's shape: selectors are methods with positional arguments, properties are attributes,
+    and a pointer comes back as a typed ctypes pointer (`LP_OpaqueJSContext`), not a c_void_p."""
+
+    def __init__(self) -> None:
+        self._inner = CApiContext()
+        self.exception: _Value | None = None  # a property, as in a rubicon proxy
+
+    def evaluateScript(self, src: str) -> _Value:  # noqa: N802
+        try:
+            return _Value(self._inner._api.evaluate(src))  # pyright: ignore[reportPrivateUsage]
+        except RuntimeError as exc:
+            self.exception = _Value(str(exc).removeprefix("[JS] "))
+            return _Value("undefined")
+
+    @property
+    def JSGlobalContextRef(self) -> Any:  # noqa: N802
+        import ctypes
+
+        class OpaqueJSContext(ctypes.Structure):
+            pass
+
+        return ctypes.cast(
+            ctypes.c_void_p(self._inner._ref),  # pyright: ignore[reportPrivateUsage]
+            ctypes.POINTER(OpaqueJSContext),
+        )
+
+
 def real_engine() -> wasmhost.JSBackend:
     """A real JavaScript engine to stand in for the device's JSContext, or a skip."""
     for name in wasmhost.JS_AUTO_ORDER:
@@ -132,6 +160,10 @@ def install(monkeypatch: pytest.MonkeyPatch, engine: wasmhost.JSBackend | None, 
         module = _module("objc_util", context)
         module.c = context.lib  # type: ignore[attr-defined]
         monkeypatch.setitem(sys.modules, "objc_util", module)
+    elif bridge == "rubicon+c":  # rubicon-objc with the real C library beside it (needs no `engine`)
+        monkeypatch.setitem(sys.modules, "objc_util", None)
+        monkeypatch.setitem(sys.modules, "rubicon", types.ModuleType("rubicon"))
+        monkeypatch.setitem(sys.modules, "rubicon.objc", _module("rubicon.objc", RubiconCApiContext()))
     elif bridge == "objc_util":
         assert engine is not None
         monkeypatch.setitem(sys.modules, "objc_util", _module("objc_util", ObjcUtilContext(engine)))
