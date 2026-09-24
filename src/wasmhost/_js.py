@@ -37,7 +37,7 @@ from ._backend import (
     normalize,
 )
 from ._binary import FuncType
-from ._capi import CApi
+from ._capi import CApi, load_library
 from ._errors import CompileError, LinkError, Trap
 
 __all__ = ("GIJavaScriptCoreBackend", "JSContextBackend", "JSBackend", "NodeBackend")
@@ -393,13 +393,11 @@ class JSContextBackend(JSBackend):
         self._ctx: Any
         self._rubicon = False
         self.bridge = "objc_util"  # which Objective-C bridge is in use
+        lib: Any = None  # the C functions of JavaScriptCore, for bytes and host functions
         try:
             objc_util: Any = importlib.import_module("objc_util")
             self._ctx = objc_util.ObjCClass("JSContext").alloc().init()
-            try:  # objc_util's `c` has the C functions; the context reference has to be asked of the proxy
-                self._capi = CApi(objc_util.c, lambda: self._ctx.JSGlobalContextRef())
-            except (AttributeError, TypeError):
-                pass
+            lib = getattr(objc_util, "c", None)  # objc_util's `c` finds them in the process
         except ImportError:
             try:
                 rubicon: Any = importlib.import_module("rubicon.objc")
@@ -407,12 +405,28 @@ class JSContextBackend(JSBackend):
                 raise ImportError(
                     "no Objective-C bridge: JSContext needs Pythonista's objc_util or rubicon-objc"
                 ) from None
+            try:  # on a Mac the framework has to be loaded before its classes exist; already there on iOS
+                lib = load_library()
+            except OSError:
+                pass
             self._ctx = rubicon.ObjCClass("JSContext").alloc().init()
             self._rubicon = True
             self.bridge = "rubicon-objc"
+        if lib is not None:
+            try:  # the context reference has to be asked of the proxy; asking now shows whether it can be
+                capi = CApi(lib, self._context_ref)
+                capi.ref  # noqa: B018
+                self._capi = capi
+            except Exception:  # noqa: BLE001 -- no C API here: bytes go through hex, and no host functions
+                pass
         if self._capi is not None:
             self.features = self.features | {"imports"}
         _check_webassembly(self)
+
+    def _context_ref(self) -> Any:
+        """The JSGlobalContextRef of the Objective-C context: a method under objc_util, a property under rubicon."""
+        ref = self._ctx.JSGlobalContextRef
+        return ref() if callable(ref) else ref
 
     def evaluate(self, src: str) -> str:
         if self._rubicon:  # rubicon-objc: methods take their arguments positionally, properties are attributes
