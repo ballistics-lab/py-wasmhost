@@ -100,6 +100,8 @@ def _selftest_backend(backend: Backend, out: Callable[[str], object]) -> _Report
     step = report.step
     bridge = getattr(backend, "bridge", None)
     out(f"backend     {backend.name}" + (f" (bridge: {bridge})" if bridge else ""))
+    if (why := getattr(backend, "c_api_error", None)) is not None:
+        out(f"C API       not used: {why}")
 
     if isinstance(backend, JSBackend):
         step("evaluate returns a string", lambda: _expect(backend.evaluate("1 + 2"), "3"))

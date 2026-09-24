@@ -246,6 +246,15 @@ wheels = [
 ]
 
 [[package]]
+name = "rubicon-objc"
+version = "0.5.6"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/0d/26/3e6bb0bfd41ff446d29931205088556055ec18c31bf099d6719c281c448c/rubicon_objc-0.5.6.tar.gz", hash = "sha256:0d3b0a9889f72916c095a58e7e1c275c260cb8a86b8ef8b909e60cb002fd54d5", size = 189833, upload-time = "2026-07-02T06:08:16.38Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/26/a6/cf07f7f931a7fab57b866ed086b15e75bff4a908084b71e74b42798207bf/rubicon_objc-0.5.6-py3-none-any.whl", hash = "sha256:b53f6fc458d78ddf2ce82365c34e234ae85cd8217c983438ae4bf9e1bd1252b3", size = 66152, upload-time = "2026-07-02T06:08:14.995Z" },
+]
+
+[[package]]
 name = "ruff"
 version = "0.16.9"
 source = { registry = "https://pypi.org/simple" }
@@ -364,6 +373,7 @@ dev = [
     { name = "pyright" },
     { name = "pytest" },
     { name = "pywasm3", marker = "python_full_version >= '3.11' and platform_python_implementation == 'CPython'" },
+    { name = "rubicon-objc", marker = "sys_platform == 'darwin'" },
     { name = "ruff" },
     { name = "wasmtime" },
 ]
@@ -378,6 +388,7 @@ dev = [
     { name = "pyright", specifier = ">=1.1.414" },
     { name = "pytest", specifier = ">=9.1.1" },
     { name = "pywasm3", marker = "python_full_version >= '3.11' and platform_python_implementation == 'CPython'", git = "https://github.com/wasm3/pywasm3?rev=fce65fd7fdffd8b6866a4a6f7612a0a5bc28b018" },
+    { name = "rubicon-objc", marker = "sys_platform == 'darwin'", specifier = ">=0.5.4" },
     { name = "ruff", specifier = ">=0.16.8" },
     { name = "wasmtime", specifier = ">=49.0.0" },
 ]

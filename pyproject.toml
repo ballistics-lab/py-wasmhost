@@ -55,6 +55,8 @@ dev = [
     "pytest>=9.1.1",
     "ruff>=0.16.8",
     "wasmtime>=49.0.0",
+    # The real Objective-C JSContext on a Mac, for tests/test_macos.py (Pythonista's objc_util exists only there)
+    "rubicon-objc>=0.5.4; sys_platform == 'darwin'",
     # wasm3 backend; CPython 3.11+ only, and taken from git (see [tool.uv.sources])
     "pywasm3; python_version >= '3.11' and platform_python_implementation == 'CPython'",
 ]

@@ -136,14 +136,14 @@ fallback if the C API ever fails. The self-test reports which was used (`N bytes
 
 | Backend | Where | How it is detected |
 |---|---|---|
-| `jscontext` | iOS (Pythonista, PythonIDE) | JavaScriptCore's `JSContext` through `objc_util` (both apps have it), or through [`rubicon-objc`](https://github.com/beeware/rubicon-objc) where that is missing (checked only against a fake bridge, not on a device) |
 | `wasmtime` | anywhere with the `wasmtime` package | `import wasmtime` (`pip install wasmtime`) |
 | `wasm3` | CPython 3.11+ with [pywasm3](https://github.com/wasm3/pywasm3) | `import wasm3`; install it from git: `uv add "pywasm3 @ git+https://github.com/wasm3/pywasm3"` (its PyPI release predates the API used here) |
+| `jscontext` | iOS (Pythonista, PythonIDE), and a Mac with rubicon-objc | Apple's `JSContext` through an Objective-C bridge: Pythonista's `objc_util` (both iOS apps have it), or [`rubicon-objc`](https://github.com/beeware/rubicon-objc) (`pip install rubicon-objc`; tested in CI on macOS, not on a device). `backend.bridge` says which |
 | `jsc` | Linux, macOS | JavaScriptCore's C API through `ctypes`, no PyGObject: `apt install libjavascriptcoregtk-4.1-0` (macOS uses the system framework) |
 | `gi-jsc` | Linux | the same engine through PyGObject (`apt install gir1.2-javascriptcoregtk-4.1 python3-gi`) |
 | `node` | anywhere with Node.js | `node` on `PATH` |
 
-With nothing configured, the first backend that starts wins, in the order shown. Each backend's constructor is its
+With nothing configured, the first backend that starts wins, in the order shown: the native runtimes when they are installed, then the JavaScript engines. (On Pythonista nothing above `jscontext` can be installed, so it is the pick there; on a Mac that has rubicon-objc, `wasmtime` still comes first.) Each backend's constructor is its
 own probe: it fails when its runtime is missing. Choose one with `WASMHOST_BACKEND=<name>`,
 `wasmhost.set_backend("<name>")` or `Module(..., backend="<name>")`; `wasmhost.get_backend().name` says which is in
 use. `wasmhost.close()` closes the backends it started. (In WebAssembly's words the *host* is the embedder, the
@@ -153,9 +153,9 @@ Not every backend can do everything; `backend.supports(...)` says:
 
 | | `memory.grow` from Python | `table.length` | host functions (`imports`) |
 |---|---|---|---|
-| `jscontext` | yes | yes | yes, through the C API under `objc_util` (not under `rubicon-objc`) |
 | `wasmtime` | yes | yes | yes |
 | `wasm3` | no (`NotImplementedError`; a module's own `memory.grow` works) | no | yes |
+| `jscontext` | yes | yes | yes, through JavaScriptCore's C API (under either bridge) |
 | `jsc` | yes | yes | yes |
 | `gi-jsc` | yes | yes | no |
 | `node` | yes | yes | yes |
@@ -164,8 +164,8 @@ Not every backend can do everything; `backend.supports(...)` says:
 
 | Where | Backend | Result | A call / a batch of 3 |
 |---|---|---|---|
-| Pythonista 3 (StaSh 0.7.5), Python 3.10.4, iPhone17,3 | `jscontext` (`objc_util`) | 23/23 (before host functions and the C API bytes path were added) | 53 / 97 us |
-| PythonIDE, Python 3.14.7, `ios-13.0-arm64-iphoneos` | `jscontext` (`objc_util`) | 23/23 (before host functions and the C API bytes path were added) | 37 / 76 us |
+| Pythonista 3 (StaSh 0.7.5), Python 3.10.4, iPhone17,3 | `jscontext` (`objc_util`) | **25/25**, bytes `via C API`, host functions (wasmhost 0.0.2b1) | 55 / 102 us |
+| PythonIDE, Python 3.14.7, `ios-13.0-arm64-iphoneos` | `jscontext` (`objc_util`) | **25/25**, bytes `via C API`, host functions (wasmhost 0.0.2b1) | 39 / 77 us |
 | Linux, CPython 3.14t | `jsc` | 25/25 | 32 / 102 us |
 | Linux, CPython 3.14t | `gi-jsc` | 25/25 (host functions: not available, as documented) | 35 / 62 us |
 | Linux, CPython 3.14t | `node` | 25/25 | 82 / 340 us |
@@ -177,10 +177,11 @@ The times are one run of the self-test each, so read them as an order of magnitu
 what a call does, plus a round trip on `node` (measured once: about 4 us on `wasm3`, 50 us on `wasmtime` and `jsc`,
 200 us on `node`, per host call including the export around it).
 
-Not run on a device since they were added: the C API bytes path and host functions on `jscontext` (on Linux they
-run against a fake `objc_util` whose `c` is the real JavaScriptCore library, so the calls are the ones the iOS path
-makes, but it is not the device), and the `rubicon-objc` bridge (both iOS apps above have `objc_util`, so it wasn't
-needed). Node's synchronous wait for a host function's answer has not been run on Windows either.
+Host functions and the C API bytes path on `jscontext` have run on both iOS apps above; on Linux they also run
+against a fake `objc_util` whose `c` is the real JavaScriptCore library, and on macOS in CI against a real
+Objective-C `JSContext` through rubicon-objc. Not run on a device: the `rubicon-objc` bridge (both iOS apps have
+`objc_util`, so it isn't needed there). Node's synchronous wait for a host function's answer has run in CI on Linux,
+macOS and Windows.
 
 ### A note on wasmtime and `faulthandler`
 

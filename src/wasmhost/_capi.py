@@ -82,6 +82,11 @@ class CApi:
     def ref(self) -> int:
         ref: Any = self._context() if callable(self._context) else self._context
         ref = getattr(ref, "value", ref)  # a c_void_p, as objc_util returns it
+        if not isinstance(ref, int):  # a typed ctypes pointer, as rubicon-objc returns it (LP_OpaqueJSContext)
+            try:
+                ref = ctypes.cast(ref, _P).value
+            except (TypeError, ctypes.ArgumentError):
+                pass
         if not isinstance(ref, int) or not ref:
             raise OSError(f"no JSGlobalContextRef ({ref!r})")
         return ref

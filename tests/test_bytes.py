@@ -39,9 +39,9 @@ def test_not_bytes_is_an_error(engine: wasmhost.JSBackend) -> None:
         engine.get_bytes("undefined")
 
 
-def _jscontext_with_broken_c_api(monkeypatch: pytest.MonkeyPatch, engine: wasmhost.JSBackend) -> Any:
-    """A JSContext whose objc_util has a `c` that can't do what the C API path asks."""
-    fake_objc.install(monkeypatch, engine, "objc_util")
+def _jscontext_with_broken_c_api(monkeypatch: pytest.MonkeyPatch) -> Any:
+    """A JSContext whose objc_util has a context reference but a `c` that can't do what the C API path asks."""
+    fake_objc.install(monkeypatch, None, "objc_util+c")
 
     class Broken:
         def __getattr__(self, name: str) -> Any:
@@ -56,8 +56,7 @@ def _jscontext_with_broken_c_api(monkeypatch: pytest.MonkeyPatch, engine: wasmho
 
 
 def test_jscontext_falls_back_to_hex_when_the_c_api_fails(monkeypatch: pytest.MonkeyPatch) -> None:
-    engine = fake_objc.real_engine()
-    backend = _jscontext_with_broken_c_api(monkeypatch, engine)
+    backend = _jscontext_with_broken_c_api(monkeypatch)
     assert (
         backend._capi is not None
     )  # signatures could be set: it is the calls that fail  # pyright: ignore[reportPrivateUsage]
@@ -65,7 +64,6 @@ def test_jscontext_falls_back_to_hex_when_the_c_api_fails(monkeypatch: pytest.Mo
     assert backend._capi is None  # pyright: ignore[reportPrivateUsage]
     assert backend.get_bytes("blob") == b"abc"
     backend.close()
-    engine.close()
 
 
 def test_jscontext_without_a_c_api_uses_hex(monkeypatch: pytest.MonkeyPatch) -> None:

@@ -64,6 +64,16 @@ jobs:
         if: ${{ !cancelled() && matrix.python-version != '3.10' && !startsWith(matrix.python-version, 'pypy') }}
         run: uv run --locked pytest -v -W error::RuntimeWarning --wasm-backend wasm3
 
+      # On a Mac the JavaScriptCore of the system is there: through its C API (ctypes), and as a real Objective-C
+      # JSContext through rubicon-objc, which is as near to Pythonista's objc_util as CI gets.
+      - name: "pytest --wasm-backend jsc (macOS, JavaScriptCore.framework)"
+        if: ${{ !cancelled() && matrix.os == 'macos-latest' }}
+        run: uv run --locked pytest -v --wasm-backend jsc
+
+      - name: "pytest --wasm-backend jscontext (macOS, a real JSContext through rubicon-objc)"
+        if: ${{ !cancelled() && matrix.os == 'macos-latest' && !startsWith(matrix.python-version, 'pypy') }}
+        run: uv run --locked pytest -v --wasm-backend jscontext
+
       - name: Examples
         run: |
           WASMHOST_BACKEND=node uv run --locked python examples/basic.py

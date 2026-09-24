@@ -16,9 +16,9 @@ import wasm_builder as wb
 import wasmhost
 
 
-@pytest.fixture(params=["objc_util", "rubicon", "objc_util+c"])
+@pytest.fixture(params=["objc_util", "rubicon", "objc_util+c", "rubicon+c"])
 def jscontext(request: pytest.FixtureRequest, monkeypatch: pytest.MonkeyPatch) -> Iterator[wasmhost.JSContextBackend]:
-    engine = None if request.param == "objc_util+c" else fake_objc.real_engine()
+    engine = None if request.param.endswith("+c") else fake_objc.real_engine()
     fake_objc.install(monkeypatch, engine, request.param)
     backend = wasmhost.JSContextBackend()
     yield backend
@@ -29,7 +29,7 @@ def jscontext(request: pytest.FixtureRequest, monkeypatch: pytest.MonkeyPatch) -
 
 def test_which_bridge(jscontext: wasmhost.JSContextBackend, request: pytest.FixtureRequest) -> None:
     param = request.node.callspec.params["jscontext"]
-    assert jscontext.bridge == ("rubicon-objc" if param == "rubicon" else "objc_util")
+    assert jscontext.bridge == ("rubicon-objc" if param.startswith("rubicon") else "objc_util")
 
 
 def test_evaluate_and_errors(jscontext: wasmhost.JSContextBackend) -> None:
@@ -67,9 +67,13 @@ def test_no_bridge_at_all(monkeypatch: pytest.MonkeyPatch) -> None:
         wasmhost.JSContextBackend()
 
 
-def test_the_c_api_path_is_taken_only_where_there_is_one(jscontext: wasmhost.JSContextBackend) -> None:
-    has_c_api = jscontext.bridge == "objc_util" and jscontext.supports("imports")
-    assert has_c_api == (jscontext.put_bytes("globalThis.b", b"abc") == "C API")
+def test_the_c_api_path_is_taken_only_where_there_is_one(
+    jscontext: wasmhost.JSContextBackend, request: pytest.FixtureRequest
+) -> None:
+    if request.node.callspec.params["jscontext"].endswith("+c"):  # the fakes with the real C library beside them
+        assert jscontext.supports("imports"), jscontext.c_api_error
+    has_c_api = jscontext.supports("imports")
+    assert has_c_api == (jscontext.put_bytes("globalThis.b", b"abc") == "C API"), jscontext.c_api_error
     assert jscontext.get_bytes("b") == b"abc"
 
 
