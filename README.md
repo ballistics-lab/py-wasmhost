@@ -1,8 +1,18 @@
 # wasmhost
 
-WebAssembly from **CPython, PyPy and Pythonista**, with the JavaScript WebAssembly API. It runs in
-whichever JavaScript engine is available: JavaScriptCore's `JSContext` in Pythonista on iOS, WebKitGTK's
-JavaScriptCore on Linux, or Node. Plain Python, no dependencies, no C extension.
+WebAssembly from **CPython, PyPy and Pythonista**, with the JavaScript WebAssembly API. It runs on whichever
+backend is available: JavaScriptCore's `JSContext` in Pythonista on iOS, WebKitGTK's JavaScriptCore on Linux, Node,
+or, when installed, wasmtime or wasm3. Plain Python, no dependencies, no C extension of its own.
+
+[![license]][MIT]
+[![pypi]][PyPiUrl]
+[![py-versions]][sources]
+[![Made in Ukraine]][SWUBadge]
+
+[![powered by webassembly]][WebAssembly]
+
+[![Tests](https://github.com/ballistics-lab/py-wasmhost/actions/workflows/tests.yml/badge.svg)](https://github.com/ballistics-lab/py-wasmhost/actions/workflows/tests.yml)
+[![Pre-commit](https://github.com/ballistics-lab/py-wasmhost/actions/workflows/pre-commit.yml/badge.svg)](https://github.com/ballistics-lab/py-wasmhost/actions/workflows/pre-commit.yml)
 
 ```python
 import wasmhost
@@ -23,6 +33,34 @@ See `examples/basic.py`.
   `RuntimeError`); an out-of-bounds memory access is an `IndexError`.
 - **Memory** is copied, not shared: `memory.read(offset, n)`, `memory.write(offset, data)`, `memory[a:b]`,
   `memory.grow(pages)`.
+
+## Installation
+
+### uv
+
+```shell
+uv add wasmhost
+
+# With wasmtime, the in-process JIT (otherwise Node or WebKitGTK JavaScriptCore is used)
+uv add wasmhost[wasmtime]
+```
+
+### pip
+
+```shell
+pip install wasmhost
+
+# With wasmtime, the in-process JIT (otherwise Node or WebKitGTK JavaScriptCore is used)
+pip install wasmhost[wasmtime]
+```
+
+The `wasm3` backend has no extra: pywasm3's PyPI release is years behind the API used here, so install it from git
+(CPython 3.11+, needs a C compiler): `pip install "pywasm3 @ git+https://github.com/wasm3/pywasm3"`.
+
+### Pythonista and PythonIDE (iOS)
+
+The ordinary wheel: it is pure Python (`py3-none-any`). In StaSh (Pythonista) or PythonIDE's pip,
+`pip install wasmhost`, then run the self-test (see [Try it on a device](#try-it-on-a-device)).
 
 ## Batches
 
@@ -115,3 +153,14 @@ uv run pytest --wasm-backend wasmtime    # or wasm3
 uv run pytest --wasm-backend gi-jsc      # needs PyGObject: run it with a system-site-packages venv (see the CI job)
 uv run pyright && uv run ruff check
 ```
+
+[sources]: https://github.com/ballistics-lab/py-wasmhost
+[license]: https://img.shields.io/github/license/ballistics-lab/py-wasmhost?style=flat-square
+[MIT]: https://opensource.org/licenses/MIT
+[pypi]: https://img.shields.io/pypi/v/wasmhost?style=flat-square&logo=pypi
+[PyPiUrl]: https://pypi.org/project/wasmhost/
+[py-versions]: https://img.shields.io/pypi/pyversions/wasmhost?style=flat-square
+[Made in Ukraine]: https://img.shields.io/badge/made_in-Ukraine-ffd700.svg?labelColor=0057b7&style=flat-square
+[SWUBadge]: https://stand-with-ukraine.pp.ua
+[WebAssembly]: https://webassembly.org
+[powered by webassembly]: https://img.shields.io/badge/webassembly-%23654FF0?style=flat-square&logo=webassembly&logoColor=white&label=powered%20by
