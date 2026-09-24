@@ -64,8 +64,10 @@ jobs:
         if: ${{ !cancelled() && matrix.python-version != '3.10' && !startsWith(matrix.python-version, 'pypy') }}
         run: uv run --locked pytest -v -W error::RuntimeWarning --wasm-backend wasm3
 
-      - name: Example
-        run: WASMHOST_BACKEND=node uv run --locked python examples/basic.py
+      - name: Examples
+        run: |
+          WASMHOST_BACKEND=node uv run --locked python examples/basic.py
+          WASMHOST_BACKEND=node uv run --locked python examples/imports.py
 
   jsc:
     name: WebKitGTK JavaScriptCore
@@ -101,5 +103,20 @@ jobs:
         env:
           JSC_useJIT: "false"
 
-      - name: Example
-        run: WASMHOST_BACKEND=gi-jsc .venv/bin/python examples/basic.py
+      # The same engine through its C API (ctypes), no PyGObject: it also takes host functions (imports).
+      - name: pytest --wasm-backend jsc (JIT on)
+        if: ${{ !cancelled() }}
+        run: .venv/bin/python -m pytest -v --wasm-backend jsc
+        env:
+          JSC_useJIT: "true"
+
+      - name: pytest --wasm-backend jsc (JIT off, as on iOS)
+        if: ${{ !cancelled() }}
+        run: .venv/bin/python -m pytest -v --wasm-backend jsc
+        env:
+          JSC_useJIT: "false"
+
+      - name: Examples
+        run: |
+          WASMHOST_BACKEND=gi-jsc .venv/bin/python examples/basic.py
+          WASMHOST_BACKEND=jsc .venv/bin/python examples/imports.py

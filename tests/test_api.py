@@ -129,12 +129,10 @@ def test_validate_and_compile_errors(session: str) -> None:
         wasmhost.Module(truncated)
 
 
-def test_imports_are_not_supported_yet(session: str) -> None:
+def test_a_module_that_imports_needs_an_import_object(session: str) -> None:
     mod = wasmhost.Module(wb.needs_import())
     with pytest.raises(TypeError, match="env.f"):
-        wasmhost.Instance(mod)
-    with pytest.raises(NotImplementedError):
-        wasmhost.Instance(mod, {"env": {"f": lambda: None}})
+        wasmhost.Instance(mod)  # what it does with one is in test_imports.py
 
 
 def test_instantiate_shortcut(session: str) -> None:

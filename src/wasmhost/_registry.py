@@ -7,6 +7,7 @@ from typing import Final
 
 from ._backend import Backend
 from ._js import GIJavaScriptCoreBackend, JSBackend, JSContextBackend, NodeBackend
+from ._jsc import JSCBackend
 from ._native import Wasm3Backend, WasmtimeBackend
 
 __all__ = ("AUTO_ORDER", "BACKENDS", "JS_AUTO_ORDER", "JS_BACKENDS", "default_backend")
@@ -15,12 +16,14 @@ BACKENDS: Final[dict[str, type[Backend]]] = {
     "jscontext": JSContextBackend,
     "wasmtime": WasmtimeBackend,
     "wasm3": Wasm3Backend,
+    "jsc": JSCBackend,
     "gi-jsc": GIJavaScriptCoreBackend,
     "node": NodeBackend,
 }
 # The ones that are JavaScript engines: a package that has JavaScript of its own to run needs these.
 JS_BACKENDS: Final[dict[str, type[JSBackend]]] = {
     "jscontext": JSContextBackend,
+    "jsc": JSCBackend,
     "gi-jsc": GIJavaScriptCoreBackend,
     "node": NodeBackend,
 }
@@ -30,7 +33,7 @@ JS_BACKENDS: Final[dict[str, type[JSBackend]]] = {
 # JavaScriptCore (Linux with PyGObject), then Node. Each constructor is its own availability probe: it raises
 # when its runtime isn't there (ImportError for objc_util/wasmtime/gi, a missing `node` binary, an engine
 # without WebAssembly), so "available" means "could actually start".
-AUTO_ORDER: Final[tuple[str, ...]] = ("jscontext", "wasmtime", "wasm3", "gi-jsc", "node")
+AUTO_ORDER: Final[tuple[str, ...]] = ("jscontext", "wasmtime", "wasm3", "jsc", "gi-jsc", "node")
 JS_AUTO_ORDER: Final[tuple[str, ...]] = tuple(n for n in AUTO_ORDER if n in JS_BACKENDS)
 
 

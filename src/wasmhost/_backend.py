@@ -13,8 +13,8 @@ global, whatever its runtime raises itself.
 
 from __future__ import annotations
 
-from collections.abc import Sequence
-from typing import Any, NamedTuple
+from collections.abc import Callable, Sequence
+from typing import Any, NamedTuple, cast
 
 from ._binary import FuncType
 from ._errors import WasmError
@@ -24,11 +24,13 @@ __all__ = (
     "CallStep",
     "Expr",
     "Backend",
+    "HostFunction",
     "Operand",
     "ReadStep",
     "Step",
     "StopStep",
     "WriteStep",
+    "check_results",
     "evaluate",
     "normalize",
 )
@@ -66,6 +68,41 @@ class StopStep(NamedTuple):
 Step = CallStep | WriteStep | ReadStep | StopStep
 
 
+class HostFunction(NamedTuple):
+    """A function the module imports, and the Python callable that answers it."""
+
+    module: str
+    name: str
+    ftype: FuncType
+    fn: Callable[..., Any]
+
+
+def check_results(values: Any, ftype: FuncType) -> list[int | float]:
+    """What a host function returned, as the list of values its signature promises (else a TypeError).
+
+    None for no result, a value for one, a tuple or list for several."""
+    if not ftype.results:
+        return []
+    if values is None:
+        raise TypeError(f"the host function should return {len(ftype.results)} value(s), not None")
+    found: list[Any] = (
+        list(cast("Sequence[Any]", values))
+        if isinstance(values, (tuple, list)) and len(ftype.results) != 1
+        else [values]
+    )
+    if len(found) != len(ftype.results):
+        raise TypeError(f"the host function returned {len(found)} value(s), expected {len(ftype.results)}")
+    out: list[int | float] = []
+    for value, kind in zip(found, ftype.results, strict=True):
+        if kind in ("i32", "i64"):
+            if isinstance(value, bool) or not isinstance(value, int):
+                raise TypeError(f"the host function should return an int for an {kind}, not {type(value).__name__}")
+        elif isinstance(value, bool) or not isinstance(value, (int, float)):
+            raise TypeError(f"the host function should return a number for an {kind}, not {type(value).__name__}")
+        out.append(normalize(value, kind))
+    return out
+
+
 class BatchResult(NamedTuple):
     values: dict[int, Any]  # slot -> value (int, float, bytes; None for a call without a result), for steps that ran
     error: BaseException | None  # the first step that failed
@@ -97,7 +134,8 @@ class Backend:
     """A runtime. Subclasses implement the primitives; `run_batch` has a sequential default."""
 
     name: str = "?"
-    # What the runtime can't do is left out: "memory.grow" (Memory.grow from Python), "table.length".
+    # What the runtime can't do is left out: "memory.grow" (Memory.grow from Python), "table.length", "imports"
+    # (host functions: a Python callable the module calls).
     features: frozenset[str] = frozenset({"memory.grow", "table.length"})
 
     def supports(self, feature: str) -> bool:
@@ -112,7 +150,9 @@ class Backend:
     def compile(self, data: bytes) -> Any:
         raise NotImplementedError
 
-    def instantiate(self, module: Any) -> Any:
+    def instantiate(self, module: Any, imports: Sequence[HostFunction] = ()) -> Any:
+        """A new instance. `imports` answers the module's function imports, in the order it declares them; a
+        backend without the "imports" feature is only asked with none."""
         raise NotImplementedError
 
     def call(self, instance: Any, name: str, args: Sequence[int | float], ftype: FuncType) -> list[int | float]:

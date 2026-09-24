@@ -10,10 +10,10 @@ Both are optional: constructing a backend imports its package, so "available" me
 from __future__ import annotations
 
 import importlib
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 from typing import Any, cast
 
-from ._backend import Backend
+from ._backend import Backend, HostFunction, check_results
 from ._binary import FuncType
 from ._errors import CompileError, Trap
 
@@ -23,6 +23,23 @@ __all__ = ("Wasm3Backend", "WasmtimeBackend")
 def _check_range(offset: int, length: int, size: int) -> None:
     if offset < 0 or length < 0 or offset + length > size:
         raise IndexError("memory access out of bounds")
+
+
+_WASM3_CODES = {"i32": "i", "i64": "I", "f32": "f", "f64": "F"}
+
+
+def _wasm3_signature(ftype: FuncType) -> str:
+    """wasm3's spelling of a signature: the result types, then the parameters in parentheses (`v` for none)."""
+    results = "".join(_WASM3_CODES[k] for k in ftype.results) or "v"
+    return f"{results}({''.join(_WASM3_CODES[k] for k in ftype.params)})"
+
+
+def _wasm3_callable(host: HostFunction) -> Callable[..., Any]:
+    def call(*args: Any) -> Any:
+        values = check_results(host.fn(*args), host.ftype)
+        return values[0] if len(values) == 1 else tuple(values) if values else None
+
+    return call
 
 
 class _Wasm3Instance:
@@ -48,7 +65,7 @@ class Wasm3Backend(Backend):
 
     name = "wasm3"
     # It has no Memory.grow from Python (a module's own memory.grow works, and len(memory) follows) and no tables.
-    features = frozenset[str]()
+    features = frozenset({"imports"})
     # wasm3's own value stack, separate from the module's shadow stack in linear memory.
     STACK_BYTES = 256 * 1024
 
@@ -71,10 +88,12 @@ class Wasm3Backend(Backend):
             raise CompileError(str(exc)) from None
         return data  # a wasm3 module belongs to one runtime, so each instance parses it again
 
-    def instantiate(self, module: bytes) -> _Wasm3Instance:
+    def instantiate(self, module: bytes, imports: Sequence[HostFunction] = ()) -> _Wasm3Instance:
         runtime = self._env.new_runtime(self._stack)
         parsed = self._env.parse_module(module)
         runtime.load(parsed)
+        for host in imports:  # linked after loading, before the first call
+            parsed.link_function(host.module, host.name, _wasm3_signature(host.ftype), _wasm3_callable(host))
         return _Wasm3Instance(runtime, parsed)
 
     def call(
@@ -129,6 +148,7 @@ class WasmtimeBackend(Backend):
     """The `wasmtime` package."""
 
     name = "wasmtime"
+    features = frozenset({"memory.grow", "table.length", "imports"})
 
     def __init__(self) -> None:
         self._wt: Any = importlib.import_module("wasmtime")  # ImportError here means "backend not available"
@@ -147,10 +167,22 @@ class WasmtimeBackend(Backend):
         except self._wt.WasmtimeError as exc:
             raise CompileError(str(exc)) from None
 
-    def instantiate(self, module: Any) -> _WasmtimeInstance:
+    def instantiate(self, module: Any, imports: Sequence[HostFunction] = ()) -> _WasmtimeInstance:
         store = self._wt.Store(self._engine)
-        instance = self._wt.Instance(store, module, [])
+        funcs = [self._host_func(store, host) for host in imports]
+        instance = self._wt.Instance(store, module, funcs)
         return _WasmtimeInstance(store, instance.exports(store))
+
+    def _host_func(self, store: Any, host: HostFunction) -> Any:
+        wt = self._wt
+        valtypes = {kind: getattr(wt.ValType, kind)() for kind in ("i32", "i64", "f32", "f64")}
+        ftype = wt.FuncType([valtypes[k] for k in host.ftype.params], [valtypes[k] for k in host.ftype.results])
+
+        def call(*args: Any) -> Any:
+            values = check_results(host.fn(*args), host.ftype)
+            return values[0] if len(values) == 1 else values if values else None
+
+        return wt.Func(store, ftype, call)
 
     def call(
         self, instance: _WasmtimeInstance, name: str, args: Sequence[int | float], ftype: FuncType
