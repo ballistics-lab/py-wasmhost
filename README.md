@@ -69,7 +69,8 @@ The package carries a self-test, since nothing else can be run in Pythonista to 
 
 ```python
 import wasmhost
-wasmhost.selftest()                 # or, from a shell: python -m wasmhost [--backend NAME] [--all]
+
+wasmhost.selftest()  # or, from a shell: python -m wasmhost [--backend NAME] [--all]
 ```
 
 It prints one line per check (the Objective-C bridge in use, `WebAssembly` and `BigInt` in the engine, calls,
@@ -90,6 +91,13 @@ output. On a computer, `python -m wasmhost --all` runs it on every backend that 
 
 The times are one run of the self-test each, so read them as an order of magnitude. Not run on a device: the
 `rubicon-objc` bridge (both iOS apps above have `objc_util`, so it wasn't needed), and imports (see below).
+
+### A note on wasmtime and `faulthandler`
+
+wasmtime installs process-wide signal handlers when its first engine is created, and uses them to catch a trap.
+Python's `faulthandler` (on with `python -X faulthandler`, and in pytest) replaces the handlers when it is enabled
+*after* that, and the first trap then ends the process (`Fatal Python error: Illegal instruction`). Enable it first
+(or not at all), or start the backend later: this repo's `tests/conftest.py` does that.
 
 ## Not yet
 

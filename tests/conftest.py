@@ -8,6 +8,11 @@ The choice is also put in WASMHOST_BACKEND, so anything that picks a backend its
 uses it too. With `--wasm-backend`, a backend that can't start stops the run with an error: it is never silently
 skipped, so a CI step named after a backend really ran on it. Without it, the backends that can't start here
 are left out.
+
+Backends are only started (to see whether they can) from `pytest_sessionstart` on, never in `pytest_configure`:
+wasmtime installs process-wide signal handlers when its first engine is created, and pytest's faulthandler,
+enabled in its own `pytest_configure`, would then replace them, so the first trap in a module ends the process
+with SIGILL.
 """
 
 from __future__ import annotations
@@ -27,21 +32,31 @@ def pytest_addoption(parser: pytest.Parser) -> None:
     parser.addoption("--wasm-backend", action="store", default=None, choices=sorted(wasmhost.BACKENDS))
 
 
+_probed: dict[str, str | None] = {}
+
+
 def _available(name: str) -> str | None:
-    """None when the backend starts here, else why not."""
-    try:
-        wasmhost.BACKENDS[name]().close()
-    except Exception as exc:  # noqa: BLE001 -- any failure means "not available here"
-        return str(exc)
-    return None
+    """None when the backend starts here, else why not (asked once per backend)."""
+    if name not in _probed:
+        try:
+            wasmhost.BACKENDS[name]().close()
+        except Exception as exc:  # noqa: BLE001 -- any failure means "not available here"
+            _probed[name] = str(exc)
+        else:
+            _probed[name] = None
+    return _probed[name]
 
 
 def pytest_configure(config: pytest.Config) -> None:
     chosen: str | None = config.getoption("--wasm-backend")
     if chosen:
         os.environ["WASMHOST_BACKEND"] = chosen
-        if (why := _available(chosen)) is not None:
-            pytest.exit(f"Cannot start tests: backend {chosen} failed: {why}", returncode=1)
+
+
+def pytest_sessionstart(session: pytest.Session) -> None:
+    chosen: str | None = session.config.getoption("--wasm-backend")
+    if chosen and (why := _available(chosen)) is not None:
+        pytest.exit(f"Cannot start tests: backend {chosen} failed: {why}", returncode=1)
 
 
 def pytest_generate_tests(metafunc: pytest.Metafunc) -> None:
