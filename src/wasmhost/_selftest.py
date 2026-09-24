@@ -44,6 +44,21 @@ MODULE = bytes.fromhex(
     "200020013a00000b0600200040000b070020002000920b"
 )
 
+# A module that imports four host functions and calls them from its own exports: env.plus(i32, i32) -> i32,
+# env.note(i64), env.half(f64) -> f64 and env.pair(i32) -> (i32, i32); its exports call_plus, call_note, call_half
+# and call_pair call one each, and twice(a) = plus(plus(a, 1), 1).
+CALLBACKS = bytes.fromhex(
+    "0061736d01000000"  # magic, version
+    "011b0560027f7f017f60017e0060017c017c60017f027f7f60017f017f"  # types
+    "022d0403656e7604706c7573000003656e76046e6f7465000103656e760468616c66000203656e76"  # imports: env.plus, env.note,
+    "04706169720003"  # ... env.half, env.pair
+    "0306050001020304"  # functions: 5
+    "0739050963616c6c5f706c757300040963616c6c5f6e6f746500050963616c6c5f68616c66000609"  # exports
+    "63616c6c5f7061697200070574776963650008"
+    "0a2c0508002000200110000b0600200010010b0600200010020b0600200010030b0c002000410110"  # code
+    "00410110000b"
+)
+
 
 class _Report:
     def __init__(self, out: Callable[[str], object]) -> None:
@@ -124,6 +139,7 @@ def _selftest_backend(backend: Backend, out: Callable[[str], object]) -> _Report
     step("bad bytes are a CompileError", lambda: _compile_error(backend))
     step("batch: chained steps", lambda: _batch(box["i"]))
     step("batch: an error keeps the earlier results", lambda: _batch_error(box["i"]))
+    step("host functions (Python called from the module)", lambda: _host_functions(backend))
     step("call cost", lambda: _timing(backend, box["i"]))
     return report
 
@@ -138,6 +154,63 @@ def _bytes(backend: JSBackend) -> str:
     _expect(backend.get_bytes("__wasmhost_test"), b"")
     backend.evaluate("delete globalThis.__wasmhost_test")
     return f"{len(data)} bytes via {how}"
+
+
+def _host_functions(backend: Backend) -> str:
+    if not backend.supports("imports"):
+        try:
+            Instance(Module(CALLBACKS, backend=backend), _imports([]))
+        except NotImplementedError:
+            return "not available on this backend, as documented"
+        raise AssertionError("should be NotImplementedError")
+    calls: list[str] = []
+    imports = _imports(calls)
+    ex = Instance(Module(CALLBACKS, backend=backend), imports).exports
+    _expect(ex.call_plus(2, 3), 5)
+    _expect(ex.twice(10), 12)
+    _expect(calls, ["plus(2, 3)", "plus(10, 1)", "plus(11, 1)"])
+    _expect(ex.call_half(5.0), 2.5)
+    _expect(ex.call_pair(7), (7, 8))
+    ex.call_note(2**62 + 1)  # an i64 arrives exactly
+    _expect(calls[-1], f"note({2**62 + 1})")
+    box: dict[str, Any] = {}
+
+    def again(a: int, b: int) -> int:  # a host function that calls the module again
+        return int(box["ex"].call_plus(1, 2)) if a < 0 else a + b
+
+    def failing(a: int, b: int) -> int:
+        raise KeyError("from a host function")
+
+    imports["env"]["plus"] = failing
+    other = Instance(Module(CALLBACKS, backend=backend), imports).exports
+    try:
+        other.call_plus(1, 2)
+    except KeyError:
+        pass
+    else:
+        raise AssertionError("the exception of a host function did not come out")
+    _expect(other.call_half(3.0), 1.5)  # and the instance is still good
+    imports["env"]["plus"] = again
+    box["ex"] = Instance(Module(CALLBACKS, backend=backend), imports).exports
+    _expect(box["ex"].call_plus(-1, 0), 3)  # the nested call goes through the module and back
+    return "a call, nested calls, i64, several results, an exception, re-entry"
+
+
+def _imports(calls: list[str]) -> dict[str, dict[str, Any]]:
+    def plus(a: int, b: int) -> int:
+        calls.append(f"plus({a}, {b})")
+        return a + b
+
+    def note(x: int) -> None:
+        calls.append(f"note({x})")
+
+    def half(x: float) -> float:
+        return x / 2
+
+    def pair(x: int) -> tuple[int, int]:
+        return (x, x + 1)
+
+    return {"env": {"plus": plus, "note": note, "half": half, "pair": pair}}
 
 
 def _js_error(backend: JSBackend) -> None:

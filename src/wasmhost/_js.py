@@ -24,8 +24,20 @@ import subprocess
 from collections.abc import Sequence
 from typing import Any
 
-from ._backend import Backend, BatchResult, CallStep, Operand, ReadStep, Step, WriteStep, normalize
+from ._backend import (
+    Backend,
+    BatchResult,
+    CallStep,
+    HostFunction,
+    Operand,
+    ReadStep,
+    Step,
+    WriteStep,
+    check_results,
+    normalize,
+)
 from ._binary import FuncType
+from ._capi import CApi
 from ._errors import CompileError, LinkError, Trap
 
 __all__ = ("GIJavaScriptCoreBackend", "JSContextBackend", "JSBackend", "NodeBackend")
@@ -37,6 +49,15 @@ _JS_ERRORS: dict[str, type[BaseException]] = {
     "RangeError": IndexError,  # a memory access out of bounds
     "TypeError": TypeError,
 }
+# What a host function's failure throws in the engine. The real exception is kept in Python and raised there, from
+# the call that was running, when this text comes back (an exception can't cross the engine's boundary itself).
+HOST_ERROR = "__wasmhost_host_error__"
+
+
+class _HostFailed(Exception):
+    """A host function raised (or returned the wrong thing); the exception is in `JSBackend._raised`."""
+
+
 _JS_MESSAGE = re.compile(r"^(?:\[JS\] )?(\w+): ?(.*)$", re.DOTALL)
 
 
@@ -76,7 +97,11 @@ globalThis.__wh = (function () {
     return {
         compile: function (hex) { mods.push(new WebAssembly.Module(fromHex(hex))); return mods.length - 1; },
         validate: function (hex) { return WebAssembly.validate(fromHex(hex)) ? '1' : '0'; },
-        instantiate: function (m) { insts.push(new WebAssembly.Instance(mods[m], {})); return insts.length - 1; },
+        instantiate: function (m, imports) {
+            insts.push(new WebAssembly.Instance(mods[m], imports || {}));
+            return insts.length - 1;
+        },
+        s: fmt,
         call: function (i, name, args) { return ret(insts[i].exports[name].apply(undefined, args)); },
         get: function (i, name) { return fmt(insts[i].exports[name].value); },
         set: function (i, name, v) { insts[i].exports[name].value = v; return ''; },
@@ -137,6 +162,18 @@ def _parse(text: str, kind: str) -> int | float:
     return int(text) if kind in ("i32", "i64") else float(text)
 
 
+def _text(value: int | float, kind: str) -> str:
+    """A value as text for the engine (`Number("NaN")` and `BigInt("5")` take it back)."""
+    if kind in ("i32", "i64"):
+        return str(int(value))
+    x = float(value)
+    return "NaN" if x != x else {float("inf"): "Infinity", float("-inf"): "-Infinity"}.get(x) or repr(x)
+
+
+def _js_value(kind: str, expr: str) -> str:
+    return f"BigInt({expr})" if kind == "i64" else f"Number({expr})"
+
+
 def _expr(operand: Operand) -> str:
     """An operand of a step as JavaScript source."""
     if not isinstance(operand, tuple):
@@ -154,6 +191,12 @@ class JSBackend(Backend):
 
     def __init__(self) -> None:
         self._ready = False
+        self._hosts: list[HostFunction] = []  # the host functions handed out, by the number the engine calls them by
+        self._raised: BaseException | None = None  # what a host function raised, until its call comes back
+        self._hostcall_ready = False
+        self._capi: CApi | None = (
+            None  # JavaScriptCore's C API, for engines that are it: bytes in place, host functions
+        )
 
     def evaluate(self, src: str) -> str:
         """Run `src` and return the value of its last expression as a string."""
@@ -166,22 +209,80 @@ class JSBackend(Backend):
         try:
             return self.evaluate(src)
         except RuntimeError as exc:
+            if self._raised is not None and HOST_ERROR in str(exc):
+                raised, self._raised = self._raised, None
+                raise raised from None
             if err := _translate(str(exc)):
                 raise err from None
             raise
+
+    # --- host functions: an engine that can call back into Python defines `__hostcall` and says so in `features` ---
+
+    def _install_hostcall(self) -> None:
+        """Define `__hostcall(number, argumentsAsJson) -> resultsAsJson` in the engine, answered by `_answer`; when
+        `_answer` raises, the function throws `HOST_ERROR`. Through the C API here; an engine without it that can
+        still call Python (Node, through its pipe) does it its own way."""
+        if self._capi is None:
+            raise NotImplementedError(f"the {self.name} backend can't take imports (host functions)")
+        self._capi.set_function("__hostcall", lambda args: self._answer(int(float(args[0])), args[1]), HOST_ERROR)
+
+    def _answer(self, ident: int, args_json: str) -> str:
+        host = self._hosts[ident]
+        try:
+            args = [_parse(t, k) for t, k in zip(json.loads(args_json), host.ftype.params, strict=True)]
+            values = check_results(host.fn(*args), host.ftype)
+            return json.dumps([_text(v, k) for v, k in zip(values, host.ftype.results, strict=True)])
+        except BaseException as exc:  # noqa: BLE001 -- whatever it is, it goes to the caller of the export
+            self._raised = exc
+            raise _HostFailed from None
+
+    def _import_object(self, imports: Sequence[HostFunction]) -> str:
+        """JavaScript source of the import object: each function turns its arguments into text, asks `__hostcall`
+        and turns the answer back into what the signature says."""
+        modules: dict[str, list[str]] = {}
+        for host in imports:
+            ident = len(self._hosts)
+            self._hosts.append(host)
+            n = len(host.ftype.params)
+            call = f"__hostcall({ident},JSON.stringify([{','.join(f'__wh.s(a{i})' for i in range(n))}]))"
+            values = [_js_value(k, f"r[{i}]") for i, k in enumerate(host.ftype.results)]
+            if not values:
+                body = f"{call};"
+            elif len(values) == 1:
+                body = f"var r=JSON.parse({call});return {values[0]};"
+            else:
+                body = f"var r=JSON.parse({call});return [{','.join(values)}];"
+            params = ",".join(f"a{i}" for i in range(n))
+            modules.setdefault(host.module, []).append(f"{json.dumps(host.name)}:function({params}){{{body}}}")
+        return "{" + ",".join(f"{json.dumps(m)}:{{{','.join(fns)}}}" for m, fns in modules.items()) + "}"
 
     # --- bytes in and out of the engine, for a caller with JavaScript of its own (a Pyodide, an emulator) ---
 
     def put_bytes(self, target: str, data: bytes) -> str:
         """Assign a `Uint8Array` holding `data` to the JavaScript expression `target` (say `__files["a"]`).
 
-        Through hex here, which costs twice the size in a string; JSContext has a faster way. Returns which one
-        was used (`"hex"` or `"C API"`)."""
+        Through JavaScriptCore's C API where the engine has it (the array is filled in place), else through hex,
+        which costs twice the size in a string. Returns which one was used (`"C API"` or `"hex"`)."""
+        if self._capi is not None:
+            try:
+                self._capi.set_global_bytes("__wasmhost_in", data)
+                self.evaluate(f"{target} = globalThis.__wasmhost_in; delete globalThis.__wasmhost_in;")
+                if self.evaluate(f"String(({target} || {{}}).length)") != str(len(data)):  # it must have arrived whole
+                    raise OSError("the typed array is not visible in JavaScript")
+            except Exception:  # noqa: BLE001 -- whatever it was, hex works
+                self._capi = None
+            else:
+                return "C API"
         self._run(f'{target} = __wh.fromHex("{data.hex()}");')
         return "hex"
 
     def get_bytes(self, expr: str) -> bytes:
         """The bytes of the `Uint8Array` that the JavaScript expression `expr` evaluates to."""
+        if self._capi is not None:
+            try:
+                return self._capi.get_bytes(expr)
+            except Exception:  # noqa: BLE001
+                self._capi = None
         return bytes.fromhex(self._run(f"__wh.toHex({expr})"))
 
     def validate(self, data: bytes) -> bool:
@@ -190,8 +291,16 @@ class JSBackend(Backend):
     def compile(self, data: bytes) -> int:
         return int(self._run(f'__wh.compile("{data.hex()}")'))
 
-    def instantiate(self, module: int) -> int:
-        return int(self._run(f"__wh.instantiate({module})"))
+    def instantiate(self, module: int, imports: Sequence[HostFunction] = ()) -> int:
+        if not imports:
+            return int(self._run(f"__wh.instantiate({module})"))
+        if not self.supports("imports"):
+            raise NotImplementedError(f"the {self.name} backend can't take imports (host functions)")
+        self._run("0")  # the registry (`__wh`) first: the import object uses it
+        if not self._hostcall_ready:
+            self._install_hostcall()
+            self._hostcall_ready = True
+        return int(self._run(f"__wh.instantiate({module},{self._import_object(imports)})"))
 
     def call(self, instance: int, name: str, args: Sequence[int | float], ftype: FuncType) -> list[int | float]:
         literals = ",".join(_literal(a, k) for a, k in zip(args, ftype.params, strict=True))
@@ -259,7 +368,10 @@ class JSBackend(Backend):
             values[slot] = bytes.fromhex(text) if kind == "bytes" else None if kind == "void" else _parse(text, kind)
         error: BaseException | None = None
         if reply["e"]:
-            error = _translate(reply["e"]) or RuntimeError(reply["e"])
+            if HOST_ERROR in reply["e"] and self._raised is not None:
+                error, self._raised = self._raised, None
+            else:
+                error = _translate(reply["e"]) or RuntimeError(reply["e"])
         return BatchResult(values, error)
 
 
@@ -281,11 +393,13 @@ class JSContextBackend(JSBackend):
         self._ctx: Any
         self._rubicon = False
         self.bridge = "objc_util"  # which Objective-C bridge is in use
-        self._c: Any = None  # ctypes access to JavaScriptCore's C API (objc_util's `c`), for raw bytes
         try:
             objc_util: Any = importlib.import_module("objc_util")
             self._ctx = objc_util.ObjCClass("JSContext").alloc().init()
-            self._c = _jsc_c_api(objc_util)
+            try:  # objc_util's `c` has the C functions; the context reference has to be asked of the proxy
+                self._capi = CApi(objc_util.c, lambda: self._ctx.JSGlobalContextRef())
+            except (AttributeError, TypeError):
+                pass
         except ImportError:
             try:
                 rubicon: Any = importlib.import_module("rubicon.objc")
@@ -296,6 +410,8 @@ class JSContextBackend(JSBackend):
             self._ctx = rubicon.ObjCClass("JSContext").alloc().init()
             self._rubicon = True
             self.bridge = "rubicon-objc"
+        if self._capi is not None:
+            self.features = self.features | {"imports"}
         _check_webassembly(self)
 
     def evaluate(self, src: str) -> str:
@@ -312,106 +428,6 @@ class JSContextBackend(JSBackend):
             self._ctx.setException_(None)
             raise RuntimeError(f"[JS] {exc.toString()}")
         return str(res.toString())
-
-    # --- bytes through JavaScriptCore's C API: a typed array is filled or read in place, with no hex. It is
-    # only there under objc_util (its `c` is a ctypes view of the C library); any failure turns it off for good and
-    # the hex of JSBackend takes over. ---
-
-    def _context_ref(self) -> int:
-        ref = self._ctx.JSGlobalContextRef()
-        ref = getattr(ref, "value", ref)  # objc_util returns a c_void_p
-        if not isinstance(ref, int) or not ref:
-            raise OSError(f"JSGlobalContextRef -> {ref!r}")
-        return ref
-
-    def put_bytes(self, target: str, data: bytes) -> str:
-        if self._c is not None:
-            try:
-                self._put_c(target, data)
-            except Exception:  # noqa: BLE001 -- whatever it was, hex works
-                self._c = None
-            else:
-                return "C API"
-        return super().put_bytes(target, data)
-
-    def get_bytes(self, expr: str) -> bytes:
-        if self._c is not None:
-            try:
-                return self._get_c(expr)
-            except Exception:  # noqa: BLE001
-                self._c = None
-        return super().get_bytes(expr)
-
-    def _put_c(self, target: str, data: bytes) -> None:
-        import ctypes
-
-        c, ref = self._c, self._context_ref()
-        array = c.JSObjectMakeTypedArray(ref, _K_UINT8, len(data), None)
-        ptr = array and c.JSObjectGetTypedArrayBytesPtr(ref, array, None)
-        if not ptr:
-            raise OSError("typed array allocation failed")
-        ctypes.memmove(ptr, data, len(data))
-        name = c.JSStringCreateWithUTF8CString(b"__wasmhost_in")
-        try:
-            c.JSObjectSetProperty(ref, c.JSContextGetGlobalObject(ref), name, array, 0, None)
-        finally:
-            c.JSStringRelease(name)
-        self.evaluate(f"{target} = globalThis.__wasmhost_in; delete globalThis.__wasmhost_in;")
-        if self.evaluate(f"String(({target} || {{}}).length)") != str(len(data)):  # it must have arrived whole
-            raise OSError("the typed array is not visible in JavaScript")
-
-    def _get_c(self, expr: str) -> bytes:
-        import ctypes
-
-        c, ref = self._c, self._context_ref()
-        script = c.JSStringCreateWithUTF8CString(f"(b => b.byteOffset ? b.slice() : b)({expr})".encode())
-        exc = ctypes.c_void_p()
-        try:
-            value = c.JSEvaluateScript(ref, script, None, None, 1, ctypes.byref(exc))
-        finally:
-            c.JSStringRelease(script)
-        if exc.value or not value:
-            raise OSError("JSEvaluateScript failed")
-        c.JSValueProtect(ref, value)
-        try:
-            array = c.JSValueToObject(ref, value, None)
-            ptr = array and c.JSObjectGetTypedArrayBytesPtr(ref, array, None)
-            if not ptr:
-                raise OSError("not a typed array")
-            return ctypes.string_at(ptr, c.JSObjectGetTypedArrayByteLength(ref, array, None))
-        finally:
-            c.JSValueUnprotect(ref, value)
-
-
-_K_UINT8 = 3  # kJSTypedArrayTypeUint8Array
-
-
-def _jsc_c_api(objc_util: Any) -> Any:
-    """objc_util's `c` with the signatures of the JavaScriptCore C functions used above, or None if it has none."""
-    import ctypes
-
-    ptr, size = ctypes.c_void_p, ctypes.c_size_t
-    signatures = {
-        "JSObjectMakeTypedArray": (ptr, [ptr, ctypes.c_int, size, ptr]),
-        "JSObjectGetTypedArrayBytesPtr": (ptr, [ptr, ptr, ptr]),
-        "JSObjectGetTypedArrayByteLength": (size, [ptr, ptr, ptr]),
-        "JSContextGetGlobalObject": (ptr, [ptr]),
-        "JSStringCreateWithUTF8CString": (ptr, [ctypes.c_char_p]),
-        "JSStringRelease": (None, [ptr]),
-        "JSObjectSetProperty": (None, [ptr, ptr, ptr, ptr, ctypes.c_uint, ptr]),
-        "JSEvaluateScript": (ptr, [ptr, ptr, ptr, ptr, ctypes.c_int, ptr]),
-        "JSValueToObject": (ptr, [ptr, ptr, ptr]),
-        "JSValueProtect": (None, [ptr, ptr]),
-        "JSValueUnprotect": (None, [ptr, ptr]),
-    }
-    try:
-        c = objc_util.c
-        for name, (result, args) in signatures.items():
-            function = getattr(c, name)
-            function.restype, function.argtypes = result, args
-    except (AttributeError, TypeError):
-        return None
-    return c
 
 
 class GIJavaScriptCoreBackend(JSBackend):
@@ -439,24 +455,73 @@ class GIJavaScriptCoreBackend(JSBackend):
 
 # A `vm` context is a fresh global object with only the JS builtins (Promise, WebAssembly, Date, ...).
 # The process leaves when its stdin closes, so a killed parent doesn't leave it running.
+#
+# The protocol is JSON lines. Python sends {"eval": source}; Node answers {"ok": value} or {"err": text}. A host
+# function is `__hostcall(number, argumentsAsJson)`: Node writes {"cb": [number, arguments]} and then *reads its
+# stdin synchronously* for {"ret": text} (or {"fail": true}) -- a WebAssembly call is on the stack and can't be
+# left, so the wait can't be an event -- while Python may send further {"eval": ...} lines meanwhile (a host
+# function that calls the module again), which are answered from inside the wait, nested. Everything is written
+# with fs.writeSync, so a reply can't be queued behind a wait.
 _NODE_LOOP = r"""
-const vm = require('vm');
+const fs = require('fs'), vm = require('vm'), { StringDecoder } = require('string_decoder');
 const ctx = vm.createContext({});
+const pause = new Int32Array(new SharedArrayBuffer(4));
+const sleep = ms => Atomics.wait(pause, 0, 0, ms);
+
+function writeAll(text) {
+    const bytes = Buffer.from(text);
+    for (let off = 0; off < bytes.length;) {
+        try { off += fs.writeSync(1, bytes, off, bytes.length - off); }
+        catch (e) { if (e.code === 'EAGAIN') sleep(0.05); else throw e; }
+    }
+}
+function evaluate(src) {
+    try { return { ok: String(vm.runInContext(src, ctx)) }; }
+    catch (e) { return { err: String(e) }; }  // same text as JavaScriptCore's exception.toString()
+}
+
+const decoder = new StringDecoder('utf8');
+let pending = '';
+function readLineSync() {
+    for (let spins = 0; ;) {
+        const i = pending.indexOf('\n');
+        if (i >= 0) { const line = pending.slice(0, i); pending = pending.slice(i + 1); return line; }
+        const chunk = Buffer.allocUnsafe(1 << 16);
+        let n;
+        try { n = fs.readSync(0, chunk, 0, chunk.length, null); }
+        catch (e) {
+            if (e.code === 'EAGAIN') { sleep(spins++ < 200 ? 0.02 : 1); continue; }
+            if (e.code === 'EOF') return null;
+            throw e;
+        }
+        if (n === 0) return null;
+        spins = 0;
+        pending += decoder.write(chunk.subarray(0, n));
+    }
+}
+ctx.__hostcall = (ident, argsJson) => {
+    writeAll(JSON.stringify({ cb: [ident, argsJson] }) + '\n');
+    for (;;) {
+        const line = readLineSync();
+        if (line === null) throw new Error('wasmhost: the parent closed the pipe');
+        const msg = JSON.parse(line);
+        if (msg.eval !== undefined) { writeAll(JSON.stringify(evaluate(msg.eval)) + '\n'); continue; }
+        if (msg.fail) throw '@HOST_ERROR@';
+        return msg.ret;
+    }
+};
+
 const rl = require('readline').createInterface({ input: process.stdin });
-rl.on('line', (line) => {
-    let reply;
-    try { reply = { ok: true, value: String(vm.runInContext(JSON.parse(line), ctx)) }; }
-    catch (e) { reply = { ok: false, value: String(e) }; }  // same text as JavaScriptCore's exception.toString()
-    process.stdout.write(JSON.stringify(reply) + '\n');
-});
+rl.on('line', (line) => writeAll(JSON.stringify(evaluate(JSON.parse(line).eval)) + '\n'));
 rl.on('close', () => process.exit(0));
-"""
+""".replace("@HOST_ERROR@", HOST_ERROR)
 
 
 class NodeBackend(JSBackend):
-    """A long-lived `node` process evaluating one JSON-encoded script per line in a `vm` context."""
+    """A long-lived `node` process evaluating scripts in a `vm` context (see the protocol above)."""
 
     name = "node"
+    features = JSBackend.features | {"imports"}
 
     def __init__(self, node: str | None = None) -> None:
         super().__init__()
@@ -481,16 +546,30 @@ class NodeBackend(JSBackend):
             self.close()
             raise
 
-    def evaluate(self, src: str) -> str:
-        self._stdin.write(json.dumps(src) + "\n")
+    def _send(self, message: dict[str, Any]) -> None:
+        self._stdin.write(json.dumps(message) + "\n")
         self._stdin.flush()
-        line = self._stdout.readline()
-        if not line:
-            raise RuntimeError(f"node exited (status {self._proc.poll()})")
-        reply = json.loads(line)
-        if not reply["ok"]:
-            raise RuntimeError(f"[JS] {reply['value']}")
-        return str(reply["value"])
+
+    def _install_hostcall(self) -> None:
+        """Nothing to do: `__hostcall` is in the context from the start."""
+
+    def evaluate(self, src: str) -> str:
+        self._send({"eval": src})
+        while True:
+            line = self._stdout.readline()
+            if not line:
+                raise RuntimeError(f"node exited (status {self._proc.poll()})")
+            reply = json.loads(line)
+            if "cb" in reply:  # a host function is being called: answer it (it may evaluate again, nested)
+                ident, args_json = reply["cb"]
+                try:
+                    self._send({"ret": self._answer(ident, args_json)})
+                except _HostFailed:
+                    self._send({"fail": True})
+            elif "err" in reply:
+                raise RuntimeError(f"[JS] {reply['err']}")
+            else:
+                return str(reply["ok"])
 
     def close(self) -> None:
         if self._proc.poll() is None:

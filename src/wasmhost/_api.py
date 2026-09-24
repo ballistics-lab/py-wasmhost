@@ -17,7 +17,7 @@ from __future__ import annotations
 from collections.abc import Iterator, Mapping
 from typing import Any, NamedTuple
 
-from ._backend import Backend, CallStep, Expr, Operand, ReadStep, Step, StopStep, WriteStep, normalize
+from ._backend import Backend, CallStep, Expr, HostFunction, Operand, ReadStep, Step, StopStep, WriteStep, normalize
 from ._binary import ExportDescriptor, FuncType, ImportDescriptor, ModuleInfo, parse
 from ._errors import CompileError, LinkError, Trap, WasmError
 from ._registry import BACKENDS, default_backend
@@ -413,17 +413,37 @@ class Module:
         return list(module._info.imports)
 
 
-class Instance:
-    """`WebAssembly.Instance`. Modules that import things can't be instantiated yet."""
-
-    def __init__(self, module: Module, imports: Mapping[str, Mapping[str, object]] | None = None) -> None:
-        if module._info.imports:
-            if imports:
-                raise NotImplementedError("imports (host functions, memories, tables, globals) are not supported yet")
+def _resolve_imports(module: Module, imports: Mapping[str, Mapping[str, object]] | None) -> list[HostFunction]:
+    """The module's function imports, each with the callable the import object has for it (as the JS API checks)."""
+    hosts: list[HostFunction] = []
+    for d in module._info.imports:
+        if imports is None:
             wanted = ", ".join(f"{i.module}.{i.name}" for i in module._info.imports)
             raise TypeError(f"the module imports {wanted}: an import object is needed")
+        namespace = imports.get(d.module)
+        if namespace is None:
+            raise TypeError(f"the import object has no {d.module!r}")
+        if d.kind != "function" or not isinstance(d.type, FuncType):
+            raise NotImplementedError(f"importing a {d.kind} ({d.module}.{d.name}) is not supported yet")
+        fn = namespace.get(d.name)
+        if not callable(fn):
+            raise LinkError(f"import {d.module}.{d.name} is not a function")
+        hosts.append(HostFunction(d.module, d.name, d.type, fn))
+    return hosts
+
+
+class Instance:
+    """`WebAssembly.Instance`. `imports` is the import object: `{"env": {"name": callable}}` for the function imports
+    (memories, tables and globals can't be imported yet). A callable gets the arguments as ints and floats and returns
+    what the signature says (None, a value, a tuple for several); an exception it raises comes out of the call
+    into the module."""
+
+    def __init__(self, module: Module, imports: Mapping[str, Mapping[str, object]] | None = None) -> None:
+        hosts = _resolve_imports(module, imports)
+        if hosts and not module._backend.supports("imports"):
+            raise NotImplementedError(f"the {module._backend.name} backend can't take imports (host functions)")
         self._backend = module._backend
-        self._handle = self._backend.instantiate(module._handle)
+        self._handle = self._backend.instantiate(module._handle, hosts)
         items: dict[str, Export] = {}
         for e in module._info.exports:
             if e.kind == "function" and isinstance(e.type, FuncType):

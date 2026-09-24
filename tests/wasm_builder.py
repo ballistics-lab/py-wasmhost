@@ -110,3 +110,47 @@ def needs_import() -> bytes:
     types = [functype([], [])]
     imports = [name("env") + name("f") + b"\x00" + uleb(0)]
     return module(types, [(0, b"")], [("run", 0, 1)], imports=imports)
+
+
+def callbacks() -> bytes:
+    """A module that imports four host functions and calls them from its own exports:
+
+    env.plus(i32, i32) -> i32        env.note(i64)            env.half(f64) -> f64      env.pair(i32) -> (i32, i32)
+    call_plus(a, b) = plus(a, b)     call_note(x) = note(x)   call_half(x) = half(x)    call_pair(x) = pair(x)
+    twice(a) = plus(plus(a, 1), 1)   two nested host calls
+    """
+    types = [
+        functype([I32, I32], [I32]),  # 0 plus
+        functype([I64], []),  # 1 note
+        functype([F64], [F64]),  # 2 half
+        functype([I32], [I32, I32]),  # 3 pair
+        functype([I32], [I32]),  # 4 twice
+    ]
+    imports = [
+        name("env") + name("plus") + b"\x00" + uleb(0),
+        name("env") + name("note") + b"\x00" + uleb(1),
+        name("env") + name("half") + b"\x00" + uleb(2),
+        name("env") + name("pair") + b"\x00" + uleb(3),
+    ]
+    funcs = [  # function indices 4..8 (0..3 are the imports); `call` is 0x10
+        (0, b"\x20\x00\x20\x01\x10\x00"),  # call_plus
+        (1, b"\x20\x00\x10\x01"),  # call_note
+        (2, b"\x20\x00\x10\x02"),  # call_half
+        (3, b"\x20\x00\x10\x03"),  # call_pair
+        (4, b"\x20\x00\x41\x01\x10\x00\x41\x01\x10\x00"),  # twice: plus(plus(a, 1), 1)
+    ]
+    exports = [
+        ("call_plus", 0, 4),
+        ("call_note", 0, 5),
+        ("call_half", 0, 6),
+        ("call_pair", 0, 7),
+        ("twice", 0, 8),
+    ]
+    return module(types, funcs, exports, imports=imports)
+
+
+def imports_memory() -> bytes:
+    """A module that imports `env.memory` (what an Emscripten build does) and exports a function."""
+    types = [functype([], [I32])]
+    imports = [name("env") + name("memory") + b"\x02" + b"\x00\x01"]  # memory, limits: min 1 page
+    return module(types, [(0, b"\x41\x00")], [("zero", 0, 0)], imports=imports)

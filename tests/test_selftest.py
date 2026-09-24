@@ -26,10 +26,11 @@ def test_selftest_reports_a_failure_and_carries_on() -> None:
     assert "0/1 passed" in text  # nothing more can be checked without an instance
 
 
-def test_module_constant_is_the_test_module() -> None:
+def test_module_constants_are_the_test_modules() -> None:
     import wasm_builder as wb
 
     assert _selftest.MODULE == wb.arith()
+    assert _selftest.CALLBACKS == wb.callbacks()
 
 
 def test_main(capsys: pytest.CaptureFixture[str], session: str) -> None:

@@ -28,6 +28,7 @@ from ._api import (
 from ._backend import Backend
 from ._binary import ExportDescriptor, FuncType, ImportDescriptor
 from ._js import GIJavaScriptCoreBackend, JSBackend, JSContextBackend, NodeBackend
+from ._jsc import JSCBackend
 from ._native import Wasm3Backend, WasmtimeBackend
 from ._registry import AUTO_ORDER, BACKENDS, JS_AUTO_ORDER, JS_BACKENDS, default_backend
 from ._selftest import selftest
@@ -49,6 +50,7 @@ __all__ = (
     "Instance",
     "Instantiated",
     "JSBackend",
+    "JSCBackend",
     "JSContextBackend",
     "LinkError",
     "Memory",
