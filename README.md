@@ -69,7 +69,8 @@ The package carries a self-test, since nothing else can be run in Pythonista to 
 
 ```python
 import wasmhost
-wasmhost.selftest()                 # or, from a shell: python -m wasmhost [--backend NAME] [--all]
+
+wasmhost.selftest()  # or, from a shell: python -m wasmhost [--backend NAME] [--all]
 ```
 
 It prints one line per check (the Objective-C bridge in use, `WebAssembly` and `BigInt` in the engine, calls,
