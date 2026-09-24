@@ -92,6 +92,7 @@ def _selftest_backend(backend: Backend, out: Callable[[str], object]) -> _Report
         step("typeof WebAssembly", lambda: _expect(backend.evaluate("typeof WebAssembly"), "object"))
         step("BigInt (needed for i64)", lambda: _expect(backend.evaluate("String(2n ** 62n + 1n)"), str(2**62 + 1)))
         step("engine", lambda: backend.evaluate("typeof process === 'undefined' ? 'bare engine' : 'node'"))
+        step("bytes in and out of the engine", lambda: _bytes(backend))
 
     box: dict[str, Instance] = {}
 
@@ -125,6 +126,18 @@ def _selftest_backend(backend: Backend, out: Callable[[str], object]) -> _Report
     step("batch: an error keeps the earlier results", lambda: _batch_error(box["i"]))
     step("call cost", lambda: _timing(backend, box["i"]))
     return report
+
+
+def _bytes(backend: JSBackend) -> str:
+    data = bytes(range(256)) * 64 + b"\x00\xff"
+    how = backend.put_bytes("globalThis.__wasmhost_test", data)
+    _expect(backend.evaluate("String(__wasmhost_test.length)"), str(len(data)))
+    _expect(backend.get_bytes("__wasmhost_test"), data)
+    _expect(backend.get_bytes("__wasmhost_test.subarray(3, 7)"), data[3:7])  # a view, not a whole buffer
+    backend.put_bytes("globalThis.__wasmhost_test", b"")
+    _expect(backend.get_bytes("__wasmhost_test"), b"")
+    backend.evaluate("delete globalThis.__wasmhost_test")
+    return f"{len(data)} bytes via {how}"
 
 
 def _js_error(backend: JSBackend) -> None:

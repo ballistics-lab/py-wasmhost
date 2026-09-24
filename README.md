@@ -24,7 +24,16 @@ instance.exports.memory.write(ptr, b"data")  # WebAssembly.Memory
 print(instance.exports.counter.value)  # WebAssembly.Global
 ```
 
-See `examples/basic.py`.
+See `examples/basic.py`, and for something bigger, both in a bare JavaScript engine:
+
+- `examples/pyodide.py`: a Python REPL that runs in [Pyodide](https://pyodide.org) (CPython built to WebAssembly),
+  with a memory snapshot per backend, `fetch` served by Python and packages kept between sessions. It started as a
+  [gist](https://gist.github.com/o-murphy/dd898e490094eaddab0875187e27f11a) for a Pythonista `JSContext`.
+- `examples/jslinux.py`: a Linux virtual machine (JSLinux, riscv64 or x86_64 Alpine), with its console on your
+  terminal.
+
+Both keep their downloads in `$WASMHOST_CACHE`, else `~/.cache/wasmhost`, else `./.cache` where there is no usable
+home directory (PythonIDE).
 
 - **Types.** The JavaScript API can't tell a function's signature, and it matters (an `i64` argument must reach
   JavaScript as a BigInt), so the binary's type, import, function, global and export sections are read in
@@ -80,6 +89,14 @@ out.value  # bytes (`.done` says whether the step ran)
 
 A failing step (a trap, an out-of-bounds access) raises from `run()`, after the earlier steps' results are set.
 Only `i32` results can be used in arithmetic (`ptr * 8`, `ptr + 4`).
+
+## Bytes in and out of a JavaScript engine
+
+A program with JavaScript of its own (Pyodide, an emulator) needs to hand the engine files and read results back.
+`JSBackend.put_bytes(target, data)` assigns a `Uint8Array` to a JavaScript expression (`__files["a"]`), and
+`JSBackend.get_bytes(expr)` returns the bytes of one. Through hex everywhere; on JSContext through JavaScriptCore's
+C API instead (`ctypes` under `objc_util`), which fills the array in place, with hex as the fallback if that ever
+fails. The self-test reports which was used (`N bytes via C API` or `via hex`).
 
 ## Backends
 

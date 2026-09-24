@@ -91,6 +91,8 @@ globalThis.__wh = (function () {
             u.set(b, ptr);
             return '';
         },
+        fromHex: fromHex,
+        toHex: toHex,
         tablelen: function (i, name) { return String(insts[i].exports[name].length); },
         // A batch: `body` is a function of (exports, results, write, read) made of the calls, memory
         // accesses and early returns of the Python side, so it costs one trip to the engine. Whatever
@@ -167,6 +169,20 @@ class JSBackend(Backend):
             if err := _translate(str(exc)):
                 raise err from None
             raise
+
+    # --- bytes in and out of the engine, for a caller with JavaScript of its own (a Pyodide, an emulator) ---
+
+    def put_bytes(self, target: str, data: bytes) -> str:
+        """Assign a `Uint8Array` holding `data` to the JavaScript expression `target` (say `__files["a"]`).
+
+        Through hex here, which costs twice the size in a string; JSContext has a faster way. Returns which one
+        was used (`"hex"` or `"C API"`)."""
+        self._run(f'{target} = __wh.fromHex("{data.hex()}");')
+        return "hex"
+
+    def get_bytes(self, expr: str) -> bytes:
+        """The bytes of the `Uint8Array` that the JavaScript expression `expr` evaluates to."""
+        return bytes.fromhex(self._run(f"__wh.toHex({expr})"))
 
     def validate(self, data: bytes) -> bool:
         return self._run(f'__wh.validate("{data.hex()}")') == "1"
@@ -265,9 +281,11 @@ class JSContextBackend(JSBackend):
         self._ctx: Any
         self._rubicon = False
         self.bridge = "objc_util"  # which Objective-C bridge is in use
+        self._c: Any = None  # ctypes access to JavaScriptCore's C API (objc_util's `c`), for raw bytes
         try:
             objc_util: Any = importlib.import_module("objc_util")
             self._ctx = objc_util.ObjCClass("JSContext").alloc().init()
+            self._c = _jsc_c_api(objc_util)
         except ImportError:
             try:
                 rubicon: Any = importlib.import_module("rubicon.objc")
@@ -294,6 +312,106 @@ class JSContextBackend(JSBackend):
             self._ctx.setException_(None)
             raise RuntimeError(f"[JS] {exc.toString()}")
         return str(res.toString())
+
+    # --- bytes through JavaScriptCore's C API: a typed array is filled or read in place, with no hex. It is
+    # only there under objc_util (its `c` is a ctypes view of the C library); any failure turns it off for good and
+    # the hex of JSBackend takes over. ---
+
+    def _context_ref(self) -> int:
+        ref = self._ctx.JSGlobalContextRef()
+        ref = getattr(ref, "value", ref)  # objc_util returns a c_void_p
+        if not isinstance(ref, int) or not ref:
+            raise OSError(f"JSGlobalContextRef -> {ref!r}")
+        return ref
+
+    def put_bytes(self, target: str, data: bytes) -> str:
+        if self._c is not None:
+            try:
+                self._put_c(target, data)
+            except Exception:  # noqa: BLE001 -- whatever it was, hex works
+                self._c = None
+            else:
+                return "C API"
+        return super().put_bytes(target, data)
+
+    def get_bytes(self, expr: str) -> bytes:
+        if self._c is not None:
+            try:
+                return self._get_c(expr)
+            except Exception:  # noqa: BLE001
+                self._c = None
+        return super().get_bytes(expr)
+
+    def _put_c(self, target: str, data: bytes) -> None:
+        import ctypes
+
+        c, ref = self._c, self._context_ref()
+        array = c.JSObjectMakeTypedArray(ref, _K_UINT8, len(data), None)
+        ptr = array and c.JSObjectGetTypedArrayBytesPtr(ref, array, None)
+        if not ptr:
+            raise OSError("typed array allocation failed")
+        ctypes.memmove(ptr, data, len(data))
+        name = c.JSStringCreateWithUTF8CString(b"__wasmhost_in")
+        try:
+            c.JSObjectSetProperty(ref, c.JSContextGetGlobalObject(ref), name, array, 0, None)
+        finally:
+            c.JSStringRelease(name)
+        self.evaluate(f"{target} = globalThis.__wasmhost_in; delete globalThis.__wasmhost_in;")
+        if self.evaluate(f"String(({target} || {{}}).length)") != str(len(data)):  # it must have arrived whole
+            raise OSError("the typed array is not visible in JavaScript")
+
+    def _get_c(self, expr: str) -> bytes:
+        import ctypes
+
+        c, ref = self._c, self._context_ref()
+        script = c.JSStringCreateWithUTF8CString(f"(b => b.byteOffset ? b.slice() : b)({expr})".encode())
+        exc = ctypes.c_void_p()
+        try:
+            value = c.JSEvaluateScript(ref, script, None, None, 1, ctypes.byref(exc))
+        finally:
+            c.JSStringRelease(script)
+        if exc.value or not value:
+            raise OSError("JSEvaluateScript failed")
+        c.JSValueProtect(ref, value)
+        try:
+            array = c.JSValueToObject(ref, value, None)
+            ptr = array and c.JSObjectGetTypedArrayBytesPtr(ref, array, None)
+            if not ptr:
+                raise OSError("not a typed array")
+            return ctypes.string_at(ptr, c.JSObjectGetTypedArrayByteLength(ref, array, None))
+        finally:
+            c.JSValueUnprotect(ref, value)
+
+
+_K_UINT8 = 3  # kJSTypedArrayTypeUint8Array
+
+
+def _jsc_c_api(objc_util: Any) -> Any:
+    """objc_util's `c` with the signatures of the JavaScriptCore C functions used above, or None if it has none."""
+    import ctypes
+
+    ptr, size = ctypes.c_void_p, ctypes.c_size_t
+    signatures = {
+        "JSObjectMakeTypedArray": (ptr, [ptr, ctypes.c_int, size, ptr]),
+        "JSObjectGetTypedArrayBytesPtr": (ptr, [ptr, ptr, ptr]),
+        "JSObjectGetTypedArrayByteLength": (size, [ptr, ptr, ptr]),
+        "JSContextGetGlobalObject": (ptr, [ptr]),
+        "JSStringCreateWithUTF8CString": (ptr, [ctypes.c_char_p]),
+        "JSStringRelease": (None, [ptr]),
+        "JSObjectSetProperty": (None, [ptr, ptr, ptr, ptr, ctypes.c_uint, ptr]),
+        "JSEvaluateScript": (ptr, [ptr, ptr, ptr, ptr, ctypes.c_int, ptr]),
+        "JSValueToObject": (ptr, [ptr, ptr, ptr]),
+        "JSValueProtect": (None, [ptr, ptr]),
+        "JSValueUnprotect": (None, [ptr, ptr]),
+    }
+    try:
+        c = objc_util.c
+        for name, (result, args) in signatures.items():
+            function = getattr(c, name)
+            function.restype, function.argtypes = result, args
+    except (AttributeError, TypeError):
+        return None
+    return c
 
 
 class GIJavaScriptCoreBackend(JSBackend):
