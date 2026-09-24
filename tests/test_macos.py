@@ -18,7 +18,10 @@ pytestmark = pytest.mark.skipif(sys.platform != "darwin", reason="a Mac's JavaSc
 
 
 @pytest.fixture
-def jscontext() -> wasmhost.JSContextBackend:
+def jscontext(request: pytest.FixtureRequest) -> wasmhost.JSContextBackend:
+    chosen = request.config.getoption("--wasm-backend")
+    if chosen not in (None, "jscontext"):  # a run for another backend has no business with this one
+        pytest.skip(f"this run is for {chosen}")
     try:
         return wasmhost.JSContextBackend()
     except ImportError:
@@ -34,12 +37,13 @@ def test_it_is_the_real_thing(jscontext: wasmhost.JSContextBackend) -> None:
 
 
 def test_the_c_api_is_there_too(jscontext: wasmhost.JSContextBackend) -> None:
-    assert jscontext.supports("imports")
+    assert jscontext.supports("imports"), f"no C API: {jscontext.c_api_error}"
     assert jscontext.put_bytes("globalThis.blob", bytes(range(256)) * 10) == "C API"
     assert jscontext.get_bytes("blob") == bytes(range(256)) * 10
 
 
 def test_host_functions_on_the_real_jscontext(jscontext: wasmhost.JSContextBackend) -> None:
+    assert jscontext.supports("imports"), f"no C API: {jscontext.c_api_error}"
     calls: list[tuple[int, int]] = []
 
     def plus(a: int, b: int) -> int:

@@ -412,13 +412,16 @@ class JSContextBackend(JSBackend):
             self._ctx = rubicon.ObjCClass("JSContext").alloc().init()
             self._rubicon = True
             self.bridge = "rubicon-objc"
-        if lib is not None:
+        self.c_api_error: str | None = None  # why there is no C API (bytes through hex, no host functions), if so
+        if lib is None:
+            self.c_api_error = "no JavaScriptCore library to take the C functions from"
+        else:
             try:  # the context reference has to be asked of the proxy; asking now shows whether it can be
                 capi = CApi(lib, self._context_ref)
                 capi.ref  # noqa: B018
                 self._capi = capi
-            except Exception:  # noqa: BLE001 -- no C API here: bytes go through hex, and no host functions
-                pass
+            except Exception as exc:  # noqa: BLE001 -- no C API here: bytes go through hex, and no host functions
+                self.c_api_error = f"{type(exc).__name__}: {exc}"
         if self._capi is not None:
             self.features = self.features | {"imports"}
         _check_webassembly(self)
@@ -426,7 +429,11 @@ class JSContextBackend(JSBackend):
     def _context_ref(self) -> Any:
         """The JSGlobalContextRef of the Objective-C context: a method under objc_util, a property under rubicon."""
         ref = self._ctx.JSGlobalContextRef
-        return ref() if callable(ref) else ref
+        if callable(ref):  # a method (objc_util) or a bound selector (rubicon-objc); a c_void_p or an int is not
+            ref = ref()
+        # rubicon-objc may hand the pointer back wrapped in an ObjCInstance, which keeps the raw one as `.ptr`
+        ptr = getattr(ref, "ptr", None)
+        return ref if ptr is None else ptr
 
     def evaluate(self, src: str) -> str:
         if self._rubicon:  # rubicon-objc: methods take their arguments positionally, properties are attributes

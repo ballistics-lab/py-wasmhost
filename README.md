@@ -164,8 +164,8 @@ Not every backend can do everything; `backend.supports(...)` says:
 
 | Where | Backend | Result | A call / a batch of 3 |
 |---|---|---|---|
-| Pythonista 3 (StaSh 0.7.5), Python 3.10.4, iPhone17,3 | `jscontext` (`objc_util`) | 23/23 (before host functions and the C API bytes path were added) | 53 / 97 us |
-| PythonIDE, Python 3.14.7, `ios-13.0-arm64-iphoneos` | `jscontext` (`objc_util`) | 23/23 (before host functions and the C API bytes path were added) | 37 / 76 us |
+| Pythonista 3 (StaSh 0.7.5), Python 3.10.4, iPhone17,3 | `jscontext` (`objc_util`) | **25/25**, bytes `via C API`, host functions (wasmhost 0.0.2b1) | 55 / 102 us |
+| PythonIDE, Python 3.14.7, `ios-13.0-arm64-iphoneos` | `jscontext` (`objc_util`) | **25/25**, bytes `via C API`, host functions (wasmhost 0.0.2b1) | 39 / 77 us |
 | Linux, CPython 3.14t | `jsc` | 25/25 | 32 / 102 us |
 | Linux, CPython 3.14t | `gi-jsc` | 25/25 (host functions: not available, as documented) | 35 / 62 us |
 | Linux, CPython 3.14t | `node` | 25/25 | 82 / 340 us |
@@ -177,10 +177,11 @@ The times are one run of the self-test each, so read them as an order of magnitu
 what a call does, plus a round trip on `node` (measured once: about 4 us on `wasm3`, 50 us on `wasmtime` and `jsc`,
 200 us on `node`, per host call including the export around it).
 
-Not run on a device since they were added: the C API bytes path and host functions on `jscontext` (on Linux they
-run against a fake `objc_util` whose `c` is the real JavaScriptCore library, so the calls are the ones the iOS path
-makes, but it is not the device), and the `rubicon-objc` bridge (both iOS apps above have `objc_util`, so it wasn't
-needed). Node's synchronous wait for a host function's answer has not been run on Windows either.
+Host functions and the C API bytes path on `jscontext` have run on both iOS apps above; on Linux they also run
+against a fake `objc_util` whose `c` is the real JavaScriptCore library, and on macOS in CI against a real
+Objective-C `JSContext` through rubicon-objc. Not run on a device: the `rubicon-objc` bridge (both iOS apps have
+`objc_util`, so it isn't needed there). Node's synchronous wait for a host function's answer has run in CI on Linux,
+macOS and Windows.
 
 ### A note on wasmtime and `faulthandler`
 
