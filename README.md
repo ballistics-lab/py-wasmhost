@@ -136,14 +136,14 @@ fallback if the C API ever fails. The self-test reports which was used (`N bytes
 
 | Backend | Where | How it is detected |
 |---|---|---|
-| `jscontext` | iOS (Pythonista, PythonIDE) | JavaScriptCore's `JSContext` through `objc_util` (both apps have it), or through [`rubicon-objc`](https://github.com/beeware/rubicon-objc) where that is missing (checked only against a fake bridge, not on a device) |
 | `wasmtime` | anywhere with the `wasmtime` package | `import wasmtime` (`pip install wasmtime`) |
 | `wasm3` | CPython 3.11+ with [pywasm3](https://github.com/wasm3/pywasm3) | `import wasm3`; install it from git: `uv add "pywasm3 @ git+https://github.com/wasm3/pywasm3"` (its PyPI release predates the API used here) |
+| `jscontext` | iOS (Pythonista, PythonIDE), and a Mac with rubicon-objc | Apple's `JSContext` through an Objective-C bridge: Pythonista's `objc_util` (both iOS apps have it), or [`rubicon-objc`](https://github.com/beeware/rubicon-objc) (`pip install rubicon-objc`; tested in CI on macOS, not on a device). `backend.bridge` says which |
 | `jsc` | Linux, macOS | JavaScriptCore's C API through `ctypes`, no PyGObject: `apt install libjavascriptcoregtk-4.1-0` (macOS uses the system framework) |
 | `gi-jsc` | Linux | the same engine through PyGObject (`apt install gir1.2-javascriptcoregtk-4.1 python3-gi`) |
 | `node` | anywhere with Node.js | `node` on `PATH` |
 
-With nothing configured, the first backend that starts wins, in the order shown. Each backend's constructor is its
+With nothing configured, the first backend that starts wins, in the order shown: the native runtimes when they are installed, then the JavaScript engines. (On Pythonista nothing above `jscontext` can be installed, so it is the pick there; on a Mac that has rubicon-objc, `wasmtime` still comes first.) Each backend's constructor is its
 own probe: it fails when its runtime is missing. Choose one with `WASMHOST_BACKEND=<name>`,
 `wasmhost.set_backend("<name>")` or `Module(..., backend="<name>")`; `wasmhost.get_backend().name` says which is in
 use. `wasmhost.close()` closes the backends it started. (In WebAssembly's words the *host* is the embedder, the
@@ -153,9 +153,9 @@ Not every backend can do everything; `backend.supports(...)` says:
 
 | | `memory.grow` from Python | `table.length` | host functions (`imports`) |
 |---|---|---|---|
-| `jscontext` | yes | yes | yes, through the C API under `objc_util` (not under `rubicon-objc`) |
 | `wasmtime` | yes | yes | yes |
 | `wasm3` | no (`NotImplementedError`; a module's own `memory.grow` works) | no | yes |
+| `jscontext` | yes | yes | yes, through JavaScriptCore's C API (under either bridge) |
 | `jsc` | yes | yes | yes |
 | `gi-jsc` | yes | yes | no |
 | `node` | yes | yes | yes |

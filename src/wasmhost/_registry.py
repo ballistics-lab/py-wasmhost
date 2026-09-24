@@ -13,9 +13,9 @@ from ._native import Wasm3Backend, WasmtimeBackend
 __all__ = ("AUTO_ORDER", "BACKENDS", "JS_AUTO_ORDER", "JS_BACKENDS", "default_backend")
 
 BACKENDS: Final[dict[str, type[Backend]]] = {
-    "jscontext": JSContextBackend,
     "wasmtime": WasmtimeBackend,
     "wasm3": Wasm3Backend,
+    "jscontext": JSContextBackend,
     "jsc": JSCBackend,
     "gi-jsc": GIJavaScriptCoreBackend,
     "node": NodeBackend,
@@ -28,12 +28,13 @@ JS_BACKENDS: Final[dict[str, type[JSBackend]]] = {
     "node": NodeBackend,
 }
 
-# Tried in this order when nothing is chosen: Pythonista's JSContext first (it only exists there), then
-# the in-process runtimes when installed -- wasmtime (a JIT), wasm3 (an interpreter) -- then WebKitGTK's
-# JavaScriptCore (Linux with PyGObject), then Node. Each constructor is its own availability probe: it raises
+# Tried in this order when nothing is chosen: the in-process runtimes when installed -- wasmtime (a JIT), wasm3
+# (an interpreter) -- then the JavaScript engines: JSContext (iOS; also a Mac with rubicon-objc, where the native
+# runtimes above win), JavaScriptCore through its C API, through PyGObject, then Node. On Pythonista nothing above
+# JSContext can be installed, so it is the pick there. Each constructor is its own availability probe: it raises
 # when its runtime isn't there (ImportError for objc_util/wasmtime/gi, a missing `node` binary, an engine
 # without WebAssembly), so "available" means "could actually start".
-AUTO_ORDER: Final[tuple[str, ...]] = ("jscontext", "wasmtime", "wasm3", "jsc", "gi-jsc", "node")
+AUTO_ORDER: Final[tuple[str, ...]] = ("wasmtime", "wasm3", "jscontext", "jsc", "gi-jsc", "node")
 JS_AUTO_ORDER: Final[tuple[str, ...]] = tuple(n for n in AUTO_ORDER if n in JS_BACKENDS)
 
 
