@@ -227,7 +227,9 @@ wasmhost.selftest()  # or, from a shell: python -m wasmhost [--backend NAME] [--
 It prints one line per check, then `N/M passed`: the Objective-C bridge in use (and, if the C API is not used, why:
 `C API  not used: ...`), `WebAssembly` and `BigInt` in the engine, bytes in and out (`via C API` or `via hex`), calls,
 `i64`, memory, globals, traps, batches, host functions, globals made on their own and shared between instances, an
-isolated instance, and the cost of a call. A check the backend can't do says so (`not available on this backend, as
+isolated instance, which encodings of WebAssembly exceptions the engine takes (`final (try_table): yes, older
+(try/catch): no`: a module built with C++ exceptions, such as bclibc's `bclibc_wasm.wasm` from wasi-sdk, needs the final one),
+and the cost of a call. A check the backend can't do says so (`not available on this backend, as
 documented`) and counts as passed. If something fails, send the whole output. On a computer,
 `python -m wasmhost --all` runs it on every backend that starts.
 

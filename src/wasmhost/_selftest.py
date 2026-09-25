@@ -70,6 +70,25 @@ GLOBAL_IMPORT = bytes.fromhex(
 )
 
 
+# Two functions, caught() -> i32 and uncaught() -> i32: each throws a WebAssembly exception (tag 0 and tag 1) inside a
+# handler for tag 0. caught() comes out of the handler with 42, uncaught() must not return. There is a module for each
+# encoding of exception handling, since an engine may take one and not the other: the final one (`try_table`, exnref:
+# wasmtime, wasm3, recent Node and Safari/iOS) and the older `try`/`catch` (what clang emits by default: Node, Safari,
+# not wasmtime).
+EXCEPTIONS_FINAL = bytes.fromhex(
+    "0061736d01000000"  # magic, version
+    "0108026000017f600000"  # types: () -> i32, () -> ()
+    "03030200000d05020001000107150206636175676874000008756e6361756768740001"  # functions, tags, exports
+    "0a2902130002401f400100000008000b41010f0b412a0b130002401f400100000008010b41010f0b412a0b"  # code
+)
+EXCEPTIONS_LEGACY = bytes.fromhex(
+    "0061736d01000000"  # magic, version
+    "0108026000017f600000"  # types: () -> i32, () -> ()
+    "03030200000d05020001000107150206636175676874000008756e6361756768740001"  # functions, tags, exports
+    "0a19020b00067f08000700412a0b0b0b00067f08010700412a0b0b"  # code
+)
+
+
 class _Report:
     def __init__(self, out: Callable[[str], object]) -> None:
         self.out = out
@@ -154,6 +173,7 @@ def _selftest_backend(backend: Backend, out: Callable[[str], object]) -> _Report
     step("host functions (Python called from the module)", lambda: _host_functions(backend))
     step("globals: made on their own, imported, shared", lambda: _globals_on_their_own(backend))
     step("an isolated instance", lambda: _isolated(backend))
+    step("exception handling (which encodings the engine takes)", lambda: _exceptions(backend))
     step("call cost", lambda: _timing(backend, box["i"]))
     return report
 
@@ -258,6 +278,28 @@ def _globals_on_their_own(backend: Backend) -> str:
     except LinkError:
         return "shared by two instances, the host and an export; a wrong import is a LinkError"
     raise AssertionError("a number was taken for a mutable global")
+
+
+def _exceptions(backend: Backend) -> str:
+    """Which encodings of WebAssembly exceptions the engine takes: a module that uses them (C++ built with wasi-sdk's
+    exceptions) needs the one it was built with. An engine without an encoding just refuses the module, which is an
+    answer; one that takes it must catch what it should and let the rest out."""
+    found: list[str] = []
+    for label, wasm in (("final (try_table)", EXCEPTIONS_FINAL), ("older (try/catch)", EXCEPTIONS_LEGACY)):
+        try:
+            ex = Instance(Module(wasm, backend=backend)).exports
+            caught = ex.caught()  # (wasm3 compiles a function when it is first called, and refuses it there)
+        except Exception:  # noqa: BLE001 -- an engine without it refuses the module, in whatever way
+            found.append(f"{label}: no")
+            continue
+        _expect(caught, 42)
+        try:
+            got = ex.uncaught()
+        except Exception:  # noqa: BLE001 -- a Trap, or the engine's own exception: it came out, as it should
+            found.append(f"{label}: yes")
+        else:
+            raise AssertionError(f"{label}: an exception of another tag was swallowed (uncaught() returned {got!r})")
+    return ", ".join(found)
 
 
 def _isolated(backend: Backend) -> str:
