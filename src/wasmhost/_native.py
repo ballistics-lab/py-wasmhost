@@ -11,11 +11,11 @@ from __future__ import annotations
 
 import importlib
 from collections.abc import Callable, Sequence
-from typing import Any, cast
+from typing import Any, NamedTuple, cast
 
-from ._backend import Backend, HostFunction, check_results
+from ._backend import Backend, HostFunction, HostObject, check_results
 from ._binary import FuncType
-from ._errors import CompileError, Trap
+from ._errors import CompileError, LinkError, Trap
 
 __all__ = ("Wasm3Backend", "WasmtimeBackend")
 
@@ -42,6 +42,11 @@ def _wasm3_callable(host: HostFunction) -> Callable[..., Any]:
     return call
 
 
+class _Wasm3Global(NamedTuple):
+    module: Any
+    name: str
+
+
 class _Wasm3Instance:
     def __init__(self, runtime: Any, module: Any) -> None:
         self.runtime = runtime
@@ -65,7 +70,7 @@ class Wasm3Backend(Backend):
 
     name = "wasm3"
     # It has no Memory.grow from Python (a module's own memory.grow works, and len(memory) follows) and no tables.
-    features = frozenset({"imports"})
+    features = frozenset({"imports", "isolated"})
     # wasm3's own value stack, separate from the module's shadow stack in linear memory.
     STACK_BYTES = 256 * 1024
 
@@ -88,13 +93,21 @@ class Wasm3Backend(Backend):
             raise CompileError(str(exc)) from None
         return data  # a wasm3 module belongs to one runtime, so each instance parses it again
 
-    def instantiate(self, module: bytes, imports: Sequence[HostFunction] = ()) -> _Wasm3Instance:
+    def instantiate(
+        self, module: bytes, imports: Sequence[HostFunction | HostObject] = (), *, isolated: bool = False
+    ) -> _Wasm3Instance:
+        # `isolated` is what a wasm3 instance is anyway: it has its own runtime and shares nothing.
         runtime = self._env.new_runtime(self._stack)
         parsed = self._env.parse_module(module)
         runtime.load(parsed)
         for host in imports:  # linked after loading, before the first call
+            if isinstance(host, HostObject):
+                raise NotImplementedError(f"pywasm3 can't import a {host.kind}: only functions")
             parsed.link_function(host.module, host.name, _wasm3_signature(host.ftype), _wasm3_callable(host))
         return _Wasm3Instance(runtime, parsed)
+
+    def new_global(self, kind: str, value: int | float, mutable: bool) -> Any:
+        raise NotImplementedError("pywasm3 can't make a global outside a module")
 
     def call(
         self, instance: _Wasm3Instance, name: str, args: Sequence[int | float], ftype: FuncType
@@ -109,33 +122,47 @@ class Wasm3Backend(Backend):
             return []
         return list(cast("Sequence[int | float]", result)) if isinstance(result, tuple) else [result]
 
-    def memory_size(self, instance: _Wasm3Instance, name: str) -> int:
-        return len(instance.memory(name))
+    def export_memory(self, instance: _Wasm3Instance, name: str) -> Any:
+        return instance.memory(name)  # pywasm3's Memory: looked up afresh on every access, so it survives a grow
 
-    def memory_grow(self, instance: _Wasm3Instance, name: str, pages: int) -> int:
+    def export_global(self, instance: _Wasm3Instance, name: str, kind: str) -> _Wasm3Global:
+        return _Wasm3Global(instance.module, name)
+
+    def export_table(self, instance: _Wasm3Instance, name: str) -> str:
+        return name  # pywasm3 has no tables API: a placeholder, so an instance that exports one can still be made
+
+    def memory_size(self, memory: Any) -> int:
+        return len(memory)
+
+    def memory_grow(self, memory: Any, pages: int) -> int:
         raise NotImplementedError("pywasm3 can't grow a memory from Python (a module's own memory.grow works)")
 
-    def memory_read(self, instance: _Wasm3Instance, name: str, offset: int, length: int) -> bytes:
-        memory = instance.memory(name)
+    def memory_read(self, memory: Any, offset: int, length: int) -> bytes:
         _check_range(offset, length, len(memory))
         return bytes(memory[offset : offset + length])
 
-    def memory_write(self, instance: _Wasm3Instance, name: str, offset: int, data: bytes) -> None:
-        memory = instance.memory(name)
+    def memory_write(self, memory: Any, offset: int, data: bytes) -> None:
         _check_range(offset, len(data), len(memory))
         memory[offset : offset + len(data)] = data
 
-    def global_get(self, instance: _Wasm3Instance, name: str, kind: str) -> int | float:
-        return instance.module.get_global(name)  # type: ignore[no-any-return]
+    def global_get(self, glob: _Wasm3Global, kind: str) -> int | float:
+        return glob.module.get_global(glob.name)  # type: ignore[no-any-return]
 
-    def global_set(self, instance: _Wasm3Instance, name: str, kind: str, value: int | float) -> None:
+    def global_set(self, glob: _Wasm3Global, kind: str, value: int | float) -> None:
         try:
-            instance.module.set_global(name, value)
+            glob.module.set_global(glob.name, value)
         except RuntimeError as exc:  # "global is not mutable"
             raise TypeError(str(exc)) from None
 
-    def table_length(self, instance: _Wasm3Instance, name: str) -> int:
+    def table_length(self, table: Any) -> int:
         raise NotImplementedError("pywasm3 has no tables API")
+
+
+class _WasmtimeObject(NamedTuple):
+    """An exported memory, global or table, with the store it belongs to (every call needs it)."""
+
+    store: Any
+    obj: Any
 
 
 class _WasmtimeInstance:
@@ -148,11 +175,14 @@ class WasmtimeBackend(Backend):
     """The `wasmtime` package."""
 
     name = "wasmtime"
-    features = frozenset({"memory.grow", "table.length", "imports"})
+    features = frozenset(
+        {"memory.grow", "table.length", "imports", "import.global", "import.memory", "import.table", "isolated"}
+    )
 
     def __init__(self) -> None:
         self._wt: Any = importlib.import_module("wasmtime")  # ImportError here means "backend not available"
         self._engine: Any = self._wt.Engine()
+        self._store: Any = None
 
     def validate(self, data: bytes) -> bool:
         try:
@@ -167,11 +197,39 @@ class WasmtimeBackend(Backend):
         except self._wt.WasmtimeError as exc:
             raise CompileError(str(exc)) from None
 
-    def instantiate(self, module: Any, imports: Sequence[HostFunction] = ()) -> _WasmtimeInstance:
-        store = self._wt.Store(self._engine)
-        funcs = [self._host_func(store, host) for host in imports]
-        instance = self._wt.Instance(store, module, funcs)
+    @property
+    def store(self) -> Any:
+        """The one store everything shares (as in the JavaScript API), made when first needed."""
+        if self._store is None:
+            self._store = self._wt.Store(self._engine)
+        return self._store
+
+    def instantiate(
+        self, module: Any, imports: Sequence[HostFunction | HostObject] = (), *, isolated: bool = False
+    ) -> _WasmtimeInstance:
+        store = self._wt.Store(self._engine) if isolated else self.store
+        externs: list[Any] = []
+        for host in imports:
+            if isinstance(host, HostObject):
+                if host.handle.store is not store:
+                    raise ValueError(
+                        f"{host.module}.{host.name} belongs to another store: an isolated instance can't share "
+                        "objects, and nothing can be shared with one"
+                    )
+                externs.append(host.handle.obj)
+            else:
+                externs.append(self._host_func(store, host))
+        try:
+            instance = self._wt.Instance(store, module, externs)
+        except self._wt.WasmtimeError as exc:  # the imports don't fit the module
+            raise LinkError(str(exc)) from None
         return _WasmtimeInstance(store, instance.exports(store))
+
+    def new_global(self, kind: str, value: int | float, mutable: bool) -> _WasmtimeObject:
+        wt = self._wt
+        store = self.store
+        gtype = wt.GlobalType(getattr(wt.ValType, kind)(), mutable)
+        return _WasmtimeObject(store, wt.Global(store, gtype, value))
 
     def _host_func(self, store: Any, host: HostFunction) -> Any:
         wt = self._wt
@@ -195,33 +253,40 @@ class WasmtimeBackend(Backend):
             return []
         return list(cast("Sequence[int | float]", result)) if isinstance(result, list) else [result]
 
-    def memory_size(self, instance: _WasmtimeInstance, name: str) -> int:
-        return int(instance.exports[name].data_len(instance.store))
+    def export_memory(self, instance: _WasmtimeInstance, name: str) -> _WasmtimeObject:
+        return _WasmtimeObject(instance.store, instance.exports[name])
 
-    def memory_grow(self, instance: _WasmtimeInstance, name: str, pages: int) -> int:
+    def export_global(self, instance: _WasmtimeInstance, name: str, kind: str) -> _WasmtimeObject:
+        return _WasmtimeObject(instance.store, instance.exports[name])
+
+    def export_table(self, instance: _WasmtimeInstance, name: str) -> _WasmtimeObject:
+        return _WasmtimeObject(instance.store, instance.exports[name])
+
+    def memory_size(self, memory: _WasmtimeObject) -> int:
+        return int(memory.obj.data_len(memory.store))
+
+    def memory_grow(self, memory: _WasmtimeObject, pages: int) -> int:
         try:
-            return int(instance.exports[name].grow(instance.store, pages))
+            return int(memory.obj.grow(memory.store, pages))
         except self._wt.WasmtimeError as exc:
             raise IndexError(str(exc)) from None
 
-    def memory_read(self, instance: _WasmtimeInstance, name: str, offset: int, length: int) -> bytes:
-        memory = instance.exports[name]
-        _check_range(offset, length, int(memory.data_len(instance.store)))
-        return bytes(memory.read(instance.store, offset, offset + length))
+    def memory_read(self, memory: _WasmtimeObject, offset: int, length: int) -> bytes:
+        _check_range(offset, length, int(memory.obj.data_len(memory.store)))
+        return bytes(memory.obj.read(memory.store, offset, offset + length))
 
-    def memory_write(self, instance: _WasmtimeInstance, name: str, offset: int, data: bytes) -> None:
-        memory = instance.exports[name]
-        _check_range(offset, len(data), int(memory.data_len(instance.store)))
-        memory.write(instance.store, data, offset)
+    def memory_write(self, memory: _WasmtimeObject, offset: int, data: bytes) -> None:
+        _check_range(offset, len(data), int(memory.obj.data_len(memory.store)))
+        memory.obj.write(memory.store, data, offset)
 
-    def global_get(self, instance: _WasmtimeInstance, name: str, kind: str) -> int | float:
-        return instance.exports[name].value(instance.store)  # type: ignore[no-any-return]
+    def global_get(self, glob: _WasmtimeObject, kind: str) -> int | float:
+        return glob.obj.value(glob.store)  # type: ignore[no-any-return]
 
-    def global_set(self, instance: _WasmtimeInstance, name: str, kind: str, value: int | float) -> None:
+    def global_set(self, glob: _WasmtimeObject, kind: str, value: int | float) -> None:
         try:
-            instance.exports[name].set_value(instance.store, value)
+            glob.obj.set_value(glob.store, value)
         except self._wt.WasmtimeError as exc:  # an immutable global
             raise TypeError(str(exc)) from None
 
-    def table_length(self, instance: _WasmtimeInstance, name: str) -> int:
-        return int(instance.exports[name].size(instance.store))
+    def table_length(self, table: _WasmtimeObject) -> int:
+        return int(table.obj.size(table.store))

@@ -25,6 +25,7 @@ __all__ = (
     "Expr",
     "Backend",
     "HostFunction",
+    "HostObject",
     "Operand",
     "ReadStep",
     "Step",
@@ -48,14 +49,14 @@ class CallStep(NamedTuple):
 
 
 class WriteStep(NamedTuple):
-    memory: str
+    memory: Any  # a memory handle (see Backend.export_memory)
     offset: Operand
     data: bytes
 
 
 class ReadStep(NamedTuple):
     out: int
-    memory: str
+    memory: Any  # a memory handle
     offset: Operand
     length: Operand
 
@@ -75,6 +76,15 @@ class HostFunction(NamedTuple):
     name: str
     ftype: FuncType
     fn: Callable[..., Any]
+
+
+class HostObject(NamedTuple):
+    """A memory, table or global the module imports, as a handle of the backend it was made on."""
+
+    module: str
+    name: str
+    kind: str  # "memory" | "table" | "global"
+    handle: Any
 
 
 def check_results(values: Any, ftype: FuncType) -> list[int | float]:
@@ -135,7 +145,8 @@ class Backend:
 
     name: str = "?"
     # What the runtime can't do is left out: "memory.grow" (Memory.grow from Python), "table.length", "imports"
-    # (host functions: a Python callable the module calls).
+    # (host functions: a Python callable the module calls). Not in the default set, so a backend has to say it:
+    # "import.global" / "import.memory" / "import.table" (objects made on their own can be imported), "isolated".
     features: frozenset[str] = frozenset({"memory.grow", "table.length"})
 
     def supports(self, feature: str) -> bool:
@@ -150,34 +161,57 @@ class Backend:
     def compile(self, data: bytes) -> Any:
         raise NotImplementedError
 
-    def instantiate(self, module: Any, imports: Sequence[HostFunction] = ()) -> Any:
-        """A new instance. `imports` answers the module's function imports, in the order it declares them; a
-        backend without the "imports" feature is only asked with none."""
+    def instantiate(
+        self, module: Any, imports: Sequence[HostFunction | HostObject] = (), *, isolated: bool = False
+    ) -> Any:
+        """A new instance. `imports` answers the module's imports, in the order it declares them: a HostFunction
+        for a function, a HostObject for a memory, table or global (a backend without the "imports" feature is only
+        asked with none, one without "import.<kind>" with no object of that kind).
+
+        `isolated` asks for an instance that shares nothing with the others (it gets its own store, which goes
+        away with it; see the "isolated" feature); it can't take a HostObject made outside it."""
+        raise NotImplementedError
+
+    def new_global(self, kind: str, value: int | float, mutable: bool) -> Any:
+        """A global that belongs to no instance, as a handle (the "import.global" feature)."""
         raise NotImplementedError
 
     def call(self, instance: Any, name: str, args: Sequence[int | float], ftype: FuncType) -> list[int | float]:
         """Call an export with already-checked arguments; the results, in order."""
         raise NotImplementedError
 
-    def memory_size(self, instance: Any, name: str) -> int:
+    # --- exported objects, by handle: what `export_*` returns is what the operations below take. A handle is
+    # whatever the backend likes (an index in the engine, a runtime object with its store) and stays good as long as
+    # the instance it came from.
+
+    def export_memory(self, instance: Any, name: str) -> Any:
         raise NotImplementedError
 
-    def memory_grow(self, instance: Any, name: str, pages: int) -> int:
+    def export_global(self, instance: Any, name: str, kind: str) -> Any:
         raise NotImplementedError
 
-    def memory_read(self, instance: Any, name: str, offset: int, length: int) -> bytes:
+    def export_table(self, instance: Any, name: str) -> Any:
         raise NotImplementedError
 
-    def memory_write(self, instance: Any, name: str, offset: int, data: bytes) -> None:
+    def memory_size(self, memory: Any) -> int:
         raise NotImplementedError
 
-    def global_get(self, instance: Any, name: str, kind: str) -> int | float:
+    def memory_grow(self, memory: Any, pages: int) -> int:
         raise NotImplementedError
 
-    def global_set(self, instance: Any, name: str, kind: str, value: int | float) -> None:
+    def memory_read(self, memory: Any, offset: int, length: int) -> bytes:
         raise NotImplementedError
 
-    def table_length(self, instance: Any, name: str) -> int:
+    def memory_write(self, memory: Any, offset: int, data: bytes) -> None:
+        raise NotImplementedError
+
+    def global_get(self, glob: Any, kind: str) -> int | float:
+        raise NotImplementedError
+
+    def global_set(self, glob: Any, kind: str, value: int | float) -> None:
+        raise NotImplementedError
+
+    def table_length(self, table: Any) -> int:
         raise NotImplementedError
 
     def run_batch(self, instance: Any, steps: Sequence[Step]) -> BatchResult:
@@ -192,10 +226,10 @@ class Backend:
                     results = self.call(instance, step.name, args, step.ftype)
                     values[step.out] = results[0] if step.ftype.results else None
                 elif isinstance(step, WriteStep):
-                    self.memory_write(instance, step.memory, int(evaluate(step.offset, values)), step.data)
+                    self.memory_write(step.memory, int(evaluate(step.offset, values)), step.data)
                 elif isinstance(step, ReadStep):
                     offset, length = int(evaluate(step.offset, values)), int(evaluate(step.length, values))
-                    values[step.out] = self.memory_read(instance, step.memory, offset, length)
+                    values[step.out] = self.memory_read(step.memory, offset, length)
                 elif (evaluate(step.value, values) == 0) == step.when_zero:
                     break
         except (WasmError, IndexError, TypeError) as exc:

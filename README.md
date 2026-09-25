@@ -105,6 +105,33 @@ JavaScript engines that are JavaScriptCore (`jsc`, and `jscontext` on iOS) do it
 JavaScript function that calls Python; Node writes a request on its pipe and waits for the answer, reading its
 stdin synchronously. Only `gi-jsc` can't: PyGObject has no way to make a JavaScript function that calls Python.
 
+## Globals
+
+`Global(type, value, mutable=False)` makes a `WebAssembly.Global` on its own, and an instance can import it, one
+instance or several:
+
+```python
+counter = wasmhost.Global("i32", 0, mutable=True)
+a = wasmhost.Instance(module, {"env": {"counter": counter}})
+b = wasmhost.Instance(module, {"env": {"counter": counter}})  # the same global: what one writes, the other reads
+counter.value = 10  # and so does the host
+```
+
+An exported global (`instance.exports.g`) can be passed to another instance the same way, and for an immutable one a
+plain number is enough (`{"env": {"limit": 100}}`), as in the JavaScript API. A wrong import (a number for a mutable
+global, another type, another backend) is a `LinkError`; an immutable global's `value` can't be written (`TypeError`).
+`backend.supports("import.global")` says whether a backend can (`wasm3` can't: pywasm3 makes no global outside a
+module).
+
+Like the JavaScript API, all the instances of a backend live in one store, so nothing stops two of them from sharing
+what the host made. **`isolated=True` is not in the JavaScript API**: `Instance(module, isolated=True)` gives an
+instance a store of its own, which goes away with it. It matters on `wasmtime`, which never frees an instance's memory
+inside a store (only when the store is dropped): the default is one store per backend, freed by `wasmhost.close()`,
+so many instances add up (300 instances of 1 MiB were 315 MB, not given back by `store.gc()`), while an isolated one
+is freed when the instance is. Its price: it shares nothing (a Global made outside it is a `ValueError`).
+`backend.supports("isolated")` is true for `wasmtime` and `wasm3` (a `wasm3` instance is isolated anyway); on the
+JavaScript engines, which have one store, it is a `NotImplementedError`.
+
 ## Batches
 
 On a JavaScript engine every call into it has a fixed cost (a pipe to `node`, a bridged Objective-C call in
@@ -151,14 +178,31 @@ Python side that provides imports; what runs the module is the backend.)
 
 Not every backend can do everything; `backend.supports(...)` says:
 
-| | `memory.grow` from Python | `table.length` | host functions (`imports`) |
-|---|---|---|---|
-| `wasmtime` | yes | yes | yes |
-| `wasm3` | no (`NotImplementedError`; a module's own `memory.grow` works) | no | yes |
-| `jscontext` | yes | yes | yes, through JavaScriptCore's C API (under either bridge) |
-| `jsc` | yes | yes | yes |
-| `gi-jsc` | yes | yes | no |
-| `node` | yes | yes | yes |
+| | `memory.grow` from Python | `table.length` | host functions (`imports`) | Global on its own (`import.global`) | `isolated` |
+|---|---|---|---|---|---|
+| `wasmtime` | yes | yes | yes | yes | yes |
+| `wasm3` | no (`NotImplementedError`; a module's own `memory.grow` works) | no | yes | no | yes (always) |
+| `jscontext` | yes | yes | yes, through JavaScriptCore's C API (under either bridge) | yes | no |
+| `jsc` | yes | yes | yes | yes | no |
+| `gi-jsc` | yes | yes | no | yes | no |
+| `node` | yes | yes | yes | yes | no |
+
+## Try it on a device
+
+The package carries a self-test, since nothing else can be run in Pythonista/Python IDE to see whether this works there:
+
+```python
+import wasmhost
+
+wasmhost.selftest()  # or, from a shell: python -m wasmhost [--backend NAME] [--all]
+```
+
+It prints one line per check, then `N/M passed`: the Objective-C bridge in use (and, if the C API is not used, why:
+`C API  not used: ...`), `WebAssembly` and `BigInt` in the engine, bytes in and out (`via C API` or `via hex`), calls,
+`i64`, memory, globals, traps, batches, host functions, globals made on their own and shared between instances, an
+isolated instance, and the cost of a call. A check the backend can't do says so (`not available on this backend, as
+documented`) and counts as passed. If something fails, send the whole output. On a computer,
+`python -m wasmhost --all` runs it on every backend that starts.
 
 ### Where it has been run
 
@@ -166,14 +210,15 @@ Not every backend can do everything; `backend.supports(...)` says:
 |---|---|---|---|
 | Pythonista 3 (StaSh 0.7.5), Python 3.10.4, iPhone17,3 | `jscontext` (`objc_util`) | **25/25**, bytes `via C API`, host functions (wasmhost 0.0.2b1) | 55 / 102 us |
 | PythonIDE, Python 3.14.7, `ios-13.0-arm64-iphoneos` | `jscontext` (`objc_util`) | **25/25**, bytes `via C API`, host functions (wasmhost 0.0.2b1) | 39 / 77 us |
-| Linux, CPython 3.14t | `jsc` | 25/25 | 32 / 102 us |
-| Linux, CPython 3.14t | `gi-jsc` | 25/25 (host functions: not available, as documented) | 35 / 62 us |
-| Linux, CPython 3.14t | `node` | 25/25 | 82 / 340 us |
-| Linux, CPython 3.14t | `wasmtime` | 19/19 | 66 / 212 us |
-| Linux, CPython 3.14t | `wasm3` | 19/19 | 3 / 63 us |
-| Linux, CPython 3.10 and PyPy 3.10 | `node` | 25/25 (and the test suite on 3.10) | |
+| Linux, CPython 3.14t | `jsc` | 27/27 | 32 / 102 us |
+| Linux, CPython 3.14t | `gi-jsc` | 27/27 (host functions: not available, as documented) | 35 / 62 us |
+| Linux, CPython 3.14t | `node` | 27/27 | 82 / 340 us |
+| Linux, CPython 3.14t | `wasmtime` | 21/21 | 66 / 212 us |
+| Linux, CPython 3.14t | `wasm3` | 21/21 | 3 / 63 us |
+| Linux, CPython 3.10 and PyPy 3.10 | `node` | 25/25 (an earlier version; and the test suite on 3.10) | |
 
-The times are one run of the self-test each, so read them as an order of magnitude. A host function costs about
+The counts of the Linux rows are for the current version (the phone rows are for `0.0.2b1`: the self-test has grown two
+checks since); the times are one run of the self-test each, so read them as an order of magnitude. A host function costs about
 what a call does, plus a round trip on `node` (measured once: about 4 us on `wasm3`, 50 us on `wasmtime` and `jsc`,
 200 us on `node`, per host call including the export around it).
 
@@ -192,8 +237,8 @@ Python's `faulthandler` (on with `python -X faulthandler`, and in pytest) replac
 
 ## Not yet
 
-- **Importing a memory, a table or a global** (an Emscripten build imports its memory): `NotImplementedError`.
-  Host functions are there; see above.
+- **Importing a memory or a table** (an Emscripten build imports its memory): `NotImplementedError`. Host
+  functions and globals are there; see above.
 - **Tables** beyond their length, `v128` and reference types, multi-value results in a batch.
 
 ## Test

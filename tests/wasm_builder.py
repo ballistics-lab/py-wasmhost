@@ -2,7 +2,12 @@
 
 from __future__ import annotations
 
+from collections.abc import Sequence
+
 I32, I64, F32, F64 = 0x7F, 0x7E, 0x7D, 0x7C
+
+# a function: (type index, code) or (type index, code, [(count, valtype)] locals)
+Func = tuple[int, bytes] | tuple[int, bytes, list[tuple[int, int]]]
 
 
 def uleb(n: int) -> bytes:
@@ -34,15 +39,15 @@ def functype(params: list[int], results: list[int]) -> bytes:
     return b"\x60" + vec([bytes([p]) for p in params]) + vec([bytes([r]) for r in results])
 
 
-def body(code: bytes) -> bytes:
-    """A function body with no locals."""
-    inner = uleb(0) + code + b"\x0b"
+def body(code: bytes, locals_: list[tuple[int, int]] | None = None) -> bytes:
+    """A function body; `locals_` is a list of (count, valtype)."""
+    inner = vec([uleb(n) + bytes([t]) for n, t in locals_ or []]) + code + b"\x0b"
     return uleb(len(inner)) + inner
 
 
 def module(
     types: list[bytes],
-    funcs: list[tuple[int, bytes]],
+    funcs: Sequence[Func],
     exports: list[tuple[str, int, int]],
     memory: bool = False,
     globals_: list[bytes] | None = None,
@@ -51,13 +56,13 @@ def module(
     out = b"\0asm\x01\x00\x00\x00" + section(1, vec(types))
     if imports:
         out += section(2, vec(imports))
-    out += section(3, vec([uleb(t) for t, _ in funcs]))
+    out += section(3, vec([uleb(f[0]) for f in funcs]))
     if memory:
         out += section(5, vec([b"\x01\x01\x04"]))  # min 1 page, max 4
     if globals_:
         out += section(6, vec(globals_))
     out += section(7, vec([name(n) + bytes([kind]) + uleb(i) for n, kind, i in exports]))
-    out += section(10, vec([body(code) for _, code in funcs]))
+    out += section(10, vec([body(f[1], f[2]) if len(f) == 3 else body(f[1]) for f in funcs]))
     return out
 
 
@@ -154,3 +159,31 @@ def imports_memory() -> bytes:
     types = [functype([], [I32])]
     imports = [name("env") + name("memory") + b"\x02" + b"\x00\x01"]  # memory, limits: min 1 page
     return module(types, [(0, b"\x41\x00")], [("zero", 0, 0)], imports=imports)
+
+
+def spinner() -> bytes:
+    """spin() loops forever; quick() -> i32 returns 7; busy(n) -> i32 counts up to n in a loop and returns n."""
+    types = [functype([], []), functype([], [I32]), functype([I32], [I32])]
+    funcs: list[Func] = [
+        (0, b"\x03\x40\x0c\x00\x0b"),  # spin: loop; br 0; end
+        (1, b"\x41\x07"),  # quick: i32.const 7
+        (
+            2,
+            # busy(n): local 1 = 0; loop { local1 += 1; br_if (local1 < n) } ; local1
+            b"\x03\x40\x20\x01\x41\x01\x6a\x21\x01\x20\x01\x20\x00\x49\x0d\x00\x0b\x20\x01",
+            [(1, I32)],
+        ),
+    ]
+    return module(types, funcs, [("spin", 0, 0), ("quick", 0, 1), ("busy", 0, 2)])
+
+
+def imports_global(valtype: int = I32, mutable: bool = True) -> bytes:
+    """Imports the global env.g; exports get() -> valtype (and, for a mutable i32, inc(), which adds 1 to it)."""
+    types = [functype([], [valtype]), functype([], [])]
+    imports = [name("env") + name("g") + b"\x03" + bytes([valtype, 1 if mutable else 0])]
+    funcs: list[Func] = [(0, b"\x23\x00")]  # get: global.get 0
+    exports = [("get", 0, 0)]
+    if mutable and valtype == I32:
+        funcs.append((1, b"\x23\x00\x41\x01\x6a\x24\x00"))  # inc: global.set 0 (global.get 0 + 1)
+        exports.append(("inc", 0, 1))
+    return module(types, funcs, exports, imports=imports)

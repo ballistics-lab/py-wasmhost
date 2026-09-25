@@ -19,9 +19,9 @@ import traceback
 from collections.abc import Callable, Sequence
 from typing import Any
 
-from ._api import Instance, Module, get_backend, validate
+from ._api import Global, Instance, Module, get_backend, validate
 from ._backend import Backend
-from ._errors import CompileError, Trap
+from ._errors import CompileError, LinkError, Trap
 from ._js import JSBackend
 from ._registry import AUTO_ORDER, BACKENDS
 
@@ -57,6 +57,16 @@ CALLBACKS = bytes.fromhex(
     "63616c6c5f7061697200070574776963650008"
     "0a2c0508002000200110000b0600200010010b0600200010020b0600200010030b0c002000410110"  # code
     "00410110000b"
+)
+
+# A module that imports the mutable i32 global env.g: get() reads it, inc() adds 1 to it.
+GLOBAL_IMPORT = bytes.fromhex(
+    "0061736d01000000"  # magic, version
+    "0108026000017f600000"  # types
+    "020a0103656e760167037f01"  # imports: env.g, a mutable i32 global
+    "0303020001"  # functions: 2
+    "070d0203676574000003696e630001"  # exports: get, inc
+    "0a1002040023000b0900230041016a24000b"  # code
 )
 
 
@@ -142,6 +152,8 @@ def _selftest_backend(backend: Backend, out: Callable[[str], object]) -> _Report
     step("batch: chained steps", lambda: _batch(box["i"]))
     step("batch: an error keeps the earlier results", lambda: _batch_error(box["i"]))
     step("host functions (Python called from the module)", lambda: _host_functions(backend))
+    step("globals: made on their own, imported, shared", lambda: _globals_on_their_own(backend))
+    step("an isolated instance", lambda: _isolated(backend))
     step("call cost", lambda: _timing(backend, box["i"]))
     return report
 
@@ -213,6 +225,53 @@ def _imports(calls: list[str]) -> dict[str, dict[str, Any]]:
         return (x, x + 1)
 
     return {"env": {"plus": plus, "note": note, "half": half, "pair": pair}}
+
+
+def _globals_on_their_own(backend: Backend) -> str:
+    if not backend.supports("import.global"):
+        try:
+            Global("i32", 0, backend=backend)
+        except NotImplementedError:
+            return "not available on this backend, as documented"
+        raise AssertionError("should be NotImplementedError")
+    module = Module(GLOBAL_IMPORT, backend=backend)
+    g = Global("i32", 10, mutable=True, backend=backend)
+    a = Instance(module, {"env": {"g": g}}).exports
+    b = Instance(module, {"env": {"g": g}}).exports
+    a.inc()
+    b.inc()
+    _expect((a.get(), b.get(), g.value), (12, 12, 12))  # two instances and the host, one global
+    g.value = 40
+    _expect(a.get(), 40)
+    donor = Instance(Module(MODULE, backend=backend)).exports  # an exported global goes into another instance
+    taker = Instance(module, {"env": {"g": donor.counter}}).exports
+    taker.inc()
+    _expect(donor.counter.value, 8)
+    try:
+        Global("i32", 0, backend=backend).value = 1  # immutable
+    except TypeError:
+        pass
+    else:
+        raise AssertionError("an immutable global was written")
+    try:
+        Instance(module, {"env": {"g": 5}})
+    except LinkError:
+        return "shared by two instances, the host and an export; a wrong import is a LinkError"
+    raise AssertionError("a number was taken for a mutable global")
+
+
+def _isolated(backend: Backend) -> str:
+    if not backend.supports("isolated"):
+        try:
+            Instance(Module(MODULE, backend=backend), isolated=True)
+        except NotImplementedError:
+            return "not available on this backend, as documented"
+        raise AssertionError("should be NotImplementedError")
+    a = Instance(Module(MODULE, backend=backend), isolated=True).exports
+    b = Instance(Module(MODULE, backend=backend), isolated=True).exports
+    a.counter.value = 50
+    _expect((a.add(1, 2), b.counter.value), (3, 7))  # nothing shared
+    return "its own store: nothing shared with the others"
 
 
 def _js_error(backend: JSBackend) -> None:

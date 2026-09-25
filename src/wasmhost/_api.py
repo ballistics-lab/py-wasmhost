@@ -17,7 +17,19 @@ from __future__ import annotations
 from collections.abc import Iterator, Mapping
 from typing import Any, NamedTuple
 
-from ._backend import Backend, CallStep, Expr, HostFunction, Operand, ReadStep, Step, StopStep, WriteStep, normalize
+from ._backend import (
+    Backend,
+    CallStep,
+    Expr,
+    HostFunction,
+    HostObject,
+    Operand,
+    ReadStep,
+    Step,
+    StopStep,
+    WriteStep,
+    normalize,
+)
 from ._binary import ExportDescriptor, FuncType, ImportDescriptor, ModuleInfo, parse
 from ._errors import CompileError, LinkError, Trap, WasmError
 from ._registry import BACKENDS, default_backend
@@ -129,12 +141,13 @@ class Function:
 class Memory:
     """An exported linear memory. Bytes are copied in and out (nothing is shared with the runtime)."""
 
-    def __init__(self, instance: Instance, name: str) -> None:
-        self._instance = instance
+    def __init__(self, backend: Backend, handle: Any, name: str | None = None) -> None:
+        self._backend = backend
+        self._handle = handle
         self.name = name
 
     def __len__(self) -> int:
-        return self._instance._backend.memory_size(self._instance._handle, self.name)
+        return self._backend.memory_size(self._handle)
 
     @property
     def byte_length(self) -> int:
@@ -144,19 +157,15 @@ class Memory:
         """`WebAssembly.Memory.grow`: add `pages` 64 KiB pages and return the previous size in pages.
 
         Not on every backend (wasm3 has no such call from Python): `NotImplementedError` there."""
-        return self._instance._backend.memory_grow(self._instance._handle, self.name, int(pages))
+        return self._backend.memory_grow(self._handle, int(pages))
 
     def read(self, offset: int, length: int) -> bytes:
         if offset < 0 or length < 0 or offset + length > len(self):
             raise IndexError("memory access out of bounds")
-        return (
-            self._instance._backend.memory_read(self._instance._handle, self.name, int(offset), int(length))
-            if length
-            else b""
-        )
+        return self._backend.memory_read(self._handle, int(offset), int(length)) if length else b""
 
     def write(self, offset: int, data: bytes | bytearray | memoryview) -> None:
-        self._instance._backend.memory_write(self._instance._handle, self.name, int(offset), bytes(data))
+        self._backend.memory_write(self._handle, int(offset), bytes(data))
 
     def __getitem__(self, key: int | slice) -> bytes | int:
         if isinstance(key, slice):
@@ -194,23 +203,46 @@ class Memory:
 
 
 class Global:
-    """An exported global; `value` reads it and, for a mutable one, writes it."""
+    """`WebAssembly.Global`: `Global("i32", 7, mutable=True)` makes one on its own, which can be given to an instance
+    as an import (and shared by several); an exported one comes from `instance.exports`. `value` reads it and, for a
+    mutable one, writes it (an immutable one raises TypeError, as in JavaScript)."""
 
-    def __init__(self, instance: Instance, name: str, kind: str) -> None:
-        self._instance = instance
-        self.name = name
+    def __init__(
+        self,
+        kind: str,
+        value: int | float = 0,
+        *,
+        mutable: bool = False,
+        backend: Backend | str | None = None,
+    ) -> None:
+        if kind not in ("i32", "i64", "f32", "f64"):
+            raise ValueError(f"a global of type {kind!r}: expected i32, i64, f32 or f64")
+        target = _backend(backend)
+        if not target.supports("import.global"):
+            raise NotImplementedError(f"the {target.name} backend can't make a global on its own")
+        self._backend = target
+        self._handle = target.new_global(kind, _check(value, kind), mutable)
+        self.name: str | None = None
         self.type = kind
+        self.mutable: bool | None = mutable
+
+    @classmethod
+    def _wrap(cls, backend: Backend, handle: Any, kind: str, name: str | None = None) -> Global:
+        """A global that already exists: an export."""
+        self = object.__new__(cls)
+        self._backend, self._handle, self.name, self.type, self.mutable = backend, handle, name, kind, None
+        return self
 
     @property
     def value(self) -> int | float:
-        return self._instance._backend.global_get(self._instance._handle, self.name, self.type)
+        return self._backend.global_get(self._handle, self.type)
 
     @value.setter
     def value(self, new: int | float) -> None:
-        self._instance._backend.global_set(self._instance._handle, self.name, self.type, _check(new, self.type))
+        self._backend.global_set(self._handle, self.type, _check(new, self.type))
 
     def __repr__(self) -> str:
-        return f"<wasmhost.Global {self.name}: {self.type}>"
+        return f"<wasmhost.Global {self.name or ''}: {self.type}{' mutable' if self.mutable else ''}>"
 
 
 class Ref:
@@ -287,6 +319,10 @@ class Batch:
             return value._expr
         return _check(value, kind)
 
+    def _check_memory(self, memory: Memory) -> None:
+        if memory._backend is not self._instance._backend:
+            raise ValueError("a memory of another backend")
+
     def _new(self, kind: str) -> Ref:
         ref = Ref(self, len(self._refs), kind)
         self._refs.append(ref)
@@ -306,13 +342,15 @@ class Batch:
         return ref
 
     def write(self, memory: Memory, offset: int | Ref, data: bytes | bytearray | memoryview) -> None:
-        self._steps.append(WriteStep(memory.name, self._operand(offset, "i32"), bytes(data)))
+        self._check_memory(memory)
+        self._steps.append(WriteStep(memory._handle, self._operand(offset, "i32"), bytes(data)))
 
     def read(self, memory: Memory, offset: int | Ref, length: int | Ref) -> Ref:
         """Bytes out of the memory; the `Ref` holds them (as `bytes`) after the batch has run."""
+        self._check_memory(memory)
         ref = self._new("bytes")
         self._steps.append(
-            ReadStep(ref._index, memory.name, self._operand(offset, "i32"), self._operand(length, "i32"))
+            ReadStep(ref._index, memory._handle, self._operand(offset, "i32"), self._operand(length, "i32"))
         )
         return ref
 
@@ -353,12 +391,13 @@ class Batch:
 class Table:
     """An exported table: only its length is available so far."""
 
-    def __init__(self, instance: Instance, name: str) -> None:
-        self._instance = instance
+    def __init__(self, backend: Backend, handle: Any, name: str | None = None) -> None:
+        self._backend = backend
+        self._handle = handle
         self.name = name
 
     def __len__(self) -> int:
-        return self._instance._backend.table_length(self._instance._handle, self.name)
+        return self._backend.table_length(self._handle)
 
 
 Export = Function | Memory | Global | Table
@@ -413,9 +452,12 @@ class Module:
         return list(module._info.imports)
 
 
-def _resolve_imports(module: Module, imports: Mapping[str, Mapping[str, object]] | None) -> list[HostFunction]:
-    """The module's function imports, each with the callable the import object has for it (as the JS API checks)."""
-    hosts: list[HostFunction] = []
+def _resolve_imports(
+    module: Module, imports: Mapping[str, Mapping[str, object]] | None
+) -> list[HostFunction | HostObject]:
+    """The module's imports, each with what the import object has for it, as the JS API checks: a callable for a
+    function, a Global (or, for an immutable one, a plain number) for a global."""
+    found: list[HostFunction | HostObject] = []
     for d in module._info.imports:
         if imports is None:
             wanted = ", ".join(f"{i.module}.{i.name}" for i in module._info.imports)
@@ -423,37 +465,68 @@ def _resolve_imports(module: Module, imports: Mapping[str, Mapping[str, object]]
         namespace = imports.get(d.module)
         if namespace is None:
             raise TypeError(f"the import object has no {d.module!r}")
-        if d.kind != "function" or not isinstance(d.type, FuncType):
-            raise NotImplementedError(f"importing a {d.kind} ({d.module}.{d.name}) is not supported yet")
-        fn = namespace.get(d.name)
-        if not callable(fn):
-            raise LinkError(f"import {d.module}.{d.name} is not a function")
-        hosts.append(HostFunction(d.module, d.name, d.type, fn))
-    return hosts
+        value = namespace.get(d.name)
+        where = f"{d.module}.{d.name}"
+        if d.kind == "function" and isinstance(d.type, FuncType):
+            if not callable(value):
+                raise LinkError(f"import {where} is not a function")
+            found.append(HostFunction(d.module, d.name, d.type, value))
+        elif d.kind == "global" and isinstance(d.type, str):
+            if isinstance(value, (int, float)) and not isinstance(value, bool) and not d.mutable:
+                value = Global(d.type, value, backend=module._backend)  # a number is an immutable global
+            if not isinstance(value, Global):
+                raise LinkError(f"import {where} is not a Global" + (" (it is mutable)" if d.mutable else ""))
+            if value._backend is not module._backend:
+                raise LinkError(f"import {where} was made on another backend ({value._backend.name})")
+            if value.type != d.type:
+                raise LinkError(f"import {where} is an {value.type}, the module wants an {d.type}")
+            found.append(HostObject(d.module, d.name, "global", value._handle))
+        else:
+            raise NotImplementedError(f"importing a {d.kind} ({where}) is not supported yet")
+    return found
 
 
 class Instance:
-    """`WebAssembly.Instance`. `imports` is the import object: `{"env": {"name": callable}}` for the function imports
-    (memories, tables and globals can't be imported yet). A callable gets the arguments as ints and floats and returns
-    what the signature says (None, a value, a tuple for several); an exception it raises comes out of the call
-    into the module."""
+    """`WebAssembly.Instance`. `imports` is the import object, `{"env": {"name": value}}`: a callable for a function
+    (it gets the arguments as ints and floats and returns what the signature says, None, a value or a tuple; an
+    exception it raises comes out of the call into the module) and a `Global` for a global (a plain number will do
+    for an immutable one). Importing a memory or a table is not supported yet.
 
-    def __init__(self, module: Module, imports: Mapping[str, Mapping[str, object]] | None = None) -> None:
+    `isolated=True` (not in the JavaScript API) gives the instance a store of its own, which goes away with it: its
+    memory is freed when the instance is dropped, but it can't share a Global with any other instance. Where it is
+    not wanted or not available (`backend.supports("isolated")`) it is a NotImplementedError. Without it, all the
+    instances of a backend live in one store, as in JavaScript, and their memory is freed with the backend."""
+
+    def __init__(
+        self,
+        module: Module,
+        imports: Mapping[str, Mapping[str, object]] | None = None,
+        *,
+        isolated: bool = False,
+    ) -> None:
         hosts = _resolve_imports(module, imports)
-        if hosts and not module._backend.supports("imports"):
-            raise NotImplementedError(f"the {module._backend.name} backend can't take imports (host functions)")
-        self._backend = module._backend
-        self._handle = self._backend.instantiate(module._handle, hosts)
+        backend = module._backend
+        if any(isinstance(h, HostFunction) for h in hosts) and not backend.supports("imports"):
+            raise NotImplementedError(f"the {backend.name} backend can't take imports (host functions)")
+        for h in hosts:
+            if isinstance(h, HostObject) and not backend.supports(f"import.{h.kind}"):
+                raise NotImplementedError(f"the {backend.name} backend can't import a {h.kind}")
+        if isolated and not backend.supports("isolated"):
+            raise NotImplementedError(f"the {backend.name} backend has one store for everything: no isolated instances")
+        self._backend = backend
+        self._handle = backend.instantiate(module._handle, hosts, isolated=isolated)
         items: dict[str, Export] = {}
         for e in module._info.exports:
             if e.kind == "function" and isinstance(e.type, FuncType):
                 items[e.name] = Function(self, e.name, e.type)
             elif e.kind == "memory":
-                items[e.name] = Memory(self, e.name)
+                items[e.name] = Memory(self._backend, self._backend.export_memory(self._handle, e.name), e.name)
             elif e.kind == "global" and isinstance(e.type, str):
-                items[e.name] = Global(self, e.name, e.type)
+                items[e.name] = Global._wrap(
+                    self._backend, self._backend.export_global(self._handle, e.name, e.type), e.type, e.name
+                )
             elif e.kind == "table":
-                items[e.name] = Table(self, e.name)
+                items[e.name] = Table(self._backend, self._backend.export_table(self._handle, e.name), e.name)
         self.exports = _Exports(items)
 
     def batch(self) -> Batch:
