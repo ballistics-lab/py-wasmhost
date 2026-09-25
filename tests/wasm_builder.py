@@ -266,3 +266,24 @@ def dyn_callback() -> bytes:
     out += section(9, vec([b"\x00\x23\x00\x0b" + vec([uleb(2), uleb(3)])]))  # elem at global.get 0: f2, f3
     out += section(10, vec([body(f[1]) for f in funcs]))
     return out
+
+
+def exceptions(final: bool) -> bytes:
+    """Two tags and two functions: caught() -> i32 throws tag 0 inside a handler for tag 0 and returns 42 through it
+    (flow that got past the handler would return 1); uncaught() -> i32 throws tag 1 in the same handler and must not
+    return at all. `final` is the encoding that came out of the exception-handling proposal (`try_table`, exnref), else
+    the older `try`/`catch` that clang emits by default."""
+    types = [functype([], [I32]), functype([], [])]
+
+    def handler(tag: int) -> bytes:
+        if final:
+            # block; try_table (catch tag 0 -> the block); throw <tag>; end; i32.const 1; return; end; i32.const 42
+            return b"\x02\x40\x1f\x40\x01\x00\x00\x00" + b"\x08" + uleb(tag) + b"\x0b\x41\x01\x0f\x0b\x41\x2a"
+        # try (result i32); throw <tag>; catch 0; i32.const 42; end
+        return b"\x06\x7f\x08" + uleb(tag) + b"\x07\x00\x41\x2a\x0b"
+
+    out = b"\0asm\x01\x00\x00\x00" + section(1, vec(types)) + section(3, vec([uleb(0), uleb(0)]))
+    out += section(13, vec([b"\x00" + uleb(1), b"\x00" + uleb(1)]))  # tag section: two tags of type () -> ()
+    out += section(7, vec([name("caught") + b"\x00" + uleb(0), name("uncaught") + b"\x00" + uleb(1)]))
+    out += section(10, vec([body(handler(0)), body(handler(1))]))
+    return out
