@@ -51,7 +51,8 @@ home directory (PythonIDE).
 
 - **Types.** The JavaScript API can't tell a function's signature, and it matters (an `i64` argument must reach
   JavaScript as a BigInt), so the binary's type, import, function, global and export sections are read in
-  Python. `Module.exports(module)` and `Module.imports(module)` describe a module with them.
+  Python. `Module.exports(module)` and `Module.imports(module)` describe a module with them, and
+  `Module.customSections(module, name)` gives the contents of its custom sections (a list of `bytes`).
 - **Errors** are the API's: `CompileError`, `LinkError` and `Trap` (`WebAssembly.RuntimeError`, which is also a
   `RuntimeError`); an out-of-bounds memory access is an `IndexError`.
 - **Memory** is copied, not shared: `memory.read(offset, n)`, `memory.write(offset, data)`, `memory[a:b]`,

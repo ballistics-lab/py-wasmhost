@@ -3,7 +3,8 @@
 The JavaScript API can't tell them (`WebAssembly.Module.exports()` has names and kinds, no signatures),
 and they matter: an `i64` argument must reach JavaScript as a BigInt while an `i32` must not, and a
 result is an integer or a float depending on its type. Only the type, import, function, table, memory,
-global and export sections are read; the rest is skipped, and code is never looked at.
+global and export sections are read, and the custom sections are kept (`Module.customSections`); the rest is
+skipped, and code is never looked at.
 """
 
 from __future__ import annotations
@@ -46,6 +47,7 @@ class ExportDescriptor(NamedTuple):
 class ModuleInfo(NamedTuple):
     imports: tuple[ImportDescriptor, ...]
     exports: tuple[ExportDescriptor, ...]
+    custom: tuple[tuple[str, bytes], ...] = ()  # the custom sections (name, contents), in order
 
 
 class _Reader:
@@ -113,12 +115,18 @@ def parse(wasm: bytes) -> ModuleInfo:
     global_types: list[str] = []  # value type of every global: imported ones first
     imports: list[ImportDescriptor] = []
     raw_exports: list[tuple[str, int, int]] = []
+    custom: list[tuple[str, bytes]] = []
     try:
         while r.pos < len(wasm):
             section_id = r.byte()
             size = r.u32()
             end = r.pos + size
-            if section_id == 1:
+            if section_id == 0:
+                name = r.name()
+                if end > len(wasm) or r.pos > end:
+                    raise ValueError("truncated WebAssembly binary")
+                custom.append((name, wasm[r.pos : end]))
+            elif section_id == 1:
                 for _ in range(r.u32()):
                     if r.byte() != 0x60:
                         raise ValueError("unsupported type form")
@@ -168,4 +176,4 @@ def parse(wasm: bytes) -> ModuleInfo:
         elif kind == 3:
             desc = global_types[index]
         exports.append(ExportDescriptor(name, KINDS[kind], desc))
-    return ModuleInfo(tuple(imports), tuple(exports))
+    return ModuleInfo(tuple(imports), tuple(exports), tuple(custom))

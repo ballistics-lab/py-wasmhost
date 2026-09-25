@@ -524,7 +524,8 @@ class _Exports:
 
 
 class Module:
-    """A compiled module. `Module.exports(m)` and `Module.imports(m)` describe it, with types."""
+    """A compiled module. `Module.exports(m)` and `Module.imports(m)` describe it, with types, and
+    `Module.customSections(m, name)` gives its custom sections (the `name` section, producers, your own data)."""
 
     def __init__(self, wasm: bytes | bytearray | memoryview, *, backend: Backend | str | None = None) -> None:
         data = bytes(wasm)
@@ -542,6 +543,11 @@ class Module:
     @staticmethod
     def imports(module: Module) -> list[ImportDescriptor]:
         return list(module._info.imports)
+
+    @staticmethod
+    def customSections(module: Module, name: str) -> list[bytes]:  # noqa: N802 -- the JavaScript API's name
+        """The contents of every custom section called `name` (a list of `bytes`, empty when there is none)."""
+        return [data for section, data in module._info.custom if section == name]
 
 
 def _resolve_imports(

@@ -223,3 +223,12 @@ def test_batch_context_manager_and_checks(inst: wasmhost.Instance) -> None:
         inst.batch().call(inst.exports.add64, b.call(inst.exports.add, 1, 1), 1)
     with pytest.raises(RuntimeError, match="already run"):
         b.run()
+
+
+def test_custom_sections(session: str) -> None:
+    payload = b"\x01\x02custom bytes"
+    wasm = wb.arith() + wb.section(0, wb.name("mine") + payload) + wb.section(0, wb.name("mine") + b"again")
+    module = wasmhost.Module(wasm)
+    assert wasmhost.Module.customSections(module, "mine") == [payload, b"again"]
+    assert wasmhost.Module.customSections(module, "absent") == []
+    assert wasmhost.Instance(module).exports.add(2, 3) == 5  # a custom section doesn't get in the way
