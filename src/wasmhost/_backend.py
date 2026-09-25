@@ -25,6 +25,7 @@ __all__ = (
     "Expr",
     "Backend",
     "HostFunction",
+    "HostObject",
     "Operand",
     "ReadStep",
     "Step",
@@ -75,6 +76,15 @@ class HostFunction(NamedTuple):
     name: str
     ftype: FuncType
     fn: Callable[..., Any]
+
+
+class HostObject(NamedTuple):
+    """A memory, table or global the module imports, as a handle of the backend it was made on."""
+
+    module: str
+    name: str
+    kind: str  # "memory" | "table" | "global"
+    handle: Any
 
 
 def check_results(values: Any, ftype: FuncType) -> list[int | float]:
@@ -135,7 +145,8 @@ class Backend:
 
     name: str = "?"
     # What the runtime can't do is left out: "memory.grow" (Memory.grow from Python), "table.length", "imports"
-    # (host functions: a Python callable the module calls).
+    # (host functions: a Python callable the module calls). Not in the default set, so a backend has to say it:
+    # "import.global" / "import.memory" / "import.table" (objects made on their own can be imported), "isolated".
     features: frozenset[str] = frozenset({"memory.grow", "table.length"})
 
     def supports(self, feature: str) -> bool:
@@ -150,9 +161,19 @@ class Backend:
     def compile(self, data: bytes) -> Any:
         raise NotImplementedError
 
-    def instantiate(self, module: Any, imports: Sequence[HostFunction] = ()) -> Any:
-        """A new instance. `imports` answers the module's function imports, in the order it declares them; a
-        backend without the "imports" feature is only asked with none."""
+    def instantiate(
+        self, module: Any, imports: Sequence[HostFunction | HostObject] = (), *, isolated: bool = False
+    ) -> Any:
+        """A new instance. `imports` answers the module's imports, in the order it declares them: a HostFunction
+        for a function, a HostObject for a memory, table or global (a backend without the "imports" feature is only
+        asked with none, one without "import.<kind>" with no object of that kind).
+
+        `isolated` asks for an instance that shares nothing with the others (it gets its own store, which goes
+        away with it; see the "isolated" feature); it can't take a HostObject made outside it."""
+        raise NotImplementedError
+
+    def new_global(self, kind: str, value: int | float, mutable: bool) -> Any:
+        """A global that belongs to no instance, as a handle (the "import.global" feature)."""
         raise NotImplementedError
 
     def call(self, instance: Any, name: str, args: Sequence[int | float], ftype: FuncType) -> list[int | float]:

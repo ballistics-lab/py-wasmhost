@@ -29,6 +29,7 @@ from ._backend import (
     BatchResult,
     CallStep,
     HostFunction,
+    HostObject,
     Operand,
     ReadStep,
     Step,
@@ -104,6 +105,12 @@ globalThis.__wh = (function () {
         s: fmt,
         call: function (i, name, args) { return ret(insts[i].exports[name].apply(undefined, args)); },
         // an exported memory, global or table gets a number here, and the operations take it
+        // an object made on its own (a Global, later a Memory or a Table) gets a number too
+        newGlobal: function (kind, mutable, v) {
+            objs.push(new WebAssembly.Global({ value: kind, mutable: mutable }, v));
+            return objs.length - 1;
+        },
+        o: function (n) { return objs[n]; },
         obj: function (i, name) { objs.push(insts[i].exports[name]); return objs.length - 1; },
         get: function (o) { return fmt(objs[o].value); },
         set: function (o, v) { objs[o].value = v; return ''; },
@@ -191,6 +198,9 @@ def _expr(operand: Operand) -> str:
 class JSBackend(Backend):
     """A JavaScript engine. Subclasses implement `evaluate`."""
 
+    # One store per engine, as in the JavaScript API: whatever is made in it can be imported by any instance.
+    features = Backend.features | {"import.global", "import.memory", "import.table"}
+
     def __init__(self) -> None:
         self._ready = False
         self._hosts: list[HostFunction] = []  # the host functions handed out, by the number the engine calls them by
@@ -238,11 +248,14 @@ class JSBackend(Backend):
             self._raised = exc
             raise _HostFailed from None
 
-    def _import_object(self, imports: Sequence[HostFunction]) -> str:
+    def _import_object(self, imports: Sequence[HostFunction | HostObject]) -> str:
         """JavaScript source of the import object: each function turns its arguments into text, asks `__hostcall`
-        and turns the answer back into what the signature says."""
+        and turns the answer back into what the signature says; a memory, table or global is the object itself."""
         modules: dict[str, list[str]] = {}
         for host in imports:
+            if isinstance(host, HostObject):
+                modules.setdefault(host.module, []).append(f"{json.dumps(host.name)}:__wh.o({host.handle})")
+                continue
             ident = len(self._hosts)
             self._hosts.append(host)
             n = len(host.ftype.params)
@@ -293,16 +306,26 @@ class JSBackend(Backend):
     def compile(self, data: bytes) -> int:
         return int(self._run(f'__wh.compile("{data.hex()}")'))
 
-    def instantiate(self, module: int, imports: Sequence[HostFunction] = ()) -> int:
+    def instantiate(
+        self, module: int, imports: Sequence[HostFunction | HostObject] = (), *, isolated: bool = False
+    ) -> int:
+        if isolated:
+            raise NotImplementedError(f"the {self.name} backend has one store for everything: no isolated instances")
         if not imports:
             return int(self._run(f"__wh.instantiate({module})"))
-        if not self.supports("imports"):
-            raise NotImplementedError(f"the {self.name} backend can't take imports (host functions)")
         self._run("0")  # the registry (`__wh`) first: the import object uses it
-        if not self._hostcall_ready:
-            self._install_hostcall()
-            self._hostcall_ready = True
+        if any(isinstance(i, HostFunction) for i in imports):
+            if not self.supports("imports"):
+                raise NotImplementedError(f"the {self.name} backend can't take imports (host functions)")
+            if not self._hostcall_ready:
+                self._install_hostcall()
+                self._hostcall_ready = True
         return int(self._run(f"__wh.instantiate({module},{self._import_object(imports)})"))
+
+    def new_global(self, kind: str, value: int | float, mutable: bool) -> int:
+        return int(
+            self._run(f"__wh.newGlobal({json.dumps(kind)},{'true' if mutable else 'false'},{_literal(value, kind)})")
+        )
 
     def call(self, instance: int, name: str, args: Sequence[int | float], ftype: FuncType) -> list[int | float]:
         literals = ",".join(_literal(a, k) for a, k in zip(args, ftype.params, strict=True))

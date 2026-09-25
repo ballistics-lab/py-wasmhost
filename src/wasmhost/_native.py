@@ -13,9 +13,9 @@ import importlib
 from collections.abc import Callable, Sequence
 from typing import Any, NamedTuple, cast
 
-from ._backend import Backend, HostFunction, check_results
+from ._backend import Backend, HostFunction, HostObject, check_results
 from ._binary import FuncType
-from ._errors import CompileError, Trap
+from ._errors import CompileError, LinkError, Trap
 
 __all__ = ("Wasm3Backend", "WasmtimeBackend")
 
@@ -70,7 +70,7 @@ class Wasm3Backend(Backend):
 
     name = "wasm3"
     # It has no Memory.grow from Python (a module's own memory.grow works, and len(memory) follows) and no tables.
-    features = frozenset({"imports"})
+    features = frozenset({"imports", "isolated"})
     # wasm3's own value stack, separate from the module's shadow stack in linear memory.
     STACK_BYTES = 256 * 1024
 
@@ -93,13 +93,21 @@ class Wasm3Backend(Backend):
             raise CompileError(str(exc)) from None
         return data  # a wasm3 module belongs to one runtime, so each instance parses it again
 
-    def instantiate(self, module: bytes, imports: Sequence[HostFunction] = ()) -> _Wasm3Instance:
+    def instantiate(
+        self, module: bytes, imports: Sequence[HostFunction | HostObject] = (), *, isolated: bool = False
+    ) -> _Wasm3Instance:
+        # `isolated` is what a wasm3 instance is anyway: it has its own runtime and shares nothing.
         runtime = self._env.new_runtime(self._stack)
         parsed = self._env.parse_module(module)
         runtime.load(parsed)
         for host in imports:  # linked after loading, before the first call
+            if isinstance(host, HostObject):
+                raise NotImplementedError(f"pywasm3 can't import a {host.kind}: only functions")
             parsed.link_function(host.module, host.name, _wasm3_signature(host.ftype), _wasm3_callable(host))
         return _Wasm3Instance(runtime, parsed)
+
+    def new_global(self, kind: str, value: int | float, mutable: bool) -> Any:
+        raise NotImplementedError("pywasm3 can't make a global outside a module")
 
     def call(
         self, instance: _Wasm3Instance, name: str, args: Sequence[int | float], ftype: FuncType
@@ -167,11 +175,14 @@ class WasmtimeBackend(Backend):
     """The `wasmtime` package."""
 
     name = "wasmtime"
-    features = frozenset({"memory.grow", "table.length", "imports"})
+    features = frozenset(
+        {"memory.grow", "table.length", "imports", "import.global", "import.memory", "import.table", "isolated"}
+    )
 
     def __init__(self) -> None:
         self._wt: Any = importlib.import_module("wasmtime")  # ImportError here means "backend not available"
         self._engine: Any = self._wt.Engine()
+        self._store: Any = None
 
     def validate(self, data: bytes) -> bool:
         try:
@@ -186,11 +197,39 @@ class WasmtimeBackend(Backend):
         except self._wt.WasmtimeError as exc:
             raise CompileError(str(exc)) from None
 
-    def instantiate(self, module: Any, imports: Sequence[HostFunction] = ()) -> _WasmtimeInstance:
-        store = self._wt.Store(self._engine)
-        funcs = [self._host_func(store, host) for host in imports]
-        instance = self._wt.Instance(store, module, funcs)
+    @property
+    def store(self) -> Any:
+        """The one store everything shares (as in the JavaScript API), made when first needed."""
+        if self._store is None:
+            self._store = self._wt.Store(self._engine)
+        return self._store
+
+    def instantiate(
+        self, module: Any, imports: Sequence[HostFunction | HostObject] = (), *, isolated: bool = False
+    ) -> _WasmtimeInstance:
+        store = self._wt.Store(self._engine) if isolated else self.store
+        externs: list[Any] = []
+        for host in imports:
+            if isinstance(host, HostObject):
+                if host.handle.store is not store:
+                    raise ValueError(
+                        f"{host.module}.{host.name} belongs to another store: an isolated instance can't share "
+                        "objects, and nothing can be shared with one"
+                    )
+                externs.append(host.handle.obj)
+            else:
+                externs.append(self._host_func(store, host))
+        try:
+            instance = self._wt.Instance(store, module, externs)
+        except self._wt.WasmtimeError as exc:  # the imports don't fit the module
+            raise LinkError(str(exc)) from None
         return _WasmtimeInstance(store, instance.exports(store))
+
+    def new_global(self, kind: str, value: int | float, mutable: bool) -> _WasmtimeObject:
+        wt = self._wt
+        store = self.store
+        gtype = wt.GlobalType(getattr(wt.ValType, kind)(), mutable)
+        return _WasmtimeObject(store, wt.Global(store, gtype, value))
 
     def _host_func(self, store: Any, host: HostFunction) -> Any:
         wt = self._wt

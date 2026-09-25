@@ -175,3 +175,15 @@ def spinner() -> bytes:
         ),
     ]
     return module(types, funcs, [("spin", 0, 0), ("quick", 0, 1), ("busy", 0, 2)])
+
+
+def imports_global(valtype: int = I32, mutable: bool = True) -> bytes:
+    """Imports the global env.g; exports get() -> valtype (and, for a mutable i32, inc(), which adds 1 to it)."""
+    types = [functype([], [valtype]), functype([], [])]
+    imports = [name("env") + name("g") + b"\x03" + bytes([valtype, 1 if mutable else 0])]
+    funcs: list[Func] = [(0, b"\x23\x00")]  # get: global.get 0
+    exports = [("get", 0, 0)]
+    if mutable and valtype == I32:
+        funcs.append((1, b"\x23\x00\x41\x01\x6a\x24\x00"))  # inc: global.set 0 (global.get 0 + 1)
+        exports.append(("inc", 0, 1))
+    return module(types, funcs, exports, imports=imports)

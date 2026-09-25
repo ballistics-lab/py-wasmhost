@@ -34,6 +34,7 @@ class ImportDescriptor(NamedTuple):
     name: str
     kind: str
     type: FuncType | str | None  # a function's signature, a global's value type, else None
+    mutable: bool | None = None  # for a global: can it be written (a mutable one must be imported as a Global)
 
 
 class ExportDescriptor(NamedTuple):
@@ -128,6 +129,7 @@ def parse(wasm: bytes) -> ModuleInfo:
                 for _ in range(r.u32()):
                     module, name, kind = r.name(), r.name(), r.byte()
                     desc: FuncType | str | None = None
+                    mutable = False
                     if kind == 0:
                         func_types.append(index := r.u32())
                         desc = types[index]
@@ -138,13 +140,13 @@ def parse(wasm: bytes) -> ModuleInfo:
                         r.limits()
                     elif kind == 3:
                         global_types.append(desc := r.valtype())
-                        r.byte()
+                        mutable = r.byte() == 1
                     elif kind == 4:
                         r.byte()
                         r.u32()
                     else:
                         raise ValueError(f"unknown import kind {kind}")
-                    imports.append(ImportDescriptor(module, name, KINDS[kind], desc))
+                    imports.append(ImportDescriptor(module, name, KINDS[kind], desc, mutable if kind == 3 else None))
             elif section_id == 3:
                 func_types.extend(r.u32() for _ in range(r.u32()))
             elif section_id == 6:
