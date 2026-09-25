@@ -222,13 +222,15 @@ def tables(imported: bool) -> bytes:
     return out
 
 
-def swaps() -> bytes:
-    """Multi-value: swap(i32, i32) -> (i32, i32), and env.swap(i32, i64) -> (i64, i32) imported and re-exported as
-    swap_imported."""
+def swaps(imported: bool = True) -> bytes:
+    """Multi-value: swap(i32, i32) -> (i32, i32) and, with `imported`, env.swap(i32, i64) -> (i64, i32) imported and
+    re-exported as swap_imported (a module without it needs no import object)."""
     types = [functype([I32, I32], [I32, I32]), functype([I32, I64], [I64, I32])]
+    if not imported:
+        return module(types, [(0, b"\x20\x01\x20\x00")], [("swap", 0, 0)])  # local.get 1, local.get 0
     imports = [name("env") + name("swap") + b"\x00" + uleb(1)]
     funcs: list[Func] = [
-        (0, b"\x20\x01\x20\x00"),  # swap: local.get 1, local.get 0
+        (0, b"\x20\x01\x20\x00"),  # swap
         (1, b"\x20\x00\x20\x01\x10\x00"),  # swap_imported: local.get 0, local.get 1, call env.swap
     ]
     return module(types, funcs, [("swap", 0, 1), ("swap_imported", 0, 2)], imports=imports)

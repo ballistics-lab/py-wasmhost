@@ -81,7 +81,7 @@ def test_memory_survives_the_modules_own_grow(session: str) -> None:
 
 
 def test_multivalue_results(session: str) -> None:
-    instance = wasmhost.Instance(wasmhost.Module(wb.swaps()), {"env": {"swap": lambda a, b: (b, a)}})
+    instance = wasmhost.Instance(wasmhost.Module(wb.swaps(imported=False)))
     assert instance.exports.swap(1, 2) == (2, 1)
     assert instance.exports.swap(2, 1) == (1, 2)
 
