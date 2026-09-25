@@ -146,7 +146,8 @@ class Backend:
     name: str = "?"
     # What the runtime can't do is left out: "memory.grow" (Memory.grow from Python), "table.length", "imports"
     # (host functions: a Python callable the module calls). Not in the default set, so a backend has to say it:
-    # "import.global" / "import.memory" / "import.table" (objects made on their own can be imported), "isolated".
+    # "import.global" / "import.memory" / "import.table" (objects made on their own can be imported), "table.funcs"
+    # (Table.get / set / grow), "isolated".
     features: frozenset[str] = frozenset({"memory.grow", "table.length"})
 
     def supports(self, feature: str) -> bool:
@@ -212,6 +213,30 @@ class Backend:
         raise NotImplementedError
 
     def table_length(self, table: Any) -> int:
+        raise NotImplementedError
+
+    # --- objects made on their own, and table elements (the "import.memory", "import.table" and "table.funcs"
+    # features). A function reference is a handle too: what `export_function` and `table_get` return.
+
+    def new_memory(self, initial: int, maximum: int | None) -> Any:
+        raise NotImplementedError
+
+    def new_table(self, initial: int, maximum: int | None) -> Any:
+        """A table of function references (all null)."""
+        raise NotImplementedError
+
+    def export_function(self, instance: Any, name: str) -> Any:
+        raise NotImplementedError
+
+    def table_grow(self, table: Any, delta: int) -> int:
+        """Grow by `delta` null entries; the previous length."""
+        raise NotImplementedError
+
+    def table_get(self, table: Any, index: int) -> Any | None:
+        """The function reference at `index` (None for null); IndexError out of bounds."""
+        raise NotImplementedError
+
+    def table_set(self, table: Any, index: int, func: Any | None) -> None:
         raise NotImplementedError
 
     def run_batch(self, instance: Any, steps: Sequence[Step]) -> BatchResult:

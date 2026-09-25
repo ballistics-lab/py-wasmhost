@@ -37,6 +37,7 @@ from ._registry import BACKENDS, default_backend
 __all__ = (
     "Batch",
     "CompileError",
+    "FuncRef",
     "Function",
     "Global",
     "Instance",
@@ -134,17 +135,42 @@ class Function:
             return None
         return values[0] if len(values) == 1 else tuple(values)
 
+    def _funcref(self) -> Any:
+        if not self._instance._backend.supports("table.funcs"):
+            raise NotImplementedError(f"the {self._instance._backend.name} backend has no function references")
+        return self._instance._backend.export_function(self._instance._handle, self.name)
+
     def __repr__(self) -> str:
         return f"<wasmhost.Function {self.name}({', '.join(self.params)}) -> ({', '.join(self.results)})>"
 
 
-class Memory:
-    """An exported linear memory. Bytes are copied in and out (nothing is shared with the runtime)."""
+def _limits(initial: object, maximum: object, what: str) -> None:
+    if isinstance(initial, bool) or not isinstance(initial, int) or initial < 0:
+        raise TypeError(f"the initial size of a {what} is a non-negative int")
+    if maximum is not None and (isinstance(maximum, bool) or not isinstance(maximum, int) or maximum < initial):
+        raise ValueError(f"the maximum size of a {what} is an int, not less than the initial size")
 
-    def __init__(self, backend: Backend, handle: Any, name: str | None = None) -> None:
-        self._backend = backend
-        self._handle = handle
-        self.name = name
+
+class Memory:
+    """`WebAssembly.Memory`: an exported linear memory, or `Memory(initial, maximum)` (in pages of 64 KiB) made on its
+    own, which can be given to instances as an import (and shared by them). Bytes are copied in and out (nothing is
+    shared with the runtime)."""
+
+    def __init__(self, initial: int, maximum: int | None = None, *, backend: Backend | str | None = None) -> None:
+        _limits(initial, maximum, "memory")
+        target = _backend(backend)
+        if not target.supports("import.memory"):
+            raise NotImplementedError(f"the {target.name} backend can't make a memory on its own")
+        self._backend = target
+        self._handle = target.new_memory(initial, maximum)
+        self.name: str | None = None
+
+    @classmethod
+    def _wrap(cls, backend: Backend, handle: Any, name: str | None = None) -> Memory:
+        """A memory that already exists: an export."""
+        self = object.__new__(cls)
+        self._backend, self._handle, self.name = backend, handle, name
+        return self
 
     def __len__(self) -> int:
         return self._backend.memory_size(self._handle)
@@ -388,16 +414,82 @@ class Batch:
             self.run()
 
 
-class Table:
-    """An exported table: only its length is available so far."""
+class FuncRef:
+    """A function reference, what `Table.get` returns: it can be put in a table again, but not called."""
 
-    def __init__(self, backend: Backend, handle: Any, name: str | None = None) -> None:
+    def __init__(self, backend: Backend, handle: Any) -> None:
         self._backend = backend
         self._handle = handle
-        self.name = name
+
+    def __repr__(self) -> str:
+        return "<wasmhost.FuncRef>"
+
+
+class Table:
+    """`WebAssembly.Table` of functions: an exported one, or `Table("funcref", initial, maximum)` made on its own,
+    which can be given to instances as an import (and shared by them). `get(i)` is a `FuncRef` (or None for an empty
+    entry); `set(i, f)` takes an exported `Function`, a `FuncRef` or None. Only `"funcref"` tables are supported."""
+
+    def __init__(
+        self,
+        kind: str = "funcref",
+        initial: int = 0,
+        maximum: int | None = None,
+        *,
+        backend: Backend | str | None = None,
+    ) -> None:
+        if kind != "funcref":
+            raise NotImplementedError(f"a table of {kind!r}: only funcref tables are supported")
+        _limits(initial, maximum, "table")
+        target = _backend(backend)
+        if not target.supports("import.table"):
+            raise NotImplementedError(f"the {target.name} backend can't make a table on its own")
+        self._backend = target
+        self._handle = target.new_table(initial, maximum)
+        self.name: str | None = None
+
+    @classmethod
+    def _wrap(cls, backend: Backend, handle: Any, name: str | None = None) -> Table:
+        """A table that already exists: an export."""
+        self = object.__new__(cls)
+        self._backend, self._handle, self.name = backend, handle, name
+        return self
+
+    def _need(self) -> None:
+        if not self._backend.supports("table.funcs"):
+            raise NotImplementedError(f"the {self._backend.name} backend has no table access, only the length")
 
     def __len__(self) -> int:
         return self._backend.table_length(self._handle)
+
+    def grow(self, delta: int) -> int:
+        """Add `delta` empty entries; the length before."""
+        self._need()
+        return self._backend.table_grow(self._handle, int(delta))
+
+    def get(self, index: int) -> FuncRef | None:
+        self._need()
+        handle = self._backend.table_get(self._handle, int(index))
+        return None if handle is None else FuncRef(self._backend, handle)
+
+    def set(self, index: int, value: Function | FuncRef | None) -> None:
+        self._need()
+        handle: Any = None
+        if isinstance(value, Function):
+            owner = value._instance._backend
+            handle = value._funcref()
+        elif isinstance(value, FuncRef):
+            owner, handle = value._backend, value._handle
+        elif value is None:
+            owner = self._backend
+        else:
+            raise TypeError("a table entry is an exported Function, a FuncRef or None")
+        if owner is not self._backend:
+            raise ValueError("a function of another backend")
+        self._backend.table_set(self._handle, int(index), handle)
+
+    def __repr__(self) -> str:
+        return f"<wasmhost.Table {self.name or ''} length {len(self)}>"
 
 
 Export = Function | Memory | Global | Table
@@ -456,7 +548,7 @@ def _resolve_imports(
     module: Module, imports: Mapping[str, Mapping[str, object]] | None
 ) -> list[HostFunction | HostObject]:
     """The module's imports, each with what the import object has for it, as the JS API checks: a callable for a
-    function, a Global (or, for an immutable one, a plain number) for a global."""
+    function, a Global (or, for an immutable one, a plain number) for a global, a Memory, a Table."""
     found: list[HostFunction | HostObject] = []
     for d in module._info.imports:
         if imports is None:
@@ -481,8 +573,15 @@ def _resolve_imports(
             if value.type != d.type:
                 raise LinkError(f"import {where} is an {value.type}, the module wants an {d.type}")
             found.append(HostObject(d.module, d.name, "global", value._handle))
+        elif d.kind in ("memory", "table"):
+            cls = Memory if d.kind == "memory" else Table
+            if not isinstance(value, cls):
+                raise LinkError(f"import {where} is not a {cls.__name__}")
+            if value._backend is not module._backend:
+                raise LinkError(f"import {where} was made on another backend ({value._backend.name})")
+            found.append(HostObject(d.module, d.name, d.kind, value._handle))
         else:
-            raise NotImplementedError(f"importing a {d.kind} ({where}) is not supported yet")
+            raise NotImplementedError(f"importing a {d.kind} ({where}) is not supported")
     return found
 
 
@@ -490,7 +589,7 @@ class Instance:
     """`WebAssembly.Instance`. `imports` is the import object, `{"env": {"name": value}}`: a callable for a function
     (it gets the arguments as ints and floats and returns what the signature says, None, a value or a tuple; an
     exception it raises comes out of the call into the module) and a `Global` for a global (a plain number will do
-    for an immutable one). Importing a memory or a table is not supported yet.
+    for an immutable one), a `Memory` for a memory and a `Table` for a table.
 
     `isolated=True` (not in the JavaScript API) gives the instance a store of its own, which goes away with it: its
     memory is freed when the instance is dropped, but it can't share a Global with any other instance. Where it is
@@ -520,13 +619,13 @@ class Instance:
             if e.kind == "function" and isinstance(e.type, FuncType):
                 items[e.name] = Function(self, e.name, e.type)
             elif e.kind == "memory":
-                items[e.name] = Memory(self._backend, self._backend.export_memory(self._handle, e.name), e.name)
+                items[e.name] = Memory._wrap(self._backend, self._backend.export_memory(self._handle, e.name), e.name)
             elif e.kind == "global" and isinstance(e.type, str):
                 items[e.name] = Global._wrap(
                     self._backend, self._backend.export_global(self._handle, e.name, e.type), e.type, e.name
                 )
             elif e.kind == "table":
-                items[e.name] = Table(self._backend, self._backend.export_table(self._handle, e.name), e.name)
+                items[e.name] = Table._wrap(self._backend, self._backend.export_table(self._handle, e.name), e.name)
         self.exports = _Exports(items)
 
     def batch(self) -> Batch:

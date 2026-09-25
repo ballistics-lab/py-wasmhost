@@ -187,3 +187,36 @@ def imports_global(valtype: int = I32, mutable: bool = True) -> bytes:
         funcs.append((1, b"\x23\x00\x41\x01\x6a\x24\x00"))  # inc: global.set 0 (global.get 0 + 1)
         exports.append(("inc", 0, 1))
     return module(types, funcs, exports, imports=imports)
+
+
+def uses_memory() -> bytes:
+    """Imports the memory env.memory (min 1 page); exports load(addr) -> i32 (a byte) and store(addr, byte)."""
+    types = [functype([I32], [I32]), functype([I32, I32], [])]
+    imports = [name("env") + name("memory") + b"\x02" + b"\x00\x01"]
+    funcs: list[Func] = [
+        (0, b"\x20\x00\x2d\x00\x00"),  # load: i32.load8_u
+        (1, b"\x20\x00\x20\x01\x3a\x00\x00"),  # store: i32.store8
+    ]
+    return module(types, funcs, [("load", 0, 0), ("store", 0, 1)], imports=imports)
+
+
+def tables(imported: bool) -> bytes:
+    """A table of two entries, imported as env.table or made by the module and exported as "table"; the module
+    exports add(a, b) and mul(a, b), and call(a, b, index) = table[index](a, b) (call_indirect)."""
+    types = [functype([I32, I32], [I32]), functype([I32, I32, I32], [I32])]
+    funcs: list[Func] = [
+        (0, b"\x20\x00\x20\x01\x6a"),  # add
+        (0, b"\x20\x00\x20\x01\x6c"),  # mul
+        (1, b"\x20\x00\x20\x01\x20\x02\x11\x00\x00"),  # call: call_indirect (type 0) table 0
+    ]
+    exports = [("add", 0, 0), ("mul", 0, 1), ("call", 0, 2)]
+    out = b"\0asm\x01\x00\x00\x00" + section(1, vec(types))
+    if imported:
+        out += section(2, vec([name("env") + name("table") + b"\x01\x70\x00\x02"]))
+    out += section(3, vec([uleb(f[0]) for f in funcs]))
+    if not imported:
+        out += section(4, vec([b"\x70\x00\x02"]))
+        exports.append(("table", 1, 0))
+    out += section(7, vec([name(n) + bytes([kind]) + uleb(i) for n, kind, i in exports]))
+    out += section(10, vec([body(f[1]) for f in funcs]))
+    return out
