@@ -110,6 +110,27 @@ globalThis.__wh = (function () {
             objs.push(new WebAssembly.Global({ value: kind, mutable: mutable }, v));
             return objs.length - 1;
         },
+        newMemory: function (initial, maximum) {
+            var d = { initial: initial };
+            if (maximum >= 0) d.maximum = maximum;
+            objs.push(new WebAssembly.Memory(d));
+            return objs.length - 1;
+        },
+        newTable: function (initial, maximum) {
+            var d = { element: 'anyfunc', initial: initial };
+            if (maximum >= 0) d.maximum = maximum;
+            objs.push(new WebAssembly.Table(d));
+            return objs.length - 1;
+        },
+        tablegrow: function (o, n) { return String(objs[o].grow(n)); },
+        // a function reference: the number of the function in objs, '' for null
+        tableget: function (o, i) {
+            var f = objs[o].get(i);
+            if (f === null) return '';
+            objs.push(f);
+            return String(objs.length - 1);
+        },
+        tableset: function (o, i, f) { objs[o].set(i, f < 0 ? null : objs[f]); return ''; },
         o: function (n) { return objs[n]; },
         obj: function (i, name) { objs.push(insts[i].exports[name]); return objs.length - 1; },
         get: function (o) { return fmt(objs[o].value); },
@@ -199,7 +220,7 @@ class JSBackend(Backend):
     """A JavaScript engine. Subclasses implement `evaluate`."""
 
     # One store per engine, as in the JavaScript API: whatever is made in it can be imported by any instance.
-    features = Backend.features | {"import.global", "import.memory", "import.table"}
+    features = Backend.features | {"import.global", "import.memory", "import.table", "table.funcs"}
 
     def __init__(self) -> None:
         self._ready = False
@@ -347,6 +368,25 @@ class JSBackend(Backend):
 
     def export_table(self, instance: int, name: str) -> int:
         return self._export(instance, name)
+
+    def export_function(self, instance: int, name: str) -> int:
+        return self._export(instance, name)
+
+    def new_memory(self, initial: int, maximum: int | None) -> int:
+        return int(self._run(f"__wh.newMemory({int(initial)},{-1 if maximum is None else int(maximum)})"))
+
+    def new_table(self, initial: int, maximum: int | None) -> int:
+        return int(self._run(f"__wh.newTable({int(initial)},{-1 if maximum is None else int(maximum)})"))
+
+    def table_grow(self, table: int, delta: int) -> int:
+        return int(self._o("tablegrow", table, int(delta)))
+
+    def table_get(self, table: int, index: int) -> int | None:
+        text = self._o("tableget", table, int(index))
+        return int(text) if text else None
+
+    def table_set(self, table: int, index: int, func: int | None) -> None:
+        self._o("tableset", table, int(index), -1 if func is None else func)
 
     def memory_size(self, memory: int) -> int:
         return int(self._o("size", memory))

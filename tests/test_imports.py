@@ -127,13 +127,6 @@ def test_the_import_object_is_checked(host: Host) -> None:
         wasmhost.Instance(module, {"env": {**host.imports()["env"], "plus": 42}})
 
 
-def test_other_imports_are_not_supported_yet(session: str) -> None:
-    """A module importing a memory: the Emscripten habit."""
-    module = wasmhost.Module(wb.imports_memory())
-    with pytest.raises(NotImplementedError, match="memory"):
-        wasmhost.Instance(module, {"env": {"memory": object()}})
-
-
 def test_a_backend_without_imports_says_so(session: str) -> None:
     if wasmhost.get_backend().supports("imports"):
         pytest.skip("this backend does take imports")

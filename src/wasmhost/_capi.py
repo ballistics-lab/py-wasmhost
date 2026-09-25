@@ -126,9 +126,18 @@ class CApi:
             value = self._c.JSEvaluateScript(ref, script, None, None, 1, ctypes.byref(exception))
         finally:
             self._c.JSStringRelease(script)
-        if exception.value:
-            raise RuntimeError(f"[JS] {self._text(ref, exception.value)}")
-        return self._text(ref, value)
+        # The engine's collector doesn't see a value held only in Python (PyPy moves and drops objects on its own
+        # schedule), so it is protected until it has been turned into text.
+        held = exception.value or value
+        if held:
+            self._c.JSValueProtect(ref, held)
+        try:
+            if exception.value:
+                raise RuntimeError(f"[JS] {self._text(ref, exception.value)}")
+            return self._text(ref, value)
+        finally:
+            if held:
+                self._c.JSValueUnprotect(ref, held)
 
     # --- bytes ---
 

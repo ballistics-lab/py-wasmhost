@@ -51,7 +51,8 @@ home directory (PythonIDE).
 
 - **Types.** The JavaScript API can't tell a function's signature, and it matters (an `i64` argument must reach
   JavaScript as a BigInt), so the binary's type, import, function, global and export sections are read in
-  Python. `Module.exports(module)` and `Module.imports(module)` describe a module with them.
+  Python. `Module.exports(module)` and `Module.imports(module)` describe a module with them, and
+  `Module.customSections(module, name)` gives the contents of its custom sections (a list of `bytes`).
 - **Errors** are the API's: `CompileError`, `LinkError` and `Trap` (`WebAssembly.RuntimeError`, which is also a
   `RuntimeError`); an out-of-bounds memory access is an `IndexError`.
 - **Memory** is copied, not shared: `memory.read(offset, n)`, `memory.write(offset, data)`, `memory[a:b]`,
@@ -123,6 +124,28 @@ global, another type, another backend) is a `LinkError`; an immutable global's `
 `backend.supports("import.global")` says whether a backend can (`wasm3` can't: pywasm3 makes no global outside a
 module).
 
+## Memories and tables
+
+`Memory(initial, maximum=None)` (in 64 KiB pages) and `Table("funcref", initial, maximum=None)` make a
+`WebAssembly.Memory` and `WebAssembly.Table` on their own, to import into one instance or several (an Emscripten build
+imports its memory):
+
+```python
+mem = wasmhost.Memory(1, 16)
+a = wasmhost.Instance(module, {"env": {"memory": mem}})
+mem.write(0, b"shared with every instance that imports it")
+
+table = wasmhost.Table("funcref", 2)
+user = wasmhost.Instance(module, {"env": {"table": table}})
+table.set(0, provider.exports.add)  # an exported Function (or a FuncRef, or None to empty the entry)
+table.get(0)  # a FuncRef: it goes into another table, it is not callable
+table.grow(2)  # the length before
+```
+
+An import that is not the right object, is too small for the module or comes from another backend is a `LinkError`.
+Only `funcref` tables are supported (no `externref`). `wasm3` has neither (pywasm3 imports functions only:
+`NotImplementedError`).
+
 Like the JavaScript API, all the instances of a backend live in one store, so nothing stops two of them from sharing
 what the host made. **`isolated=True` is not in the JavaScript API**: `Instance(module, isolated=True)` gives an
 instance a store of its own, which goes away with it. It matters on `wasmtime`, which never frees an instance's memory
@@ -178,14 +201,14 @@ Python side that provides imports; what runs the module is the backend.)
 
 Not every backend can do everything; `backend.supports(...)` says:
 
-| | `memory.grow` from Python | `table.length` | host functions (`imports`) | Global on its own (`import.global`) | `isolated` |
-|---|---|---|---|---|---|
-| `wasmtime` | yes | yes | yes | yes | yes |
-| `wasm3` | no (`NotImplementedError`; a module's own `memory.grow` works) | no | yes | no | yes (always) |
-| `jscontext` | yes | yes | yes, through JavaScriptCore's C API (under either bridge) | yes | no |
-| `jsc` | yes | yes | yes | yes | no |
-| `gi-jsc` | yes | yes | no | yes | no |
-| `node` | yes | yes | yes | yes | no |
+| | `memory.grow` from Python | `table.length` | host functions (`imports`) | Global, Memory, Table on their own (`import.*`) | table get/set/grow (`table.funcs`) | `isolated` |
+|---|---|---|---|---|---|---|
+| `wasmtime` | yes | yes | yes | yes | yes | yes |
+| `wasm3` | no (`NotImplementedError`; a module's own `memory.grow` works) | no | yes | no | no | yes (always) |
+| `jscontext` | yes | yes | yes, through JavaScriptCore's C API (under either bridge) | yes | yes | no |
+| `jsc` | yes | yes | yes | yes | yes | no |
+| `gi-jsc` | yes | yes | no | yes | yes | no |
+| `node` | yes | yes | yes | yes | yes | no |
 
 ## Try it on a device
 
@@ -237,9 +260,7 @@ Python's `faulthandler` (on with `python -X faulthandler`, and in pytest) replac
 
 ## Not yet
 
-- **Importing a memory or a table** (an Emscripten build imports its memory): `NotImplementedError`. Host
-  functions and globals are there; see above.
-- **Tables** beyond their length, `v128` and reference types, multi-value results in a batch.
+- **`externref` tables**, `v128` and other reference types, multi-value results in a batch.
 
 ## Test
 

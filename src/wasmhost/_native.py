@@ -176,7 +176,16 @@ class WasmtimeBackend(Backend):
 
     name = "wasmtime"
     features = frozenset(
-        {"memory.grow", "table.length", "imports", "import.global", "import.memory", "import.table", "isolated"}
+        {
+            "memory.grow",
+            "table.length",
+            "table.funcs",
+            "imports",
+            "import.global",
+            "import.memory",
+            "import.table",
+            "isolated",
+        }
     )
 
     def __init__(self) -> None:
@@ -230,6 +239,45 @@ class WasmtimeBackend(Backend):
         store = self.store
         gtype = wt.GlobalType(getattr(wt.ValType, kind)(), mutable)
         return _WasmtimeObject(store, wt.Global(store, gtype, value))
+
+    def new_memory(self, initial: int, maximum: int | None) -> _WasmtimeObject:
+        wt = self._wt
+        try:
+            return _WasmtimeObject(self.store, wt.Memory(self.store, wt.MemoryType(wt.Limits(initial, maximum))))
+        except (wt.WasmtimeError, OverflowError) as exc:
+            raise ValueError(str(exc)) from None
+
+    def new_table(self, initial: int, maximum: int | None) -> _WasmtimeObject:
+        wt = self._wt
+        try:
+            ttype = wt.TableType(wt.ValType.funcref(), wt.Limits(initial, maximum))
+            return _WasmtimeObject(self.store, wt.Table(self.store, ttype, None))
+        except (wt.WasmtimeError, OverflowError) as exc:
+            raise ValueError(str(exc)) from None
+
+    def export_function(self, instance: _WasmtimeInstance, name: str) -> _WasmtimeObject:
+        return _WasmtimeObject(instance.store, instance.exports[name])
+
+    def table_grow(self, table: _WasmtimeObject, delta: int) -> int:
+        try:
+            return int(table.obj.grow(table.store, delta, None))
+        except self._wt.WasmtimeError as exc:
+            raise IndexError(str(exc)) from None
+
+    def table_get(self, table: _WasmtimeObject, index: int) -> _WasmtimeObject | None:
+        if not 0 <= index < int(table.obj.size(table.store)):
+            raise IndexError("table index out of bounds")
+        func = table.obj.get(table.store, index)
+        if func is None or isinstance(func, self._wt.Val):  # a null funcref comes back as a Val, not as None
+            return None
+        return _WasmtimeObject(table.store, func)
+
+    def table_set(self, table: _WasmtimeObject, index: int, func: _WasmtimeObject | None) -> None:
+        if not 0 <= index < int(table.obj.size(table.store)):
+            raise IndexError("table index out of bounds")
+        if func is not None and func.store is not table.store:
+            raise ValueError("the function belongs to another store")
+        table.obj.set(table.store, index, None if func is None else func.obj)
 
     def _host_func(self, store: Any, host: HostFunction) -> Any:
         wt = self._wt

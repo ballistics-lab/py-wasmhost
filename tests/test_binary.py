@@ -30,3 +30,27 @@ def test_imports_are_described() -> None:
 def test_junk_is_rejected(junk: bytes) -> None:
     with pytest.raises(ValueError):
         parse(junk)
+
+
+def _with_custom(wasm: bytes, *sections: tuple[str, bytes]) -> bytes:
+    return wasm + b"".join(wb.section(0, wb.name(n) + data) for n, data in sections)
+
+
+def test_custom_sections_are_kept_in_order() -> None:
+    wasm = _with_custom(wb.arith(), ("note", b"one"), ("other", b""), ("note", b"\x00\xff two"))
+    assert parse(wasm).custom == (("note", b"one"), ("other", b""), ("note", b"\x00\xff two"))
+    assert parse(wb.arith()).custom == ()
+
+
+def test_a_custom_section_between_the_others() -> None:
+    plain = wb.arith()
+    at = 8  # right after the header, before the type section
+    wasm = plain[:at] + wb.section(0, wb.name("first") + b"x") + plain[at:]
+    info = parse(wasm)
+    assert info.custom == (("first", b"x"),)
+    assert [e.name for e in info.exports] == [e.name for e in parse(plain).exports]
+
+
+def test_a_truncated_custom_section_is_rejected() -> None:
+    with pytest.raises(ValueError):
+        parse(wb.arith() + b"\x00\x7f\x01a")  # says 127 bytes, has 2
