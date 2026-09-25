@@ -220,3 +220,49 @@ def tables(imported: bool) -> bytes:
     out += section(7, vec([name(n) + bytes([kind]) + uleb(i) for n, kind, i in exports]))
     out += section(10, vec([body(f[1]) for f in funcs]))
     return out
+
+
+def swaps(imported: bool = True) -> bytes:
+    """Multi-value: swap(i32, i32) -> (i32, i32) and, with `imported`, env.swap(i32, i64) -> (i64, i32) imported and
+    re-exported as swap_imported (a module without it needs no import object)."""
+    types = [functype([I32, I32], [I32, I32]), functype([I32, I64], [I64, I32])]
+    if not imported:
+        return module(types, [(0, b"\x20\x01\x20\x00")], [("swap", 0, 0)])  # local.get 1, local.get 0
+    imports = [name("env") + name("swap") + b"\x00" + uleb(1)]
+    funcs: list[Func] = [
+        (0, b"\x20\x01\x20\x00"),  # swap
+        (1, b"\x20\x00\x20\x01\x10\x00"),  # swap_imported: local.get 0, local.get 1, call env.swap
+    ]
+    return module(types, funcs, [("swap", 0, 1), ("swap_imported", 0, 2)], imports=imports)
+
+
+def dyn_callback() -> bytes:
+    """The shape of what Emscripten's dynamic linking asks of a host (pywasm3's dyn_callback test): imports
+    env.pass_fptr(i32) and the global env.__table_base (i32); its exported table holds f2 (add) and f3 (mul) from that
+    base; run_test() calls pass_fptr(base) and pass_fptr(base + 1), call_pass_fptr(p) = pass_fptr(p),
+    dynCall_iii(fptr, a, b) = table[fptr](a, b)."""
+    types = [
+        functype([I32, I32], [I32]),  # 0: the entries of the table
+        functype([], []),  # 1
+        functype([I32], []),  # 2: pass_fptr
+        functype([I32, I32, I32], [I32]),  # 3: dynCall_iii
+    ]
+    imports = [
+        name("env") + name("pass_fptr") + b"\x00" + uleb(2),
+        name("env") + name("__table_base") + b"\x03\x7f\x00",  # global i32, immutable
+    ]
+    funcs: list[Func] = [  # function 0 is the imported pass_fptr
+        (1, b"\x23\x00\x10\x00\x23\x00\x41\x01\x6a\x10\x00"),  # 1 run_test
+        (0, b"\x20\x00\x20\x01\x6a"),  # 2 f2
+        (0, b"\x20\x00\x20\x01\x6c"),  # 3 f3
+        (2, b"\x20\x00\x10\x00"),  # 4 call_pass_fptr
+        (3, b"\x20\x01\x20\x02\x20\x00\x11\x00\x00"),  # 5 dynCall_iii: call_indirect (type 0) table 0
+    ]
+    exports = [("run_test", 0, 1), ("call_pass_fptr", 0, 4), ("dynCall_iii", 0, 5), ("table", 1, 0)]
+    out = b"\0asm\x01\x00\x00\x00" + section(1, vec(types)) + section(2, vec(imports))
+    out += section(3, vec([uleb(f[0]) for f in funcs]))
+    out += section(4, vec([b"\x70\x00\x02"]))  # one table, funcref, min 2
+    out += section(7, vec([name(n) + bytes([kind]) + uleb(i) for n, kind, i in exports]))
+    out += section(9, vec([b"\x00\x23\x00\x0b" + vec([uleb(2), uleb(3)])]))  # elem at global.get 0: f2, f3
+    out += section(10, vec([body(f[1]) for f in funcs]))
+    return out
