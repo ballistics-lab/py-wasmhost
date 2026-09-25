@@ -72,7 +72,7 @@ def _translate(text: str) -> BaseException | None:
 # the calls that use an i64), so any JavaScriptCore with WebAssembly runs it.
 _JS = r"""
 globalThis.__wh = (function () {
-    var mods = [], insts = [], HEX = [], UNHEX = new Uint8Array(128), q;
+    var mods = [], insts = [], objs = [], HEX = [], UNHEX = new Uint8Array(128), q;
     for (q = 0; q < 256; q++) HEX.push((q + 256).toString(16).slice(1));
     for (q = 0; q < 10; q++) UNHEX[48 + q] = q;
     for (q = 0; q < 6; q++) { UNHEX[97 + q] = 10 + q; UNHEX[65 + q] = 10 + q; }
@@ -103,22 +103,24 @@ globalThis.__wh = (function () {
         },
         s: fmt,
         call: function (i, name, args) { return ret(insts[i].exports[name].apply(undefined, args)); },
-        get: function (i, name) { return fmt(insts[i].exports[name].value); },
-        set: function (i, name, v) { insts[i].exports[name].value = v; return ''; },
-        size: function (i, name) { return String(insts[i].exports[name].buffer.byteLength); },
-        grow: function (i, name, n) { return String(insts[i].exports[name].grow(n)); },
-        read: function (i, name, ptr, n) {
-            return toHex(new Uint8Array(insts[i].exports[name].buffer, ptr, n));
+        // an exported memory, global or table gets a number here, and the operations take it
+        obj: function (i, name) { objs.push(insts[i].exports[name]); return objs.length - 1; },
+        get: function (o) { return fmt(objs[o].value); },
+        set: function (o, v) { objs[o].value = v; return ''; },
+        size: function (o) { return String(objs[o].buffer.byteLength); },
+        grow: function (o, n) { return String(objs[o].grow(n)); },
+        read: function (o, ptr, n) {
+            return toHex(new Uint8Array(objs[o].buffer, ptr, n));
         },
-        write: function (i, name, ptr, hex) {
-            var b = fromHex(hex), u = new Uint8Array(insts[i].exports[name].buffer);
+        write: function (o, ptr, hex) {
+            var b = fromHex(hex), u = new Uint8Array(objs[o].buffer);
             if (ptr < 0 || ptr + b.length > u.length) throw new RangeError('memory access out of bounds');
             u.set(b, ptr);
             return '';
         },
         fromHex: fromHex,
         toHex: toHex,
-        tablelen: function (i, name) { return String(insts[i].exports[name].length); },
+        tablelen: function (o) { return String(objs[o].length); },
         // A batch: `body` is a function of (exports, results, write, read) made of the calls, memory
         // accesses and early returns of the Python side, so it costs one trip to the engine. Whatever
         // ran before an error is reported with it.
@@ -130,7 +132,7 @@ globalThis.__wh = (function () {
                 u.set(b, p);
             }
             function R(m, p, n) { return toHex(new Uint8Array(m.buffer, p, n)); }
-            try { body(ex, r, W, R); } catch (e) { err = String(e); }
+            try { body(ex, r, W, R, objs); } catch (e) { err = String(e); }
             var out = [];
             for (var k = 0; k < r.length; k++) {
                 var v = r[k];
@@ -307,30 +309,42 @@ class JSBackend(Backend):
         text = self._run(f"__wh.call({instance},{json.dumps(name)},[{literals}])")
         return [_parse(t, k) for t, k in zip(text.split(","), ftype.results, strict=True)] if ftype.results else []
 
-    def _q(self, fn: str, instance: int, name: str, *args: object) -> str:
+    def _o(self, fn: str, obj: int, *args: object) -> str:
         extra = "".join(f",{a}" for a in args)
-        return self._run(f"__wh.{fn}({instance},{json.dumps(name)}{extra})")
+        return self._run(f"__wh.{fn}({obj}{extra})")
 
-    def memory_size(self, instance: int, name: str) -> int:
-        return int(self._q("size", instance, name))
+    def _export(self, instance: int, name: str) -> int:
+        return int(self._run(f"__wh.obj({instance},{json.dumps(name)})"))
 
-    def memory_grow(self, instance: int, name: str, pages: int) -> int:
-        return int(self._q("grow", instance, name, int(pages)))
+    def export_memory(self, instance: int, name: str) -> int:
+        return self._export(instance, name)
 
-    def memory_read(self, instance: int, name: str, offset: int, length: int) -> bytes:
-        return bytes.fromhex(self._q("read", instance, name, int(offset), int(length))) if length else b""
+    def export_global(self, instance: int, name: str, kind: str) -> int:
+        return self._export(instance, name)
 
-    def memory_write(self, instance: int, name: str, offset: int, data: bytes) -> None:
-        self._q("write", instance, name, int(offset), json.dumps(data.hex()))
+    def export_table(self, instance: int, name: str) -> int:
+        return self._export(instance, name)
 
-    def global_get(self, instance: int, name: str, kind: str) -> int | float:
-        return _parse(self._q("get", instance, name), kind)
+    def memory_size(self, memory: int) -> int:
+        return int(self._o("size", memory))
 
-    def global_set(self, instance: int, name: str, kind: str, value: int | float) -> None:
-        self._q("set", instance, name, _literal(normalize(value, kind), kind))
+    def memory_grow(self, memory: int, pages: int) -> int:
+        return int(self._o("grow", memory, int(pages)))
 
-    def table_length(self, instance: int, name: str) -> int:
-        return int(self._q("tablelen", instance, name))
+    def memory_read(self, memory: int, offset: int, length: int) -> bytes:
+        return bytes.fromhex(self._o("read", memory, int(offset), int(length))) if length else b""
+
+    def memory_write(self, memory: int, offset: int, data: bytes) -> None:
+        self._o("write", memory, int(offset), json.dumps(data.hex()))
+
+    def global_get(self, glob: int, kind: str) -> int | float:
+        return _parse(self._o("get", glob), kind)
+
+    def global_set(self, glob: int, kind: str, value: int | float) -> None:
+        self._o("set", glob, _literal(normalize(value, kind), kind))
+
+    def table_length(self, table: int) -> int:
+        return int(self._o("tablelen", table))
 
     def run_batch(self, instance: int, steps: Sequence[Step]) -> BatchResult:
         """The steps as one JavaScript function, run in one trip; whatever ran before an error is reported with it."""
@@ -350,15 +364,13 @@ class JSBackend(Backend):
                     kinds[step.out] = "void"
                     lines.append(f"r[{step.out}]=({call},0);")  # a 0 marks the step as done
             elif isinstance(step, WriteStep):
-                lines.append(f"W(ex[{json.dumps(step.memory)}],{_expr(step.offset)},{json.dumps(step.data.hex())});")
+                lines.append(f"W(O[{step.memory}],{_expr(step.offset)},{json.dumps(step.data.hex())});")
             elif isinstance(step, ReadStep):
                 kinds[step.out] = "bytes"
-                lines.append(
-                    f"r[{step.out}]=R(ex[{json.dumps(step.memory)}],{_expr(step.offset)},{_expr(step.length)});"
-                )
+                lines.append(f"r[{step.out}]=R(O[{step.memory}],{_expr(step.offset)},{_expr(step.length)});")
             else:
                 lines.append(f"if ({_expr(step.value)}{'===' if step.when_zero else '!=='}0) return;")
-        body = "function(ex,r,W,R){" + "".join(lines) + "}"
+        body = "function(ex,r,W,R,O){" + "".join(lines) + "}"
         reply = json.loads(self._run(f"__wh.run({instance},{body})"))
         values: dict[int, Any] = {}
         for slot, text in enumerate(reply["r"]):

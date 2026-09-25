@@ -129,12 +129,13 @@ class Function:
 class Memory:
     """An exported linear memory. Bytes are copied in and out (nothing is shared with the runtime)."""
 
-    def __init__(self, instance: Instance, name: str) -> None:
-        self._instance = instance
+    def __init__(self, backend: Backend, handle: Any, name: str | None = None) -> None:
+        self._backend = backend
+        self._handle = handle
         self.name = name
 
     def __len__(self) -> int:
-        return self._instance._backend.memory_size(self._instance._handle, self.name)
+        return self._backend.memory_size(self._handle)
 
     @property
     def byte_length(self) -> int:
@@ -144,19 +145,15 @@ class Memory:
         """`WebAssembly.Memory.grow`: add `pages` 64 KiB pages and return the previous size in pages.
 
         Not on every backend (wasm3 has no such call from Python): `NotImplementedError` there."""
-        return self._instance._backend.memory_grow(self._instance._handle, self.name, int(pages))
+        return self._backend.memory_grow(self._handle, int(pages))
 
     def read(self, offset: int, length: int) -> bytes:
         if offset < 0 or length < 0 or offset + length > len(self):
             raise IndexError("memory access out of bounds")
-        return (
-            self._instance._backend.memory_read(self._instance._handle, self.name, int(offset), int(length))
-            if length
-            else b""
-        )
+        return self._backend.memory_read(self._handle, int(offset), int(length)) if length else b""
 
     def write(self, offset: int, data: bytes | bytearray | memoryview) -> None:
-        self._instance._backend.memory_write(self._instance._handle, self.name, int(offset), bytes(data))
+        self._backend.memory_write(self._handle, int(offset), bytes(data))
 
     def __getitem__(self, key: int | slice) -> bytes | int:
         if isinstance(key, slice):
@@ -196,18 +193,19 @@ class Memory:
 class Global:
     """An exported global; `value` reads it and, for a mutable one, writes it."""
 
-    def __init__(self, instance: Instance, name: str, kind: str) -> None:
-        self._instance = instance
+    def __init__(self, backend: Backend, handle: Any, kind: str, name: str | None = None) -> None:
+        self._backend = backend
+        self._handle = handle
         self.name = name
         self.type = kind
 
     @property
     def value(self) -> int | float:
-        return self._instance._backend.global_get(self._instance._handle, self.name, self.type)
+        return self._backend.global_get(self._handle, self.type)
 
     @value.setter
     def value(self, new: int | float) -> None:
-        self._instance._backend.global_set(self._instance._handle, self.name, self.type, _check(new, self.type))
+        self._backend.global_set(self._handle, self.type, _check(new, self.type))
 
     def __repr__(self) -> str:
         return f"<wasmhost.Global {self.name}: {self.type}>"
@@ -287,6 +285,10 @@ class Batch:
             return value._expr
         return _check(value, kind)
 
+    def _check_memory(self, memory: Memory) -> None:
+        if memory._backend is not self._instance._backend:
+            raise ValueError("a memory of another backend")
+
     def _new(self, kind: str) -> Ref:
         ref = Ref(self, len(self._refs), kind)
         self._refs.append(ref)
@@ -306,13 +308,15 @@ class Batch:
         return ref
 
     def write(self, memory: Memory, offset: int | Ref, data: bytes | bytearray | memoryview) -> None:
-        self._steps.append(WriteStep(memory.name, self._operand(offset, "i32"), bytes(data)))
+        self._check_memory(memory)
+        self._steps.append(WriteStep(memory._handle, self._operand(offset, "i32"), bytes(data)))
 
     def read(self, memory: Memory, offset: int | Ref, length: int | Ref) -> Ref:
         """Bytes out of the memory; the `Ref` holds them (as `bytes`) after the batch has run."""
+        self._check_memory(memory)
         ref = self._new("bytes")
         self._steps.append(
-            ReadStep(ref._index, memory.name, self._operand(offset, "i32"), self._operand(length, "i32"))
+            ReadStep(ref._index, memory._handle, self._operand(offset, "i32"), self._operand(length, "i32"))
         )
         return ref
 
@@ -353,12 +357,13 @@ class Batch:
 class Table:
     """An exported table: only its length is available so far."""
 
-    def __init__(self, instance: Instance, name: str) -> None:
-        self._instance = instance
+    def __init__(self, backend: Backend, handle: Any, name: str | None = None) -> None:
+        self._backend = backend
+        self._handle = handle
         self.name = name
 
     def __len__(self) -> int:
-        return self._instance._backend.table_length(self._instance._handle, self.name)
+        return self._backend.table_length(self._handle)
 
 
 Export = Function | Memory | Global | Table
@@ -449,11 +454,13 @@ class Instance:
             if e.kind == "function" and isinstance(e.type, FuncType):
                 items[e.name] = Function(self, e.name, e.type)
             elif e.kind == "memory":
-                items[e.name] = Memory(self, e.name)
+                items[e.name] = Memory(self._backend, self._backend.export_memory(self._handle, e.name), e.name)
             elif e.kind == "global" and isinstance(e.type, str):
-                items[e.name] = Global(self, e.name, e.type)
+                items[e.name] = Global(
+                    self._backend, self._backend.export_global(self._handle, e.name, e.type), e.type, e.name
+                )
             elif e.kind == "table":
-                items[e.name] = Table(self, e.name)
+                items[e.name] = Table(self._backend, self._backend.export_table(self._handle, e.name), e.name)
         self.exports = _Exports(items)
 
     def batch(self) -> Batch:
