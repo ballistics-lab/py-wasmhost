@@ -49,6 +49,10 @@ both in a bare JavaScript engine:
 Both keep their downloads in `$WASMHOST_CACHE`, else `~/.cache/wasmhost`, else `./.cache` where there is no usable
 home directory (PythonIDE).
 
+`examples/coremark.py` runs CoreMark (the wasm3 project's build, in `examples/wasm/`) on every backend that starts here,
+to compare their speed. A runtime that finishes the last pass in under 10 s is not scored by CoreMark itself, so it
+prints the pass time too.
+
 - **Types.** The JavaScript API can't tell a function's signature, and it matters (an `i64` argument must reach
   JavaScript as a BigInt), so the binary's type, import, function, global and export sections are read in
   Python. `Module.exports(module)` and `Module.imports(module)` describe a module with them, and
