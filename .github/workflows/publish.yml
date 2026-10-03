@@ -99,7 +99,7 @@ jobs:
           name: dist # by name: without one, a single artifact is put straight into `path`, not into artifacts/dist
           path: artifacts/dist
 
-      - name: Create GitHub release (draft)
+      - name: Create GitHub release
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
@@ -107,5 +107,4 @@ jobs:
             --repo "${{ github.repository }}" \
             --title "wasmhost ${{ github.ref_name }}" \
             --generate-notes \
-            --draft \
             artifacts/dist/*
