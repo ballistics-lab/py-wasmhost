@@ -49,6 +49,10 @@ both in a bare JavaScript engine:
 Both keep their downloads in `$WASMHOST_CACHE`, else `~/.cache/wasmhost`, else `./.cache` where there is no usable
 home directory (PythonIDE).
 
+`examples/wasmclang.py` compiles C to WebAssembly with clang and lld that are themselves WebAssembly (the wasm-clang
+project), with Python as their WASI host, and runs the result, with no compiler installed and no process started, so
+it works in Pythonista.
+
 `examples/zigcc.py` compiles C to WebAssembly with Zig (`zig cc`, from `pip install ziglang`, no wasi-sdk needed) and
 runs it: memory access and a host function.
 
