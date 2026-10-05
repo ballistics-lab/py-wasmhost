@@ -3,9 +3,12 @@
     pip install ziglang        # Zig's compiler as a PyPI package; or any `zig` on PATH
     python examples/zigcc.py
 
+Where there is no Zig and no way to start one (Pythonista on iOS), it runs `examples/wasm/zigcc.wasm`, the same C
+built beforehand by this script, so the rest of the example works there too.
+
 `zig cc` is a drop-in clang that ships its own libc and wasm-ld, so there is no wasi-sdk to install. The C below is
 built for `wasm32-freestanding` (no libc, no WASI): it exports `fib` and `sum`, works on the module's memory, and
-calls the host function `env.log`. The `.wasm` is built in a temporary directory; nothing is written to the repo.
+calls the host function `env.log`. With Zig, the `.wasm` is built in a temporary directory; nothing is written.
 """
 
 import os
@@ -42,24 +45,27 @@ EXPORT("buffer") int *get_buffer(void) { return buffer; }
 """
 
 
-def zig_command() -> list[str]:
+PREBUILT = os.path.join(os.path.dirname(os.path.abspath(__file__)), "wasm", "zigcc.wasm")
+
+
+def zig_command() -> list[str] | None:
     if shutil.which("zig"):
         return ["zig"]
     try:
         import ziglang  # noqa: F401, PLC0415
     except ImportError:
-        sys.exit("needs Zig: `pip install ziglang`, or put `zig` on PATH")
+        return None
     return [sys.executable, "-m", "ziglang"]
 
 
-def compile_c(source: str) -> bytes:
+def compile_c(source: str, zig: list[str]) -> bytes:
     with tempfile.TemporaryDirectory() as tmp:
         src, out = os.path.join(tmp, "lib.c"), os.path.join(tmp, "lib.wasm")
         with open(src, "w") as f:
             f.write(source)
         subprocess.run(  # noqa: S603
             [
-                *zig_command(),
+                *zig,
                 "cc",
                 "-target",
                 "wasm32-freestanding",
@@ -77,8 +83,14 @@ def compile_c(source: str) -> bytes:
             return f.read()
 
 
-wasm = compile_c(C_SOURCE)
-print(f"compiled {len(wasm)} bytes of wasm")
+zig = zig_command()
+if zig:
+    wasm = compile_c(C_SOURCE, zig)
+    print(f"compiled {len(wasm)} bytes of wasm with Zig")
+else:
+    with open(PREBUILT, "rb") as f:
+        wasm = f.read()
+    print(f"no Zig here (`pip install ziglang`): using the prebuilt {os.path.basename(PREBUILT)}, {len(wasm)} bytes")
 
 module = wasmhost.Module(wasm)
 print("exports:", [(e.name, e.kind) for e in wasmhost.Module.exports(module)])
