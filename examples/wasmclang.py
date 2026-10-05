@@ -1,4 +1,4 @@
-"""Compile C to WebAssembly with clang that is itself WebAssembly, all of it inside wasmhost, then run the result.
+"""Compile C and C++ to WebAssembly with clang that is itself WebAssembly, in wasmhost, then run the result.
 
     python examples/wasmclang.py [--backend NAME]
 
@@ -13,11 +13,14 @@ between: it hands clang's file calls to memfs (which copies bytes in and out of 
 `copy_out`, here host functions), and answers the few calls that are not about files (arguments, clock, exit). A host
 function that calls another instance, and the Python half of a WASI host, is all it takes; this file is that host.
 
-It builds two programs from C, and runs them:
+It builds three programs, two from C and one from C++, and runs them:
 
 1. a freestanding module (no libc): exports `fib`, `sum` and `buffer`, imports `env.host_log`, which Python answers;
 2. a WASI program with `printf`, linked against the sysroot's libc, run by the same host: its `fd_write` goes to memfs
-   and its stdout comes out here.
+   and its stdout comes out here;
+3. a C++ program (`std::vector`, `std::map`, `std::sort`, `std::cout` from the sysroot's libc++), the same way. This
+   clang has no C++ exceptions (`throw` and `try` do not link), and the sysroot has no compiler-rt, so a stub stands
+   in for `__lttf2`, a `long double` comparison libc++ refers to and this program never calls.
 
 The compiling takes a while, most of it the engine compiling clang and lld (31 MB and 19 MB of WebAssembly): some
 seconds on a computer, a minute or more on a phone. It prints where it is.
@@ -75,6 +78,29 @@ int main(int argc, char **argv) {
     return 0;
 }
 """
+
+HELLO_CPP = """
+#include <algorithm>
+#include <iostream>
+#include <map>
+#include <string>
+#include <vector>
+
+int main() {
+    std::vector<int> v = {5, 3, 1, 4, 2};
+    std::sort(v.begin(), v.end());
+    std::map<std::string, int> m = {{"one", 1}, {"two", 2}};
+    std::cout << "hello from C++, compiled by clang running in wasmhost: ";
+    for (int x : v) std::cout << x << ' ';
+    std::cout << "| two=" << m["two"] << std::endl;
+    return 0;
+}
+"""
+
+# libc++ refers to __lttf2 (a long double comparison, from compiler-rt, which the sysroot lacks); nothing here calls it.
+LONG_DOUBLE_STUB = "int __lttf2(long double a, long double b) { return 0; }\n"
+
+WASI_LINK = ["-z", "stack-size=1048576", "-Llib/wasm32-wasi", "lib/wasm32-wasi/crt1.o"]
 
 
 def cache_root():
@@ -288,13 +314,28 @@ class Toolchain:
         if code != 0:
             raise RuntimeError(f"{argv[0]} exited with {code} (its messages are above)")
 
-    def compile(self, source, link_args):
-        """C source -> the bytes of a wasm module. LINK_ARGS are wasm-ld's, besides the object and the output."""
-        self.memfs.add_file("input.c", source.encode())
-        self.log("clang: C -> object")
-        self._run("clang", "clang", "-cc1", "-emit-obj", *CLANG_ARGS, "-O2", "-o", "input.o", "-x", "c", "input.c")
+    def _clang(self, source, name, cpp):
+        """Compile SOURCE (C, or C++ with libc++'s headers) to the object file NAME.o."""
+        flags = list(CLANG_ARGS)
+        if cpp:
+            flags[flags.index("/include") : flags.index("/include")] = ["/include/c++/v1", "-internal-isystem"]
+            flags += ["-std=c++14"]
+        language = "c++" if cpp else "c"
+        self.memfs.add_file(f"{name}.src", source.encode())
+        self._run(
+            "clang", "clang", "-cc1", "-emit-obj", *flags, "-O2", "-o", f"{name}.o", "-x", language, f"{name}.src"
+        )
+
+    def compile(self, source, link_args, cpp=False):
+        """C (or C++) source -> the bytes of a wasm module. LINK_ARGS are wasm-ld's, besides the objects and output."""
+        self.log("clang: C++ -> object" if cpp else "clang: C -> object")
+        self._clang(source, "input", cpp)
+        objects = ["input.o"]
+        if cpp:
+            self._clang(LONG_DOUBLE_STUB, "stub", cpp=False)
+            objects.append("stub.o")
         self.log("wasm-ld: object -> wasm")
-        self._run("lld", "wasm-ld", "--no-threads", *link_args, "input.o", "-o", "output.wasm")
+        self._run("lld", "wasm-ld", "--no-threads", *link_args, *objects, "-o", "output.wasm")
         return self.memfs.read_file("output.wasm")
 
 
@@ -326,11 +367,15 @@ def main():
     print(f"sum({values}) =", instance.exports.sum(ptr, len(values)), "| env.host_log got", logged)
 
     # 2. A WASI program: libc from the sysroot, `main`, printf. The same host runs it.
-    wasm = toolchain.compile(
-        HELLO_C, ["-z", "stack-size=1048576", "-Llib/wasm32-wasi", "lib/wasm32-wasi/crt1.o", "-lc"]
-    )
+    wasm = toolchain.compile(HELLO_C, [*WASI_LINK, "-lc"])
     print(f"built {len(wasm)} bytes of wasm, a WASI program; running it:")
     code = toolchain.memfs.run(wasmhost.Module(wasm, backend=args.backend), "hello.wasm", "one", "two")
+    print(f"exit code {code}")
+
+    # 3. The same in C++: libc++ and its ABI library on top of libc.
+    wasm = toolchain.compile(HELLO_CPP, [*WASI_LINK, "-lc", "-lc++", "-lc++abi"], cpp=True)
+    print(f"built {len(wasm)} bytes of wasm from C++; running it:")
+    code = toolchain.memfs.run(wasmhost.Module(wasm, backend=args.backend), "hello_cpp.wasm")
     print(f"exit code {code}")
 
 
