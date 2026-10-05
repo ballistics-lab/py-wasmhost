@@ -3,14 +3,15 @@
     pip install ziglang        # Zig's compiler as a PyPI package; or any `zig` on PATH
     python examples/zigcc.py
 
-Where there is no Zig and no way to start one (Pythonista on iOS), it runs `examples/wasm/zigcc.wasm`, the same C
-built beforehand by this script, so the rest of the example works there too.
+Where there is no Zig and no way to start one (Pythonista on iOS), it runs PREBUILT, the same C built beforehand by
+this script and kept in the file as base64, so the file works on its own.
 
 `zig cc` is a drop-in clang that ships its own libc and wasm-ld, so there is no wasi-sdk to install. The C below is
 built for `wasm32-freestanding` (no libc, no WASI): it exports `fib` and `sum`, works on the module's memory, and
 calls the host function `env.log`. With Zig, the `.wasm` is built in a temporary directory; nothing is written.
 """
 
+import base64
 import os
 import shutil
 import subprocess
@@ -45,7 +46,37 @@ EXPORT("buffer") int *get_buffer(void) { return buffer; }
 """
 
 
-PREBUILT = os.path.join(os.path.dirname(os.path.abspath(__file__)), "wasm", "zigcc.wasm")
+PREBUILT = base64.b64decode(
+    "AGFzbQEAAAABFARgAX8AYAF/AX9gAn9/AX9gAAF/AgsBA2VudgNsb2cAAAMEAwECAwQFAXABAQEFAwEAEQYJAX8BQYCAwAALBx8EBm1lbW9y"
+    "eQIAA2ZpYgABA3N1bQACBmJ1ZmZlcgADCu8CA58BAQN/QQEhAQJAIABBAU4NAEEADwsgAEEHcSECAkACQCAAQQhPDQBBACEADAELIABB+P//"
+    "/wdxIQNBACEAQQEhAQNAIAEgAGoiACABaiIBIABqIgAgAWoiASAAaiIAIAFqIgEgAGoiACABaiEBIANBeGoiAw0ACwsCQCACRQ0AIAAhAwNA"
+    "IAEiACADaiEBIAAhAyACQX9qIgINAAsLIAALwgEBBH8CQCABQQFODQBBABCAgICAAEEADwsgAUEDcSECAkACQCABQQRPDQBBACEDQQAhBAwB"
+    "CyABQfz///8HcSEFQQAhAyAAIQFBACEEA0AgAUEMaigCACABQQhqKAIAIAFBBGooAgAgASgCACAEampqaiEEIAFBEGohASAFIANBBGoiA0cN"
+    "AAsLAkAgAkUNACAAIANBAnRqIQEDQCABKAIAIARqIQQgAUEEaiEBIAJBf2oiAg0ACwsgBBCAgICAACAECwgAQYCAwIAACwDIAwouZGVidWdf"
+    "bG9j/////wMAAAAAAAAAQAAAAAYA7QAAMRyfAAAAAAAAAAD/////AwAAAAcAAABAAAAAAwARAJ+GAAAAiAAAAAQA7QIAn4gAAACaAAAABADt"
+    "AACfAAAAAAAAAAD/////AwAAAAcAAABAAAAAAwARAZ9lAAAAZwAAAAQA7QIAn2cAAABsAAAABADtAACfbAAAAHUAAAAEAO0AAZ+GAAAAiAAA"
+    "AAQA7QIAn4gAAACNAAAABADtAACfjQAAAJoAAAAEAO0AAZ8AAAAAAAAAAP////8DAAAAZQAAAGcAAAAEAO0CAJ9nAAAAbAAAAAQA7QAAn2wA"
+    "AAB1AAAABADtAAGfjQAAAJoAAAAEAO0AAZ8AAAAAAAAAAP////+kAAAAAAAAAEwAAAAEAO0AAZ8AAAAAAAAAAP////+kAAAAAAAAAEwAAAAD"
+    "ABEAn3AAAABxAAAABADtAgGfcwAAAIYAAAAEAO0ABJ+lAAAAtQAAAAQA7QAEnwAAAAAAAAAA/////6QAAAAAAAAADAAAAAMAEQCfFwAAAEwA"
+    "AAADABEAn4EAAACDAAAABADtAgGfgwAAAIYAAAAEAO0AA58AAAAAAAAAAADwAQ0uZGVidWdfYWJicmV2AREBJQ4TBQMOEBcbDhEBVRcAAAI0"
+    "AAMOSRM6CzsLAhgAAAMBAUkTAAAEIQBJEzcLAAAFJAADDj4LCwsAAAYkAAMOCws+CwAABy4BEQESBkAYl0IZAw46CzsLJxlJEz8ZAAAIBQAC"
+    "FwMOOgs7C0kTAAAJNAACFwMOOgs7C0kTAAAKCwFVFwAACwUAAhgDDjoLOwtJEwAADImCAQAxExEBAAANLgEDDjoLOwsnGTwZPxkAAA4FAEkT"
+    "AAAPLgARARIGQBiXQhkDDjoLOwsnGUkTPxkAABAPAEkTAAARJgBJEwAAAADkAgsuZGVidWdfaW5mb1QBAAAEAAAAAAAEAXgAAAAdAEcAAAAA"
+    "AAAAAAAAAAAAAAAwAAAAAikAAAA3AAAAARYFAwAAEAADQwAAAARKAAAAEAAFHQAAAAUEBmQAAAAIBwcDAAAAnwAAAAftAwAAAACfXgAAAAEH"
+    "QwAAAAgAAAAAMAAAAAEHQwAAAAkgAAAAYgAAAAEIQwAAAAlZAAAAYAAAAAEIQwAAAAoAAAAACcoAAAAfAAAAAQlDAAAAAAAHpAAAAMIAAAAH"
+    "7QMAAAAAnzIAAAABDkMAAAALBO0AAJ8hAAAAAQ5NAQAACBIBAAAXAAAAAQ5DAAAACTABAAA2AAAAAQ9DAAAAChgAAAAJdwEAADwAAAABEEMA"
+    "AAAADCABAAC4AAAADCABAABjAQAAAA0+AAAAAQUOQwAAAAAPZwEAAAgAAAAH7QMAAAAAnyUAAAABF0gBAAAQQwAAABBSAQAAEUMAAAAAAF4N"
+    "LmRlYnVnX3Jhbmdlc0MAAABzAAAAiQAAAJgAAAAAAAAAAAAAAK0AAACwAAAAwAAAAFsBAAAAAAAAAAAAAAMAAACiAAAApAAAAGYBAABnAQAA"
+    "bwEAAAAAAAAAAAAAAJgBCi5kZWJ1Z19zdHIvaG9tZS91c2VyL3B5LXdhc21ob3N0AGNvdW50AGludABwdHIAZ2V0X2J1ZmZlcgBuAHN1bQB0"
+    "b3RhbABpAGhvc3RfbG9nAC90bXAvdG1wdzNsdWZ5b2ovbGliLmMAZmliAGEAX19BUlJBWV9TSVpFX1RZUEVfXwBjbGFuZyB2ZXJzaW9uIDIx"
+    "LjEuMAAAlwILLmRlYnVnX2xpbmUHAQAABAAuAAAAAQEB+w4NAAEBAQEAAAABAAABL3RtcC90bXB3M2x1ZnlvagAAbGliLmMAAQAAAAAFAgMA"
+    "AAAYBRAKygUFBiADdy4GAwouBgN2IAYDCVgGA3fWAwlKA3cuAwmQBSGsA3cCLAEFBQMJSgN31gUhBgMJggYDd3QFBQMJggZ1AgMAAQEABQKk"
+    "AAAAAw0BBRcKkgUFBiADcC4GAxEuBgNvZgYDEi4GA24gBgMQWAYDcNYDEAguA3DkBS4DEGYFKwiCA3CCBQUDEEoFIZAFBSADcFgGAxAuBgNw"
+    "dAMQZgUuSgUrdANwWAUFAxBKBteDAgMAAQEFKgoABQJoAQAAAxYBAgcAAQEARwRuYW1lAAkIbGliLndhc20BIQQACGhvc3RfbG9nAQNmaWIC"
+    "A3N1bQMKZ2V0X2J1ZmZlcgcSAQAPX19zdGFja19wb2ludGVyADUJcHJvZHVjZXJzAghsYW5ndWFnZQEDQzExAAxwcm9jZXNzZWQtYnkBBWNs"
+    "YW5nBjIxLjEuMACGAQ90YXJnZXRfZmVhdHVyZXMHKw9idWxrLW1lbW9yeS1vcHQrFmNhbGwtaW5kaXJlY3Qtb3ZlcmxvbmcrDmV4dGVuZGVk"
+    "LWNvbnN0KwptdWx0aXZhbHVlKw9tdXRhYmxlLWdsb2JhbHMrE25vbnRyYXBwaW5nLWZwdG9pbnQrCHNpZ24tZXh0"
+)
 
 
 def zig_command() -> list[str] | None:
@@ -88,9 +119,8 @@ if zig:
     wasm = compile_c(C_SOURCE, zig)
     print(f"compiled {len(wasm)} bytes of wasm with Zig")
 else:
-    with open(PREBUILT, "rb") as f:
-        wasm = f.read()
-    print(f"no Zig here (`pip install ziglang`): using the prebuilt {os.path.basename(PREBUILT)}, {len(wasm)} bytes")
+    wasm = PREBUILT
+    print(f"no Zig here (`pip install ziglang`): using the prebuilt wasm, {len(wasm)} bytes")
 
 module = wasmhost.Module(wasm)
 print("exports:", [(e.name, e.kind) for e in wasmhost.Module.exports(module)])
