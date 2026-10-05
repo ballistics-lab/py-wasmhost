@@ -49,6 +49,9 @@ both in a bare JavaScript engine:
 Both keep their downloads in `$WASMHOST_CACHE`, else `~/.cache/wasmhost`, else `./.cache` where there is no usable
 home directory (PythonIDE).
 
+`examples/zigcc.py` compiles C to WebAssembly with Zig (`zig cc`, from `pip install ziglang`, no wasi-sdk needed) and
+runs it: memory access and a host function.
+
 `examples/coremark.py` runs CoreMark (the wasm3 project's build, in `examples/wasm/`) on every backend that starts here,
 to compare their speed. A runtime that finishes the last pass in under 10 s is not scored by CoreMark itself, so it
 prints the pass time too.
