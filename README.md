@@ -110,8 +110,9 @@ returns what the signature says: `None`, one value, or a tuple for several resul
 - **A host function can call the module again** (`instance.exports.f(...)` from inside it), and its own errors come
   out of the outer call.
 - **Errors in the import object** are the API's: a missing module is a `TypeError`, a missing or non-callable
-  function a `LinkError`. Importing a memory, a table or a global is not supported yet (`NotImplementedError`), and
-  a backend that can't take host functions says so (`backend.supports("imports")`).
+  function a `LinkError`. A global, a memory and a table go into the same import object (see below). A backend that
+  can't take host functions says so (`backend.supports("imports")`), and one that can't take the others says so
+  with `import.global`, `import.memory` and `import.table`.
 
 How a host function is called depends on the backend: `wasmtime` and `wasm3` call the Python function themselves; the
 JavaScript engines that are JavaScriptCore (`jsc`, and `jscontext` on iOS) do it through its C API, which makes a
@@ -275,7 +276,22 @@ Python's `faulthandler` (on with `python -X faulthandler`, and in pytest) replac
 
 ## Not yet
 
-- **`externref` tables**, `v128` and other reference types, multi-value results in a batch.
+What the JavaScript API has, or a module can need, and wasmhost does not have yet. `BACKLOG.md` has the order in
+which it is meant to be done.
+
+- **What a module asks for, in numbers.** `Module.imports` and `Module.exports` give a function's signature and a
+  global's type and mutability, but not the limits of a memory or a table (minimum, maximum), and there is no
+  `type()` on `Memory`, `Table`, `Global` or `Function`.
+- **Tables and references.** `Table.get` is a `FuncRef`, not a callable function; no `externref` (tables, globals or
+  values); no start value for `Table(...)`; no `v128`.
+- **Batches** do not take a multi-value result.
+- **Memory is copied** on every read and write (no view onto the engine's own buffer), which costs on large buffers.
+- **Limits on untrusted code**: no ceiling on memory other than a memory's own maximum, and no time or fuel limit.
+- **`async` compile and instantiate**, like the JavaScript API's.
+- **Newer proposals**: no API for `WebAssembly.Tag` and `WebAssembly.Exception` (the self-test only reports which
+  encodings of exceptions an engine takes), shared memory and threads, SIMD, `memory64`, multi-memory, GC types.
+  Whether a module that uses them runs is up to the engine.
+- **WASI** is not part of wasmhost: a module that imports `wasi_snapshot_preview1` needs a host that provides it.
 
 ## Test
 

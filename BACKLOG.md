@@ -47,9 +47,9 @@ Pythonista), де CI не буває. Він має відображати те,
 
 Нічого не змінює в API, тільки робить документацію правдивою.
 
-- [ ] **B-001** README, розділ про host-функції (рядок про «Importing a memory, a table or a global is not supported
+- [x] **B-001** README, розділ про host-функції (рядок про «Importing a memory, a table or a global is not supported
       yet»): застарів після PR #5. Виправити.
-- [ ] **B-002** README «Not yet»: додати те, чого справді нема (ліміти в дескрипторах, `type()`, `externref`,
+- [x] **B-002** README «Not yet»: додати те, чого справді нема (ліміти в дескрипторах, `type()`, `externref`,
       zero-copy, таймаути), і прибрати пункти, що вже є.
 - [ ] **B-003** Вирішити долю гілки `examples/zigcc`: PR у `main` чи розділити (приклади окремо від
       `coreutils.wasm` на 10,8 МБ). Назва гілки застаріла: Zig там більше нема.
