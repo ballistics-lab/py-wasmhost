@@ -86,3 +86,27 @@ def test_a_function_of_another_instance_is_not_batched(provider: wasmhost.Instan
     other = wasmhost.Instance(wasmhost.Module(wb.tables(imported=False)))
     with pytest.raises(ValueError, match="another instance"):
         provider.batch().call(other.exports.add, 1, 2)
+
+
+def _unknown_entry() -> wasmhost.Function:
+    """An entry of a table that no one told the type of: a module with a start function, so that what its `elem`
+    segment put in the table is not assumed (on a JavaScript engine)."""
+    from test_elem_signatures import module  # noqa: PLC0415
+
+    entry = wasmhost.Instance(wasmhost.Module(module(start=True))).exports.table.get(0)
+    assert entry is not None
+    return entry
+
+
+def test_a_wrong_signature_is_refused_not_obeyed(session: str) -> None:
+    if not wasmhost.get_backend().supports("table.funcs"):
+        pytest.skip("no functions in tables on this backend")
+    if wasmhost.get_backend().supports("table.signatures"):
+        pytest.skip("this engine tells the type of every function, so a wrong one can't be given")
+    entry = _unknown_entry()
+    assert entry.signature is None  # the engine does not tell it
+    entry.signature = FuncType((i64, i64), (i64,))  # add is (i32, i32) -> i32
+    with pytest.raises((TypeError, ValueError)):
+        entry(1, 2)
+    entry.signature = ADD  # the right one, by hand: it works
+    assert entry(1, 2) == 3

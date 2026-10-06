@@ -154,7 +154,8 @@ user = wasmhost.Instance(module, {"env": {"table": table}})
 table.set(0, provider.exports.add)  # a Function (or None to empty the entry)
 table.get(0) is provider.exports.add  # True: one function is one object, as in JavaScript
 table.get(0).type()  # FuncType((i32, i32), (i32,)); wasmtime finds it, a JavaScript engine does not tell:
-# there a function an `elem` segment put in the table is known, any other: a `ValueError` and `table.get(0).signature = FuncType((i32, i32), (i32,))` (a call looks for it, too)
+# there a function an `elem` segment put in the table is known, any other: a `ValueError` and `table.get(0).signature = FuncType((i32, i32), (i32,))` (a call looks for it, too);
+# a wrong signature given by hand is a `TypeError` when called (the engine checks the type), never a wrong result
 table.grow(2)  # the length before
 ```
 

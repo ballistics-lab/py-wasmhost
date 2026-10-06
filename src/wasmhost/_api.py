@@ -44,6 +44,7 @@ from ._binary import (
 )
 from ._errors import CompileError, LinkError, Trap, WasmError
 from ._registry import BACKENDS, default_backend
+from ._trampoline import call_checked
 
 __all__ = (
     "Batch",
@@ -139,8 +140,9 @@ class Function:
     same one (`ValueError` otherwise). The signature does not count in `==` and `hash`: two `Function`s are equal
     when they are the same function of the engine.
 
-    A wrong signature given by hand is the caller's mistake, as with `ctypes`: wasmtime checks it and refuses; a
-    JavaScript engine calls the function with what it is given, and the result may be nonsense."""
+    A wrong signature given by hand is refused, not obeyed: a call goes through a tiny module that the engine checks
+    the type against (`call_indirect`), so a function of another type is a `TypeError` and does not run (wasmtime
+    does the same by itself). A function whose signature is known is called directly."""
 
     def __init__(
         self,
@@ -225,7 +227,11 @@ class Function:
                 f"{self.name or 'the function'}() takes {len(ftype.parameters)} arguments ({len(args)} given)"
             )
         checked = [_check(a, k) for a, k in zip(args, ftype.parameters, strict=True)]
-        values = self._backend.call_ref(self._h, checked, ftype)
+        if not self._known and self._backend.supports("table.funcs") and not self._backend.supports("table.signatures"):
+            # a signature given by hand, and an engine that does not check it by itself: let the engine check it
+            values = call_checked(self._backend, self._h, checked, ftype, self.name or "this function")
+        else:
+            values = self._backend.call_ref(self._h, checked, ftype)
         if not ftype.results:
             return None
         return values[0] if len(values) == 1 else tuple(values)

@@ -21,7 +21,7 @@ from typing import Any
 
 from ._api import Global, Instance, Memory, Module, Table, get_backend, validate
 from ._backend import Backend
-from ._binary import FuncType, GlobalType, MemoryType, TableType, i32
+from ._binary import FuncType, GlobalType, MemoryType, TableType, i32, i64
 from ._errors import CompileError, LinkError, Trap
 from ._js import JSBackend
 from ._registry import AUTO_ORDER, BACKENDS
@@ -90,6 +90,12 @@ TABLE_OWN = bytes.fromhex(
 TABLE_ELEM = bytes.fromhex(
     "0061736d01000000010a0260027f7f017f600000030403000001040401700002070901057461626c6501000908010041000b"
     "0200010a14030700200020016a0b0700200020016c0b02000b"
+)
+
+# The same, with a start function, so that no one tells the type of what the table holds.
+TABLE_ELEM_START = bytes.fromhex(
+    "0061736d01000000010a0260027f7f017f600000030403000001040401700002070901057461626c65010008010209080100"
+    "41000b0200010a14030700200020016a0b0700200020016c0b02000b"
 )
 
 # The same module, but its table is imported as env.table (two entries at least) instead of its own.
@@ -413,7 +419,21 @@ def _functions(backend: Backend) -> str:
     entry = Instance(Module(TABLE_ELEM, backend=backend)).exports.table.get(1)  # put there by an `elem` segment
     assert entry is not None
     _expect((entry.signature, entry(6, 7)), (add_type, 42))  # known without being told, on every backend
-    return "identity, equality, signature rules, a function of an elem segment; a table entry called"
+    checked = "a wrong signature refused"
+    if not backend.supports("table.signatures"):  # an engine that does not tell types: the call is checked by it
+        unknown = Instance(Module(TABLE_ELEM_START, backend=backend)).exports.table.get(0)
+        assert unknown is not None and unknown.signature is None
+        unknown.signature = FuncType((i64,), (i64,))  # it is (i32, i32) -> i32
+        try:
+            unknown(1)
+        except TypeError:
+            pass
+        else:
+            raise AssertionError("a function was called as another type")
+        unknown.signature = add_type
+        _expect(unknown(1, 2), 3)
+        checked = "a wrong signature refused by the engine"
+    return f"identity, equality, signature rules, a function of an elem segment, {checked}; a table entry called"
 
 
 def _custom(name: str, payload: bytes) -> bytes:

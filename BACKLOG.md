@@ -36,7 +36,7 @@ Pythonista), де CI не буває. Він має відображати те,
    `FuncRef` прибирається, `Table.get/set` на `Function`, виклик без підпису ліниво розв'язує.
 2. ✅ **B-201, крок 2** (зроблено, `CallStep` несе хендл, не ім'я): `Batch` на `handle`, один шлях виклику.
 3. ✅ **B-201, крок 3** (зроблено: `ModuleInfo.elems`, `_learn_table_entries`, `tests/test_elem_signatures.py`; покрито й зсув через `global.get` імпортованого глобала, і форма з виразами `ref.func`, є крок у селф-тесті; не покрито: пасивні сегменти й `table.init`, там принципово лише ручний `signature`): знімок за ідентичністю функції (авторозв'язання по `elem` на JS-рушіях).
-4. **B-201, крок 4:** (план для наступної сесії: ① у `src/wasmhost/` новий `_trampoline.py` з генератором wasm: модуль,
+4. ✅ **B-201, крок 4** (зроблено: `_trampoline.py`, `supports("table.signatures")` у wasmtime, тест `test_a_wrong_signature_is_refused_not_obeyed`, крок у селф-тесті; накладні: ~+12 мкс на jsc, у межах шуму на node/bun, бо тремплін кешує останню функцію в слоті; був план: ① у `src/wasmhost/` новий `_trampoline.py` з генератором wasm: модуль,
    що імпортує `env.t` (таблицю `funcref`, 1 слот) і експортує `call(f)`, де тіло = `call_indirect (type N)`; тип N це
    підпис із `FuncType`, кеш модулів за `FuncType`; прототип є в `tests/wasm_builder.py` (`tables`/`call_indirect`);
    ② в `_api.py::Function.__call__`, коли `self._instance is None` (запис таблиці, не експорт) і `signature` задано, а

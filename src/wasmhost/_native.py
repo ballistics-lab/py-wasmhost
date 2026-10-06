@@ -197,6 +197,7 @@ class WasmtimeBackend(Backend):
             "memory.grow",
             "table.length",
             "table.funcs",
+            "table.signatures",  # a call of a function of another type than the one given is refused
             "imports",
             "import.global",
             "import.memory",
