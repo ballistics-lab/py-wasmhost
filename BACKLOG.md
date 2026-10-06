@@ -36,6 +36,9 @@ Pythonista), де CI не буває. Він має відображати те,
       і як окремі об'єкти, і як значення в імпорт-об'єкті — PR #5.
 - [x] Приклад `examples/coremark.py` на всіх бекендах — PR #6.
 - [x] Селф-тест перевіряє, які кодування WebAssembly-винятків бере рушій — PR #7; прогін на iPhone 16 — PR #8.
+- [x] Командний рядок: `python -m wasmhost selftest [--backend NAME] [--all]` (аліас `self-test`) як підкоманда,
+      перший позиційний аргумент вільний під модуль; без команди друкується довідка (код 2). Модуль `_cli.py`.
+- [x] Селф-тест на пристрої звірено з `main` (кроки для `Memory`, `Table`, `customSections`) — див. B-005.
 - [~] Приклади на гілці `examples/zigcc` (не в `main`): `wasmclang.py` (clang/lld у wasm, C і C++),
       `coreutils.py` (шел над uutils coreutils і Lua з WASI-хостом на Python), `examples/wasm/coreutils.wasm`,
       `examples/wasm/lua.wasm`, тест `tests/test_coreutils_example.py`. Рішення про PR у `main` — див. фазу 0.
@@ -142,6 +145,12 @@ Pythonista), де CI не буває. Він має відображати те,
       `--dir ХОСТ::ГІСТЬ`, `--env K=V`), усе після модуля (і після `--`) без розбору йде програмі через
       `args_get`. Спершу перевіряються назви команд (`selftest`), усе інше трактується як файл модуля; файл із
       назвою команди запускається як `./selftest`. Підкоманда `selftest` лишається як є. Залежить від B-502.
+- [ ] **B-507** Точка входу `wasmhost`: `[project.scripts] wasmhost = "wasmhost._cli:main"` в `pyproject.toml`, щоб
+      писати `wasmhost myapp.wasm` і `wasmhost selftest`, а не `python -m wasmhost`. Зараз такої команди нема.
+      Перевірити `uv lock --check` і колеса.
+- [ ] **B-508** Запуск модуля без WASI (як наші `fib` і `sum`): в нього нема `_start` і аргументів, тому окрема
+      підкоманда з викликом експортованої функції, наприклад `wasmhost call myapp.wasm add 2 3` (типи з
+      `Module.exports`). Це ідея, а не рішення: обговорити, перш ніж робити.
 
 Селф-тест: крок WASI (запустити крихітну WASI-програму: `fd_write` у stdout, `args`, файл у тимчасовій папці).
 
