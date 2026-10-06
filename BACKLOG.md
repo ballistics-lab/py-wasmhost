@@ -99,8 +99,10 @@ Pythonista), де CI не буває. Він має відображати те,
 - [ ] **B-006** CI: крок «Examples» запускає лише `basic.py` і `imports.py`. `coreutils.py` покритий через
       `pytest` (`tests/test_coreutils_example.py`), а `wasmclang.py` у CI не запускається взагалі (потрібно
       завантажити ~60 МБ). Вирішити, чи варто: легкий дим-тест із кешем артефактів або лишити як ручний.
-      Станом на 2026-10-06 без тестів лишаються `examples/wasmclang.py`, `examples/jslinux.py`, `examples/pyodide.py` і
-      `examples/coremark.py` (потребують великих завантажень або терміналу); `coreutils.py` і `wasi_sh.py` мають тести, але не
+      Станом на 2026-10-06 без тестів лишаються `examples/wasmclang.py`, `examples/jslinux.py` і `examples/coremark.py`
+      (потребують великих завантажень або терміналу; `jslinux.py` тут не перевірити взагалі: `bellard.org` заблоковано
+      мережевим проксі середовища, 403). `examples/pyodide.py` тепер має `tests/test_pyodide_example.py` (JS-бекенди, ~5 с,
+      пропуск без мережі); `coreutils.py` і `wasi_sh.py` мають тести, але не
       входять до кроку «Examples» в CI.
 - [ ] **B-004** Якщо `coreutils.wasm` лишається в git: домовитись, де його тримати (репо, GitHub Release, кеш при
       запуску). Зараз у історії гілки лежить два екземпляри (~21 МБ).
