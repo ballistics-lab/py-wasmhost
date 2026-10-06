@@ -270,6 +270,10 @@ and the cost of a call. A check the backend can't do says so (`not available on 
 documented`) and counts as passed. If something fails, send the whole output. On a computer,
 `python -m wasmhost selftest --all` runs it on every backend that starts.
 
+`python -m wasmhost bench [--backend NAME] [--no-jit]` times a call, a batch of three and the engine itself (a recursive
+`fib`, a loop) on each backend that starts, to choose one. `--no-jit` takes the JIT off JavaScriptCore
+(`JSC_useJIT=false`): where there is none, an interpreter such as `wasm3` can be several times faster.
+
 ### Where it has been run
 
 | Where | Backend | Result | A call / a batch of 3 |

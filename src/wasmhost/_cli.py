@@ -13,17 +13,25 @@ import argparse
 import sys
 from collections.abc import Sequence
 
-from ._selftest import DESCRIPTION, add_arguments, run
+from . import _bench
+from ._selftest import DESCRIPTION as SELFTEST_DESCRIPTION
+from ._selftest import add_arguments as add_selftest_arguments
+from ._selftest import run as run_selftest
 
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="python -m wasmhost", description="WebAssembly from Python.")
     commands = parser.add_subparsers(dest="command", metavar="COMMAND")
     selftest = commands.add_parser(
-        "selftest", aliases=["self-test"], help="check that wasmhost works here", description=DESCRIPTION
+        "selftest", aliases=["self-test"], help="check that wasmhost works here", description=SELFTEST_DESCRIPTION
     )
-    add_arguments(selftest)
-    selftest.set_defaults(run=run)
+    add_selftest_arguments(selftest)
+    selftest.set_defaults(run=run_selftest)
+    bench = commands.add_parser(
+        "bench", help="time the backends: a call, a batch, the engine", description=_bench.DESCRIPTION
+    )
+    _bench.add_arguments(bench)
+    bench.set_defaults(run=_bench.run)
     return parser
 
 
