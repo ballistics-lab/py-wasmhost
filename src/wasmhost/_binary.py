@@ -23,17 +23,40 @@ __all__ = (
     "MemoryType",
     "ModuleInfo",
     "TableType",
+    "ValueType",
+    "f32",
+    "f64",
+    "i32",
+    "i64",
     "parse",
 )
 
+
+class ValueType(str):
+    """A WebAssembly value type: `i32`, `i64`, `f32` or `f64` (and `v128`, `funcref`, `externref`).
+
+    It is a `str`, so it equals its name (`i32 == "i32"`) and a name does for it anywhere (`FuncType(("i32",), ())`);
+    its `repr` is the bare name, so a type reads `FuncType(parameters=(i32, i32), results=(i32,))`. `i64` is what
+    JavaScript takes as a `BigInt`, which is an `int` here, as is every integer type."""
+
+    __slots__ = ()
+
+    def __repr__(self) -> str:
+        return str(self)
+
+
+i32: Final = ValueType("i32")
+i64: Final = ValueType("i64")
+f32: Final = ValueType("f32")
+f64: Final = ValueType("f64")
 VALTYPES: Final = {
-    0x7F: "i32",
-    0x7E: "i64",
-    0x7D: "f32",
-    0x7C: "f64",
-    0x7B: "v128",
-    0x70: "funcref",
-    0x6F: "externref",
+    0x7F: i32,
+    0x7E: i64,
+    0x7D: f32,
+    0x7C: f64,
+    0x7B: ValueType("v128"),
+    0x70: ValueType("funcref"),
+    0x6F: ValueType("externref"),
 }
 KINDS: Final = ("function", "table", "memory", "global", "tag")
 
@@ -45,7 +68,8 @@ class FuncType(NamedTuple):
     results: tuple[str, ...]
 
     @property
-    def params(self) -> tuple[str, ...]:  # what it was called here before it was called what the JavaScript API does
+    def params(self) -> tuple[str, ...]:
+        """What `parameters` was called here before it was called what the JavaScript API calls it."""
         return self.parameters
 
 
@@ -143,8 +167,8 @@ class _Reader:
                 self.pos += 1
             # anything else (the extended-constant arithmetic, e.g. i32.add) has no immediate
 
-    def valtype(self) -> str:
-        return VALTYPES.get(b := self.byte(), f"0x{b:02x}")
+    def valtype(self) -> ValueType:
+        return VALTYPES.get(b := self.byte()) or ValueType(f"0x{b:02x}")
 
 
 def parse(wasm: bytes) -> ModuleInfo:

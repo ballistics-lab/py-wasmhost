@@ -21,7 +21,7 @@ from typing import Any
 
 from ._api import Global, Instance, Memory, Module, Table, get_backend, validate
 from ._backend import Backend
-from ._binary import FuncType, GlobalType, MemoryType, TableType
+from ._binary import FuncType, GlobalType, MemoryType, TableType, i32
 from ._errors import CompileError, LinkError, Trap
 from ._js import JSBackend
 from ._registry import AUTO_ORDER, BACKENDS
@@ -392,7 +392,8 @@ def _types(backend: Backend) -> str:
     """The type reflection of the JavaScript API: `type()` of a function, a memory and a global, and, where the
     backend makes them on its own, of a memory, a table and a global from a descriptor."""
     ex = Instance(Module(MODULE, backend=backend)).exports
-    _expect(ex.add.type(), FuncType(("i32", "i32"), ("i32",)))
+    _expect(ex.add.type(), FuncType((i32, i32), (i32,)))  # the types are their names, so both spellings do
+    _expect(repr(ex.add.type()), "FuncType(parameters=(i32, i32), results=(i32,))")
     _expect(ex.memory.type(), MemoryType(1, 4, False))
     _expect((ex.counter.type(), ex.ten.type()), (GlobalType("i32", True), GlobalType("i32", False)))
     _expect(ex.grow(1), 1)  # the module's own memory.grow

@@ -185,6 +185,10 @@ instance.exports.counter.type()  # GlobalType(value='i32', mutable=True)
 for (the limits of an imported memory or table, whether a global is mutable) can be read before it is instantiated.
 What `type()` gives goes back into the constructor: `Memory(memory.type())`.
 
+Value types are `wasmhost.i32`, `i64`, `f32` and `f64`. They are `str`s (`i32 == "i32"`), so a name does wherever one
+of them goes: `FuncType((i32, i32), (i32,))` and `FuncType(("i32", "i32"), ("i32",))` are the same. An `i64` is an
+`int` here, as every integer type is; it is what JavaScript takes as a `BigInt`.
+
 `minimum` is the size now, as the specification has it (a table's `minimum` in JavaScriptCore is too; its memory's
 stays the initial size). A shared memory is refused (`NotImplementedError`): there are no threads here.
 

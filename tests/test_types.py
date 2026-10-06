@@ -10,7 +10,7 @@ import pytest
 import wasm_builder as wb
 
 import wasmhost
-from wasmhost import FuncType, GlobalType, MemoryType, TableType
+from wasmhost import FuncType, GlobalType, MemoryType, TableType, ValueType, f32, f64, i32, i64
 
 
 def _need(feature: str) -> None:
@@ -104,3 +104,22 @@ def test_what_type_gives_makes_the_same_again(session: str, feature: str, make: 
     thing = make()
     again = type(thing)(thing.type())  # the type of a Memory, a Table or a Global goes in as its descriptor
     assert again.type() == thing.type()
+
+
+def test_value_types_are_their_names(session: str) -> None:
+    assert (i32, i64, f32, f64) == ("i32", "i64", "f32", "f64")  # a ValueType is a str: a name does for it
+    assert repr(i32) == "i32" and str(i64) == "i64"
+    assert isinstance(i32, ValueType) and isinstance(i32, str)
+    by_name: dict[str, int] = {i32: 1}
+    assert by_name["i32"] == 1  # the same hash as its name
+    ex = wasmhost.Instance(wasmhost.Module(wb.arith())).exports
+    assert ex.add.type() == FuncType((i32, i32), (i32,))  # written with the types
+    assert ex.add.type() == FuncType(("i32", "i32"), ("i32",))  # and with the names
+    assert all(isinstance(kind, ValueType) for kind in ex.add.type().parameters)  # what is read is typed
+    assert repr(ex.add.type()) == "FuncType(parameters=(i32, i32), results=(i32,))"
+
+
+def test_value_types_go_where_a_name_goes(session: str) -> None:
+    _need("import.global")
+    assert wasmhost.Global(i32, 7, mutable=True).type() == GlobalType(i32, True)
+    assert wasmhost.Global({"value": f64}, 1.5).type() == GlobalType("f64", False)
