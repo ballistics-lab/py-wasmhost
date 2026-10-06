@@ -62,7 +62,7 @@ jobs:
       # a synchronous read of stdin, has not been tried there.
       - name: Set up Bun
         if: ${{ !cancelled() && matrix.os != 'windows-latest' }}
-        uses: oven-sh/setup-bun@v2
+        uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
 
       - name: pytest --wasm-backend bun
         if: ${{ !cancelled() && matrix.os != 'windows-latest' }}

@@ -281,12 +281,12 @@ documented`) and counts as passed. If something fails, send the whole output. On
 | Pythonista 3 (StaSh 0.7.5), Python 3.10.4, iPhone 16 (iPhone17,3) | `jscontext` (`objc_util`) | **25/25**, bytes `via C API`, host functions (wasmhost 0.0.2b1) | 55 / 102 us |
 | Pythonista 3, Python 3.10.4, iPhone 16 (iPhone17,3), iOS 26 (Darwin 25.6) | `jscontext` (`objc_util`) | **28/28**, bytes `via C API`, host functions, both encodings of WebAssembly exceptions (`try_table` and `try`/`catch`) (wasmhost 0.0.3b2) | 40 / 85 us |
 | PythonIDE, Python 3.14.7, `ios-13.0-arm64-iphoneos` | `jscontext` (`objc_util`) | **25/25**, bytes `via C API`, host functions (wasmhost 0.0.2b1) | 39 / 77 us |
-| Linux, CPython 3.14t | `jsc` | 27/27 | 32 / 102 us |
+| Linux, CPython 3.14t | `jsc` | 33/33 | 32 / 102 us |
 | Linux, CPython 3.14t | `gi-jsc` | 27/27 (host functions: not available, as documented) | 35 / 62 us |
-| Linux, CPython 3.14t | `node` | 27/27 | 82 / 340 us |
-| Linux, CPython 3.11, Bun 1.4.2 | `bun` | 32/32 | 133 / 287 us |
-| Linux, CPython 3.14t | `wasmtime` | 21/21 | 66 / 212 us |
-| Linux, CPython 3.14t | `wasm3` | 21/21 | 3 / 63 us |
+| Linux, CPython 3.14t | `node` | 33/33 | 82 / 340 us |
+| Linux, CPython 3.11, Bun 1.4.2 | `bun` | 33/33 | 133 / 287 us |
+| Linux, CPython 3.14t | `wasmtime` | 27/27 | 66 / 212 us |
+| Linux, CPython 3.14t | `wasm3` | 27/27 | 3 / 63 us |
 | Linux, CPython 3.10 and PyPy 3.10 | `node` | 25/25 (an earlier version; and the test suite on 3.10) | |
 
 The counts of the Linux rows are for the current version (the first two phone rows are for `0.0.2b1`: the self-test has
