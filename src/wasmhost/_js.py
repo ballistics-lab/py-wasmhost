@@ -434,7 +434,7 @@ class JSBackend(Backend):
                     _expr(a) if isinstance(a, tuple) else _literal(a, k)
                     for a, k in zip(step.args, step.ftype.params, strict=True)
                 )
-                call = f"ex[{json.dumps(step.name)}]({operands})"
+                call = f"O[{step.func}]({operands})"
                 if step.ftype.results:
                     kinds[step.out] = step.ftype.results[0]
                     lines.append(f"r[{step.out}]={call};")

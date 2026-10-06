@@ -552,7 +552,7 @@ class Batch:
             raise NotImplementedError("multi-value results in a batch")
         operands = tuple(self._operand(a, k) for a, k in zip(args, ftype.parameters, strict=True))
         ref = self._new(ftype.results[0] if ftype.results else "void")
-        self._steps.append(CallStep(ref._index, name, operands, ftype))
+        self._steps.append(CallStep(ref._index, function._h, operands, ftype))
         return ref
 
     def write(self, memory: Memory, offset: int | Ref, data: bytes | bytearray | memoryview) -> None:

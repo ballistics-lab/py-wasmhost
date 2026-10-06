@@ -43,7 +43,7 @@ Operand = int | float | Expr
 
 class CallStep(NamedTuple):
     out: int  # the batch's result slot
-    name: str
+    func: Any  # a function handle (see Backend.export_function)
     args: tuple[Operand, ...]
     ftype: FuncType
 
@@ -264,7 +264,7 @@ class Backend:
                     args = [
                         normalize(evaluate(a, values), k) for a, k in zip(step.args, step.ftype.params, strict=True)
                     ]
-                    results = self.call(instance, step.name, args, step.ftype)
+                    results = self.call_ref(step.func, args, step.ftype)
                     values[step.out] = results[0] if step.ftype.results else None
                 elif isinstance(step, WriteStep):
                     self.memory_write(step.memory, int(evaluate(step.offset, values)), step.data)
