@@ -251,6 +251,11 @@ Not every backend can do everything; `backend.supports(...)` says:
 | `node` | yes | yes | yes | yes | yes | no |
 | `bun` | yes | yes | yes | yes | yes | no |
 
+**Deno is not supported.** Run on its pipe protocol like Node, it passes all of the self-test but the exception-handling step: Deno
+(2.9.6 and 2.9.7 tried) panics ("Deno has panicked", `capacity overflow`) when a `WebAssembly.Exception` leaves
+`vm.runInContext`, which is what a module that throws an exception of a tag the caller does not catch does there. Node
+and Bun are the same V8 and JavaScriptCore without this. It is an upstream bug; see `BACKLOG.md` (B-701b).
+
 ## Try it on a device
 
 The package carries a self-test, since nothing else can be run in Pythonista/Python IDE to see whether this works there:
