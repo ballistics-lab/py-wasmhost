@@ -237,7 +237,13 @@ Pythonista), де CI не буває. Він має відображати те,
       Виклик з Python (`add(1, 2)` / batch із 3): `wasm3` 2-4 / 18-31 мкс; `jsc` без JIT 25 / 75 мкс; `jsc` з JIT 19 /
       54-66 мкс; `wasmtime` 40-58 / 150-180 мкс; `node` 123 / 160-200 мкс; `bun` 530-560 / 570-620 мкс (JIT на виклик
       майже не впливає: домінує міст через C API чи pipe).
-      Висновок: де JIT недоступний, `wasm3` виграє в рази, але не вміє multi-value, reference types, bulk memory
+      **Pythonista, iPhone 16, iOS 26, `jscontext` (2026-10-06, `--fib 20 --loop 1000000 --calls 50 --repeat 1`):** виклик
+      65 мкс, batch із 3 160 мкс, `fib(20)` 1,4 мс, цикл 1e6 13,5 мс. Ті самі параметри на Linux-машині (інший процесор,
+      `--repeat 3`): `jsc` з JIT 0,2 / 1,9 мс; `jsc` без JIT 1,7 / 24,5 мс; `wasm3` 0,4 / 4,8 мс; `wasmtime` 0,1 / 1,3 мс.
+      Висновок: `jscontext` на iOS за швидкістю ближчий до JavaScriptCore **без JIT** (на `fib(20)` 1,4 проти 1,7 мс, а
+      не 0,2), тож у Pythonista JIT для wasm, схоже, нема. Порівняння по різних процесорах грубе, тому прогнати той самий
+      `wasmhost bench` на кількох iPhone й додати рядок в README; pywasm3 на iOS не встановити (C-розширення), тож
+      перевага `wasm3` там лише оцінка. Висновок: де JIT недоступний, `wasm3` виграє в рази, але не вміє multi-value, reference types, bulk memory
       (coreutils.wasm на ньому не йде). Ідея: у `AUTO_ORDER` і README згадати цю різницю; перевірити, чи є JIT у
       `jscontext` (Pythonista) цим самим бенчмарком. Не міряно: пам'ять, f32/f64, SIMD, `wasmtime` з іншими
       налаштуваннями Cranelift, `node --jitless`.
