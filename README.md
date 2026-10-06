@@ -54,8 +54,8 @@ project), with Python as their WASI host, and runs the result, with no compiler 
 it works in Pythonista.
 
 `examples/coreutils.py` is a small shell over uutils coreutils (Rust, built to WASI, in `examples/wasm/`): `ls`, `cat`,
-`sort`, `cp`, `seq`, `wc` and the rest, with pipes and redirects, over a directory of the real file system. The WASI
-host for the module is written in Python, on wasmhost; it is also a model of how to write one.
+`sort`, `cp`, `seq`, `wc` and the rest, and `lua`, with pipes and redirects, over a directory of the real file system.
+The WASI host for the modules is written in Python, on wasmhost; it is also a model of how to write one.
 
 `examples/coremark.py` runs CoreMark (the wasm3 project's build, in `examples/wasm/`) on every backend that starts here,
 to compare their speed. A runtime that finishes the last pass in under 10 s is not scored by CoreMark itself, so it

@@ -16,6 +16,11 @@ they see of the world is whatever this file hands them: that is the `Wasi` class
 (files, arguments, clock, exit) over a directory of the real file system, which is all they can reach. wasmhost runs
 the module; Python answers its calls, the way `examples/wasmclang.py` does for the older `wasi_unstable`.
 
+Besides coreutils there is `lua`, Lua 5.4.6 (`examples/wasm/lua.wasm`, built to the first snapshot of WASI):
+`lua file.lua`, `lua -e "print(2^10)"`, `seq 3 | lua -e "for l in io.lines() do print(l * 2) end"`. That build has
+no `longjmp`, so any error of a script (a syntax error, `error()`, a failed `pcall`) stops the interpreter with a
+trap, with no message.
+
 The directory (`--root`, by default `~/Documents/wasm-root`, which Pythonista shows in its file browser, else
 `./wasm-root`) is the whole world: nothing above it can be named, and a symbolic link that leads out of it is refused.
 The shell is Python's, a small one: `|`, `<`, `>`, `>>`, `;`, `&&`, `||`, `*` and `?`, and `cd`, `pwd`, `help`, `exit`.
@@ -45,10 +50,12 @@ import argparse
 import codecs
 import errno
 import glob
+import io
 import os
 import shlex
 import struct
 import sys
+import tarfile
 import time
 import urllib.request
 
@@ -56,6 +63,11 @@ import wasmhost
 
 WASM_URL = "https://raw.githubusercontent.com/ballistics-lab/py-wasmhost/examples/zigcc/examples/wasm/coreutils.wasm"
 WASI = "wasi_snapshot_preview1"
+WASI_OLD = "wasi_unstable"  # the first snapshot of WASI, which older toolchains (wasienv, wasm-clang) still produce
+LUA_URL = "https://registry.npmjs.org/@antonz/lua-wasi/-/lua-wasi-5.4.6.tgz"  # Lua 5.4.6 built to WASI, MIT
+# The directory is preopened as "/" and as ".": a C library of the first WASI snapshot takes relative paths against ".".
+PREOPENS = ("/", ".")
+PROGRAMS = {"lua": ("lua.wasm", LUA_URL, "package/dist/lua.wasm")}  # beside coreutils: name -> file, tarball, member
 PIPE_LIMIT = 16 * 1024 * 1024
 
 # WASI errno numbers (they are not the platform's).
@@ -130,8 +142,11 @@ class Wasi:
         self.write_err = stderr or (lambda data: None)
         self.pipe_limit = pipe_limit  # bytes the program may write to stdout, then EPIPE
         self.written = 0
-        self.fds = {0: Fd("stdin"), 1: Fd("stdout"), 2: Fd("stderr"), 3: Fd("dir", self.root)}
-        self.next_fd = 4
+        self.fds = {0: Fd("stdin"), 1: Fd("stdout"), 2: Fd("stderr")}
+        for fd, _name in enumerate(PREOPENS, 3):  # the same directory under each name
+            self.fds[fd] = Fd("dir", self.root)
+        self.next_fd = 3 + len(PREOPENS)
+        self.old = False  # the module speaks wasi_unstable
         self._mem = None
 
     @property
@@ -146,9 +161,10 @@ class Wasi:
         """Run the module's `_start`; its exit code."""
         calls = {}
         for imp in wasmhost.Module.imports(module):
-            if imp.module == WASI:
-                calls[imp.name] = self._bind(imp.name)
-        instance = wasmhost.Instance(module, {WASI: calls})
+            if imp.module in (WASI, WASI_OLD):
+                calls.setdefault(imp.module, {})[imp.name] = self._bind(imp.name)
+                self.old = self.old or imp.module == WASI_OLD
+        instance = wasmhost.Instance(module, calls)
         self._mem = instance.exports.memory
         try:
             instance.exports._start()
@@ -291,20 +307,20 @@ class Wasi:
     # --- the preopened directory
 
     def fd_prestat_get(self, fd, buf):
-        if fd != 3:
+        if not 3 <= fd < 3 + len(PREOPENS):
             raise WasiError(EBADF)
-        self.mem.write(buf, struct.pack("<BxxxI", 0, 1))  # a directory, its name "/" is one byte
+        self.mem.write(buf, struct.pack("<BxxxI", 0, len(PREOPENS[fd - 3])))  # a directory, and the size of its name
 
     def fd_prestat_dir_name(self, fd, path, size):
-        if fd != 3:
+        if not 3 <= fd < 3 + len(PREOPENS):
             raise WasiError(EBADF)
-        self.mem.write(path, b"/"[:size])
+        self.mem.write(path, PREOPENS[fd - 3].encode()[:size])
 
     # --- file descriptors
 
     def fd_close(self, fd):
         entry = self.file_entry(fd)
-        if fd < 4:
+        if fd < 3 + len(PREOPENS):
             return
         if entry.osfd >= 0:
             os.close(entry.osfd)
@@ -350,7 +366,18 @@ class Wasi:
         entry = self.file_entry(fd)
         if entry.kind != "file":
             raise WasiError(ESPIPE)
-        self.put64(out, os.lseek(entry.osfd, s64(offset), (os.SEEK_SET, os.SEEK_CUR, os.SEEK_END)[whence]))
+        # The first snapshot numbers the origins differently: CUR, END, SET.
+        origins = (os.SEEK_CUR, os.SEEK_END, os.SEEK_SET) if self.old else (os.SEEK_SET, os.SEEK_CUR, os.SEEK_END)
+        self.put64(out, os.lseek(entry.osfd, s64(offset), origins[whence]))
+
+    def fd_renumber(self, fd, to):
+        entry = self.file_entry(fd)
+        other = self.fds.get(to)
+        if other is not None and other is not entry and other.osfd >= 0 and to >= 3 + len(PREOPENS):
+            os.close(other.osfd)
+        self.fds[to] = entry
+        if fd != to:
+            del self.fds[fd]
 
     def fd_tell(self, fd, out):
         self.fd_seek(fd, 0, 1, out)
@@ -536,6 +563,28 @@ def find_wasm(explicit=None):
     return cached
 
 
+def find_program(name):
+    """The module of an extra program (`lua`): examples/wasm/ next to this file, else the cache, downloaded once."""
+    wasm, url, member = PROGRAMS[name]
+    beside = os.path.join(os.path.dirname(os.path.abspath(__file__)), "wasm", wasm)
+    if os.path.exists(beside):
+        return beside
+    cached = os.path.join(cache_root(), "coreutils", wasm)
+    if not os.path.exists(cached):
+        print(f"downloading {url}", flush=True)
+        os.makedirs(os.path.dirname(cached), exist_ok=True)
+        with urllib.request.urlopen(url, timeout=120) as resp:  # noqa: S310
+            data = resp.read()
+        with tarfile.open(fileobj=io.BytesIO(data), mode="r:gz") as tar:
+            extracted = tar.extractfile(member)
+            if extracted is None:
+                raise RuntimeError(f"{member} is not in {url}")
+            with open(cached + ".part", "wb") as f:  # so that an interrupted download is not taken for a whole file
+                f.write(extracted.read())
+        os.replace(cached + ".part", cached)
+    return cached
+
+
 def default_root():
     documents = os.path.expanduser("~/Documents")
     return os.path.join(documents if os.path.isdir(documents) else ".", "wasm-root")
@@ -547,6 +596,7 @@ class Shell:
         os.makedirs(self.root, exist_ok=True)
         self.cwd = self.root
         self.module = module
+        self.extra = {}  # extra programs, compiled when first run
         self.out = out or self._console
 
     @staticmethod
@@ -644,16 +694,29 @@ class Shell:
             self.cwd = os.path.realpath(target)
             return 0
         if name == "help":
-            self.out("builtins: cd pwd help exit; the utilities:\n")
+            self.out(f"builtins: cd pwd help exit; also {' '.join(PROGRAMS)} (a program of its own); the utilities:\n")
             return self.run_program(["--help"], b"", self.console_writer())
         return None
 
     def run_program(self, argv, stdin, stdout, limit=None):
+        name = argv[0]
+        if name in PROGRAMS:
+            if name not in self.extra:
+                with open(find_program(name), "rb") as f:
+                    self.extra[name] = wasmhost.Module(f.read())
+            module, args = self.extra[name], argv
+        else:
+            module, args = self.module, ["coreutils", *argv]
         wasi = Wasi(
-            self.cwd, ["coreutils", *argv], stdin, stdout, self.console_writer(),
+            self.cwd, args, stdin, stdout, self.console_writer(),
             env={"PWD": "/", "HOME": "/"}, pipe_limit=limit,
         )  # fmt: skip
-        return wasi.run(self.module)
+        try:
+            return wasi.run(module)
+        except wasmhost.Trap:
+            # What a program does when it cannot go on: Lua built without longjmp traps on any error of the script.
+            self.out(f"\n{name}: the program stopped with a trap\n")
+            return 134
 
     def run_pipeline(self, pipeline):
         data = b""

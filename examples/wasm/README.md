@@ -22,3 +22,9 @@ It imports only `wasi_snapshot_preview1` (32 functions: `args_*`, `environ_*`, `
 `random_get`, `poll_oneoff`, `sched_yield`, `proc_exit`) and exports `memory` and `_start`. wasmhost has no WASI of its
 own, so it needs a host that provides these: `examples/coreutils.py` is one, in Python. It runs on wasmtime and Node;
 wasm3 stops it right after `args_get` (the build uses multi-value, reference types and bulk memory).
+
+`lua.wasm`: Lua 5.4.6 (MIT) built to WASI with wasienv, taken as it is from the npm package
+[`@antonz/lua-wasi`](https://www.npmjs.com/package/@antonz/lua-wasi) (`dist/lua.wasm`, from
+https://github.com/nalgeon/lua-wasi). It imports 19 functions of `wasi_unstable`, the first snapshot of WASI, and
+exports `memory` and `_start`. `examples/coreutils.py` runs it as the shell's `lua`. It was built without `longjmp`: an
+error in a script (a syntax error, `error()`, a failed `pcall`) ends it with a trap.

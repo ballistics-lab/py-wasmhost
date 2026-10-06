@@ -72,3 +72,23 @@ def test_a_program_cannot_leave_the_directory(session: str, tmp_path: Path) -> N
         assert shell.run_line(line) != 0
         assert "secret" not in "".join(out)
     assert outside.read_text() == "secret\n"
+
+
+def test_lua_runs_as_a_program_of_the_shell(session: str, tmp_path: Path) -> None:
+    shell, out = shell_for(tmp_path)
+    assert (
+        shell.run_line('echo \'print(10 // 3, #arg, arg[1]) io.open("made.txt", "w"):write("from lua\\n")\' > t.lua')
+        == 0
+    )
+    out.clear()
+    assert shell.run_line("lua t.lua x") == 0
+    assert "".join(out).split() == ["3", "1", "x"]
+    assert (tmp_path / "made.txt").read_text() == "from lua\n"
+
+    out.clear()
+    shell.run_line("seq 3 | lua -e 'for l in io.lines() do io.write(l * 2, \" \") end'")
+    assert "".join(out).split() == ["2", "4", "6"]
+
+    out.clear()  # an error of the script stops this build of Lua with a trap, which the shell reports
+    assert shell.run_line("lua -e 'x ='") == 134
+    assert "stopped with a trap" in "".join(out)
