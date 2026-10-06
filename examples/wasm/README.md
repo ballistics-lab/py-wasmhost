@@ -12,4 +12,5 @@ compile for `wasm32-wasip1`. Built with Rust 1.97:
 
 It imports only `wasi_snapshot_preview1` (32 functions: `args_*`, `environ_*`, `fd_*`, `path_*`, `clock_time_get`,
 `random_get`, `poll_oneoff`, `sched_yield`, `proc_exit`) and exports `memory` and `_start`. wasmhost has no WASI of its
-own, so it needs a host that provides these; it was checked on wasmtime's WASI (`echo`, `sort`, `wc`, `seq`).
+own, so it needs a host that provides these: `examples/coreutils.py` is one, in Python. It runs on wasmtime and Node;
+wasm3 stops it right after `args_get` (the build uses multi-value, reference types and bulk memory).

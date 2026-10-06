@@ -1,0 +1,74 @@
+"""`examples/coreutils.py`: uutils coreutils (WASI) under a WASI host written in Python, on every backend."""
+
+from __future__ import annotations
+
+import importlib.util
+import os
+import sys
+from pathlib import Path
+from types import ModuleType
+from typing import Any
+
+import pytest
+
+import wasmhost
+
+EXAMPLES = Path(__file__).resolve().parent.parent / "examples"
+
+
+def load_example() -> ModuleType:
+    spec = importlib.util.spec_from_file_location("coreutils_example", EXAMPLES / "coreutils.py")
+    assert spec is not None
+    assert spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[spec.name] = module
+    spec.loader.exec_module(module)
+    return module
+
+
+def shell_for(root: Path) -> tuple[Any, list[str]]:
+    if not wasmhost.get_backend().supports("imports"):
+        pytest.skip(f"the {wasmhost.get_backend().name} backend can't take imports")
+    if wasmhost.get_backend().name == "wasm3":
+        # Rust's output uses multi-value, reference types and bulk memory; wasm3 stops it right after `args_get`.
+        pytest.skip("wasm3 can't run this build of coreutils")
+    example = load_example()
+    module = wasmhost.Module((EXAMPLES / "wasm" / "coreutils.wasm").read_bytes())
+    out: list[str] = []
+    return example.Shell(str(root), module, out.append), out
+
+
+def test_files_pipes_and_globs(session: str, tmp_path: Path) -> None:
+    shell, out = shell_for(tmp_path)
+    assert shell.run_line("echo hello > a.txt; mkdir notes; cp a.txt notes/b.txt") == 0
+    assert (tmp_path / "notes" / "b.txt").read_text() == "hello\n"
+
+    out.clear()
+    shell.run_line("printf 'x\\ny\\n' >> a.txt; cat *.txt notes/*.txt | wc -l")
+    assert "".join(out).strip() == "4"  # the glob sees a.txt, made earlier on the same line
+
+    out.clear()
+    shell.run_line("seq 5 | sort -r | head -n 3")
+    assert "".join(out).split() == ["5", "4", "3"]
+
+    out.clear()
+    shell.run_line("cd notes; pwd; ls; cd /; pwd")
+    assert "".join(out).split() == ["/notes", "b.txt", "/"]
+
+    assert shell.run_line("false || echo recovered") == 0
+    assert "recovered" in "".join(out)
+
+
+def test_a_program_cannot_leave_the_directory(session: str, tmp_path: Path) -> None:
+    outside = tmp_path / "outside.txt"
+    outside.write_text("secret\n")
+    root = tmp_path / "root"
+    root.mkdir()
+    os.symlink(outside, root / "link")
+    shell, out = shell_for(root)
+
+    for line in ("cat link", "cat ../outside.txt", f"cat {outside}"):
+        out.clear()
+        assert shell.run_line(line) != 0
+        assert "secret" not in "".join(out)
+    assert outside.read_text() == "secret\n"
