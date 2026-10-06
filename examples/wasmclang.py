@@ -157,7 +157,7 @@ class MemFS:
 
     def __init__(self, module, write):
         self.write = write  # takes a str: what a program writes to stdout or stderr
-        self.host_memory = None  # the memory of the program that is running now
+        self._host_memory = None  # the memory of the program that is running now
         imports = {
             "env": {
                 "abort": self._abort,
@@ -172,6 +172,16 @@ class MemFS:
         self.exports = self.instance.exports
         self.memory = self.exports.memory
         self.exports.init()
+
+    @property
+    def host_memory(self):
+        if self._host_memory is None:
+            raise RuntimeError("no program is running")
+        return self._host_memory
+
+    @host_memory.setter
+    def host_memory(self, memory):
+        self._host_memory = memory
 
     def _abort(self):
         raise RuntimeError("memfs aborted")
@@ -223,8 +233,8 @@ class MemFS:
             for member in tar:
                 if member.isdir():
                     self.add_directory(member.name)
-                elif member.isfile():
-                    self.add_file(member.name, tar.extractfile(member).read())
+                elif (data := tar.extractfile(member)) is not None:  # a regular file
+                    self.add_file(member.name, data.read())
 
     def run(self, module, *argv):
         """Run a WASI program (a module that imports `wasi_unstable`) with ARGV; its exit code."""
