@@ -1,5 +1,5 @@
 import sys
 
-from ._selftest import main
+from ._cli import main
 
 sys.exit(main())

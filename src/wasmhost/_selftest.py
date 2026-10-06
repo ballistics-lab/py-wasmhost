@@ -1,4 +1,4 @@
-"""A self-test to run on the device: `python -m wasmhost`, or `wasmhost.selftest()` from a console.
+"""A self-test to run on the device: `python -m wasmhost selftest`, or `wasmhost.selftest()` from a console.
 
 Made for Pythonista (or any iOS Python app), where nothing else can be run to see whether wasmhost works: it
 walks through the things that could go wrong there -- the Objective-C bridge, `WebAssembly` and `BigInt` in the
@@ -16,7 +16,7 @@ import sys
 import sysconfig
 import time
 import traceback
-from collections.abc import Callable, Sequence
+from collections.abc import Callable
 from typing import Any
 
 from ._api import Global, Instance, Memory, Module, Table, get_backend, validate
@@ -25,7 +25,7 @@ from ._errors import CompileError, LinkError, Trap
 from ._js import JSBackend
 from ._registry import AUTO_ORDER, BACKENDS
 
-__all__ = ("main", "selftest")
+__all__ = ("selftest",)
 
 # A module with: add(i32, i32) -> i32, add64(i64, i64) -> i64, fadd(f64, f64) -> f64, trap(), dup(i32) -> (i32, i32),
 # store8(ptr, value), grow(pages) -> i32, twice(f32) -> f32, a memory of 1 page (at most 4), a mutable i32 global
@@ -566,11 +566,16 @@ def selftest(backend: Backend | str | None = None, out: Callable[[str], object] 
     return not report.failed
 
 
-def main(argv: Sequence[str] | None = None) -> int:
-    ap = argparse.ArgumentParser(prog="python -m wasmhost", description="Check that wasmhost works here.")
-    ap.add_argument("--backend", choices=sorted(BACKENDS), help="one backend (default: the first that starts)")
-    ap.add_argument("--all", action="store_true", help="every backend that starts here")
-    args = ap.parse_args(argv)
+DESCRIPTION = "Check that wasmhost works here."
+
+
+def add_arguments(parser: argparse.ArgumentParser) -> None:
+    parser.add_argument("--backend", choices=sorted(BACKENDS), help="one backend (default: the first that starts)")
+    parser.add_argument("--all", action="store_true", help="every backend that starts here")
+
+
+def run(args: argparse.Namespace) -> int:
+    """The `selftest` command, with the arguments `add_arguments` made: 0 if everything passed, else 1."""
     if args.all:
         ok = True
         for name in AUTO_ORDER:

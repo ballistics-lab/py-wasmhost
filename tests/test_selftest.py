@@ -1,7 +1,7 @@
 import pytest
 
 import wasmhost
-from wasmhost import _selftest
+from wasmhost import _cli, _selftest
 
 
 def test_selftest_passes_on_every_backend(session: str) -> None:
@@ -40,5 +40,24 @@ def test_module_constants_are_the_test_modules() -> None:
 
 
 def test_main(capsys: pytest.CaptureFixture[str], session: str) -> None:
-    assert _selftest.main(["--backend", session]) == 0
+    assert _cli.main(["selftest", "--backend", session]) == 0
     assert "passed" in capsys.readouterr().out
+
+
+def test_the_command_is_a_subcommand(capsys: pytest.CaptureFixture[str], session: str) -> None:
+    assert _cli.main(["self-test", "--backend", session]) == 0  # the alias
+    assert "passed" in capsys.readouterr().out
+
+
+def test_without_a_command_there_is_only_help(capsys: pytest.CaptureFixture[str]) -> None:
+    assert _cli.main([]) == 2
+    err = capsys.readouterr().err
+    assert "selftest" in err
+    assert "usage: python -m wasmhost" in err
+
+
+def test_a_flag_of_the_selftest_is_not_a_flag_of_the_program(capsys: pytest.CaptureFixture[str]) -> None:
+    with pytest.raises(SystemExit) as stop:
+        _cli.main(["--backend", "node"])  # before the command: it is not the program's flag, so a usage error
+    assert stop.value.code == 2
+    assert "invalid choice" in capsys.readouterr().err

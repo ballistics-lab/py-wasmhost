@@ -229,7 +229,7 @@ The package carries a self-test, since nothing else can be run in Pythonista/Pyt
 ```python
 import wasmhost
 
-wasmhost.selftest()  # or, from a shell: python -m wasmhost [--backend NAME] [--all]
+wasmhost.selftest()  # or, from a shell: python -m wasmhost selftest [--backend NAME] [--all]
 ```
 
 It prints one line per check, then `N/M passed`: the Objective-C bridge in use (and, if the C API is not used, why:
@@ -239,7 +239,7 @@ isolated instance, which encodings of WebAssembly exceptions the engine takes (`
 (try/catch): no`: a module built with C++ exceptions, such as bclibc's `bclibc_wasm.wasm` from wasi-sdk, needs the final one),
 and the cost of a call. A check the backend can't do says so (`not available on this backend, as
 documented`) and counts as passed. If something fails, send the whole output. On a computer,
-`python -m wasmhost --all` runs it on every backend that starts.
+`python -m wasmhost selftest --all` runs it on every backend that starts.
 
 ### Where it has been run
 
