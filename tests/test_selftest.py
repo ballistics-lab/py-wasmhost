@@ -32,6 +32,9 @@ def test_module_constants_are_the_test_modules() -> None:
     assert _selftest.MODULE == wb.arith()
     assert _selftest.CALLBACKS == wb.callbacks()
     assert _selftest.GLOBAL_IMPORT == wb.imports_global()
+    assert _selftest.MEMORY_USER == wb.uses_memory()
+    assert _selftest.TABLE_OWN == wb.tables(imported=False)
+    assert _selftest.TABLE_IMPORT == wb.tables(imported=True)
     assert _selftest.EXCEPTIONS_FINAL == wb.exceptions(final=True)
     assert _selftest.EXCEPTIONS_LEGACY == wb.exceptions(final=False)
 

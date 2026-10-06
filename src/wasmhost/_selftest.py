@@ -2,8 +2,8 @@
 
 Made for Pythonista (or any iOS Python app), where nothing else can be run to see whether wasmhost works: it
 walks through the things that could go wrong there -- the Objective-C bridge, `WebAssembly` and `BigInt` in the
-engine, calls, memory, globals, traps, batches -- prints one line for each, and ends with a summary and the
-cost of a call. If something fails, send the whole output.
+engine, calls, memory, globals, memories and tables made on their own, custom sections, traps, batches -- prints
+one line for each, and ends with a summary and the cost of a call. If something fails, send the whole output.
 """
 
 from __future__ import annotations
@@ -19,7 +19,7 @@ import traceback
 from collections.abc import Callable, Sequence
 from typing import Any
 
-from ._api import Global, Instance, Module, get_backend, validate
+from ._api import Global, Instance, Memory, Module, Table, get_backend, validate
 from ._backend import Backend
 from ._errors import CompileError, LinkError, Trap
 from ._js import JSBackend
@@ -69,6 +69,28 @@ GLOBAL_IMPORT = bytes.fromhex(
     "0a1002040023000b0900230041016a24000b"  # code
 )
 
+
+# A module that imports the memory env.memory (min 1 page): load(addr) -> i32 reads a byte, and
+# store(addr, byte) writes one.
+MEMORY_USER = bytes.fromhex(
+    "0061736d01000000010b0260017f017f60027f7f00020f0103656e76066d656d6f72790200010303020001071002046c"
+    "6f616400000573746f726500010a1302070020002d00000b0900200020013a00000b"
+)
+
+# A module with a table of two funcref entries that it exports as "table", and add(a, b), mul(a, b) and
+# call(a, b, index) = table[index](a, b) (call_indirect).
+TABLE_OWN = bytes.fromhex(
+    "0061736d01000000010e0260027f7f017f60037f7f7f017f030403000001040401700002071c04036164640000036d75"
+    "6c00010463616c6c0002057461626c6501000a1d030700200020016a0b0700200020016c0b0b00200020012002110000"
+    "0b"
+)
+
+# The same module, but its table is imported as env.table (two entries at least) instead of its own.
+TABLE_IMPORT = bytes.fromhex(
+    "0061736d01000000010e0260027f7f017f60037f7f7f017f020f0103656e76057461626c650170000203040300000107"
+    "1403036164640000036d756c00010463616c6c00020a1d030700200020016a0b0700200020016c0b0b00200020012002"
+    "1100000b"
+)
 
 # Two functions, caught() -> i32 and uncaught() -> i32: each throws a WebAssembly exception (tag 0 and tag 1) inside a
 # handler for tag 0. caught() comes out of the handler with 42, uncaught() must not return. There is a module for each
@@ -172,6 +194,9 @@ def _selftest_backend(backend: Backend, out: Callable[[str], object]) -> _Report
     step("batch: an error keeps the earlier results", lambda: _batch_error(box["i"]))
     step("host functions (Python called from the module)", lambda: _host_functions(backend))
     step("globals: made on their own, imported, shared", lambda: _globals_on_their_own(backend))
+    step("memory: made on its own, imported, shared", lambda: _memory_on_its_own(backend))
+    step("table: made on its own, imported, shared", lambda: _table_on_its_own(backend))
+    step("custom sections", lambda: _custom_sections(backend))
     step("an isolated instance", lambda: _isolated(backend))
     step("exception handling (which encodings the engine takes)", lambda: _exceptions(backend))
     step("call cost", lambda: _timing(backend, box["i"]))
@@ -278,6 +303,87 @@ def _globals_on_their_own(backend: Backend) -> str:
     except LinkError:
         return "shared by two instances, the host and an export; a wrong import is a LinkError"
     raise AssertionError("a number was taken for a mutable global")
+
+
+def _memory_on_its_own(backend: Backend) -> str:
+    if not backend.supports("import.memory"):
+        try:
+            Memory(1, backend=backend)
+        except NotImplementedError:
+            return "not available on this backend, as documented"
+        raise AssertionError("should be NotImplementedError")
+    mem = Memory(1, 3, backend=backend)
+    _expect(len(mem), 65536)
+    mem.write(10, b"abc")
+    _expect(mem.read(10, 3), b"abc")
+    module = Module(MEMORY_USER, backend=backend)
+    a = Instance(module, {"env": {"memory": mem}}).exports
+    b = Instance(module, {"env": {"memory": mem}}).exports
+    a.store(5, 42)
+    _expect((b.load(5), mem.read(5, 1)), (42, b"\x2a"))  # two instances and the host, one memory
+    mem.write(6, b"\x07")
+    _expect(a.load(6), 7)
+    if backend.supports("memory.grow"):
+        _expect((mem.grow(1), len(mem), mem.read(10, 3)), (1, 2 * 65536, b"abc"))
+        try:
+            mem.grow(5)  # over its maximum
+        except IndexError:
+            pass
+        else:
+            raise AssertionError("a memory grew past its maximum")
+    for wrong in (Memory(0, backend=backend), 1):  # smaller than the module wants, and not a memory at all
+        try:
+            Instance(module, {"env": {"memory": wrong}})
+        except LinkError:
+            pass
+        else:
+            raise AssertionError(f"{wrong!r} was taken for the memory of the module")
+    return "shared by two instances and the host; the limits and a wrong import are checked"
+
+
+def _table_on_its_own(backend: Backend) -> str:
+    if not (backend.supports("import.table") and backend.supports("table.funcs")):
+        try:
+            Table("funcref", 1, backend=backend)
+        except NotImplementedError:
+            return "not available on this backend, as documented"
+        raise AssertionError("should be NotImplementedError")
+    table = Table("funcref", 2, 4, backend=backend)
+    _expect((len(table), table.get(0)), (2, None))
+    provider = Instance(Module(TABLE_OWN, backend=backend)).exports
+    user = Instance(Module(TABLE_IMPORT, backend=backend), {"env": {"table": table}}).exports
+    table.set(0, provider.add)
+    table.set(1, provider.mul)
+    _expect((user.call(6, 7, 0), user.call(6, 7, 1)), (13, 42))  # call_indirect into another instance's functions
+    table.set(1, None)
+    try:
+        user.call(1, 2, 1)  # a null entry
+    except Trap:
+        pass
+    else:
+        raise AssertionError("a null entry was called")
+    _expect((table.grow(1), len(table)), (2, 3))
+    _expect((provider.table.grow(3), len(provider.table)), (2, 5))  # a table the module exports grows too
+    try:
+        Table("externref", 1, backend=backend)
+    except NotImplementedError:
+        return "functions shared across instances; an externref table is not supported yet, as documented"
+    raise AssertionError("an externref table should be NotImplementedError")
+
+
+def _custom(name: str, payload: bytes) -> bytes:
+    """A custom section (id 0), for a name and payload short enough for a one-byte size."""
+    body = bytes([len(name)]) + name.encode() + payload
+    assert len(body) < 128
+    return b"\x00" + bytes([len(body)]) + body
+
+
+def _custom_sections(backend: Backend) -> str:
+    module = Module(MODULE + _custom("mine", b"hello") + _custom("mine", b"again"), backend=backend)
+    _expect(Module.customSections(module, "mine"), [b"hello", b"again"])
+    _expect(Module.customSections(module, "absent"), [])
+    _expect(Instance(module).exports.add(2, 3), 5)  # a custom section does not get in the way
+    return "two of one name, none of another"
 
 
 def _exceptions(backend: Backend) -> str:

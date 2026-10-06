@@ -50,11 +50,11 @@ Pythonista), де CI не буває. Він має відображати те,
       zero-copy, таймаути), і прибрати пункти, що вже є.
 - [ ] **B-003** Вирішити долю гілки `examples/zigcc`: PR у `main` чи розділити (приклади окремо від
       `coreutils.wasm` на 10,8 МБ). Назва гілки застаріла: Zig там більше нема.
-- [ ] **B-005** Звірити селф-тест на пристрої з тим, що вже є в `main`. У CI це покрито
-      (`tests/test_memory_table.py`, `customSections` у `tests/test_api.py`), а в самому селф-тесті кроків для
-      `Memory(initial, maximum)` і `Table(...)` на своїх (створення, імпорт, спільне використання,
-      `Table.get/set/grow`, ліміти) і для `Module.customSections` нема; глобали на своїх покриті
-      (`_globals_on_their_own`). Додати відсутні кроки за правилом вище.
+- [x] **B-005** Селф-тест на пристрої звірено з `main` і доповнено кроками: «memory: made on its own, imported,
+      shared» (створення, спільне використання двома екземплярами й хостом, `grow` і максимум, неправильний
+      імпорт), «table: made on its own, imported, shared» (функції через `call_indirect` між екземплярами, null,
+      `grow`, `externref` відхиляється) і «custom sections». Бекенди без `import.memory`/`import.table` (wasm3)
+      чесно пишуть «не підтримується». Модулі в `_selftest.py` перевіряє `tests/test_selftest.py`.
 - [ ] **B-006** CI: крок «Examples» запускає лише `basic.py` і `imports.py`. `coreutils.py` покритий через
       `pytest` (`tests/test_coreutils_example.py`), а `wasmclang.py` у CI не запускається взагалі (потрібно
       завантажити ~60 МБ). Вирішити, чи варто: легкий дим-тест із кешем артефактів або лишити як ручний.
