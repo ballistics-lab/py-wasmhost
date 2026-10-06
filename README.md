@@ -121,8 +121,8 @@ stdin synchronously. Only `gi-jsc` can't: PyGObject has no way to make a JavaScr
 
 ## Globals
 
-`Global(type, value, mutable=False)` makes a `WebAssembly.Global` on its own, and an instance can import it, one
-instance or several:
+`Global(type, value, mutable=False)` makes a `WebAssembly.Global` on its own (or, as in JavaScript,
+`Global({"value": "i32", "mutable": True}, 7)`), and an instance can import it, one instance or several:
 
 ```python
 counter = wasmhost.Global("i32", 0, mutable=True)
@@ -135,13 +135,14 @@ An exported global (`instance.exports.g`) can be passed to another instance the 
 plain number is enough (`{"env": {"limit": 100}}`), as in the JavaScript API. A wrong import (a number for a mutable
 global, another type, another backend) is a `LinkError`; an immutable global's `value` can't be written (`TypeError`).
 `backend.supports("import.global")` says whether a backend can (`wasm3` can't: pywasm3 makes no global outside a
-module).
+module). A global has to be as mutable as the module says (`LinkError` otherwise), as in JavaScript.
 
 ## Memories and tables
 
 `Memory(initial, maximum=None)` (in 64 KiB pages) and `Table("funcref", initial, maximum=None)` make a
 `WebAssembly.Memory` and `WebAssembly.Table` on their own, to import into one instance or several (an Emscripten build
-imports its memory):
+imports its memory). As in JavaScript they also take a descriptor, `Memory({"initial": 1, "maximum": 16})` and
+`Table({"element": "anyfunc", "initial": 2})`:
 
 ```python
 mem = wasmhost.Memory(1, 16)
@@ -167,6 +168,25 @@ so many instances add up (300 instances of 1 MiB were 315 MB, not given back by 
 is freed when the instance is. Its price: it shares nothing (a Global made outside it is a `ValueError`).
 `backend.supports("isolated")` is true for `wasmtime` and `wasm3` (a `wasm3` instance is isolated anyway); on the
 JavaScript engines, which have one store, it is a `NotImplementedError`.
+
+## Types
+
+`type()` is the type reflection of the JavaScript API, with its names, on a function, a memory, a table and a global
+(on every backend: the types are read from the module's binary, not asked of the engine, which may not have them):
+
+```python
+instance.exports.add.type()  # FuncType(parameters=('i32', 'i32'), results=('i32',))
+instance.exports.memory.type()  # MemoryType(minimum=1, maximum=4, shared=False)
+instance.exports.table.type()  # TableType(element='funcref', minimum=2, maximum=None)
+instance.exports.counter.type()  # GlobalType(value='i32', mutable=True)
+```
+
+`Module.imports()` and `Module.exports()` give the same types in the `type` of each entry, so what a module asks
+for (the limits of an imported memory or table, whether a global is mutable) can be read before it is instantiated.
+What `type()` gives goes back into the constructor: `Memory(memory.type())`.
+
+`minimum` is the size now, as the specification has it (a table's `minimum` in JavaScriptCore is too; its memory's
+stays the initial size). A shared memory is refused (`NotImplementedError`): there are no threads here.
 
 ## Batches
 
@@ -279,9 +299,6 @@ Python's `faulthandler` (on with `python -X faulthandler`, and in pytest) replac
 What the JavaScript API has, or a module can need, and wasmhost does not have yet. `BACKLOG.md` has the order in
 which it is meant to be done.
 
-- **What a module asks for, in numbers.** `Module.imports` and `Module.exports` give a function's signature and a
-  global's type and mutability, but not the limits of a memory or a table (minimum, maximum), and there is no
-  `type()` on `Memory`, `Table`, `Global` or `Function`.
 - **Tables and references.** `Table.get` is a `FuncRef`, not a callable function; no `externref` (tables, globals or
   values); no start value for `Table(...)`; no `v128`.
 - **Batches** do not take a multi-value result.

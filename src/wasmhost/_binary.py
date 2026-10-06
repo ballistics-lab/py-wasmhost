@@ -5,13 +5,26 @@ and they matter: an `i64` argument must reach JavaScript as a BigInt while an `i
 result is an integer or a float depending on its type. Only the type, import, function, table, memory,
 global and export sections are read, and the custom sections are kept (`Module.customSections`); the rest is
 skipped, and code is never looked at.
+
+The types are the ones of the JavaScript API's type reflection (`memory.type()` and the `type` of an entry of
+`WebAssembly.Module.imports()`), with the same names: a function's `parameters` and `results`, a memory's `minimum`,
+`maximum` and `shared`, a table's `element`, `minimum` and `maximum`, a global's `value` and `mutable`.
 """
 
 from __future__ import annotations
 
 from typing import Final, NamedTuple
 
-__all__ = ("ExportDescriptor", "FuncType", "ImportDescriptor", "ModuleInfo", "parse")
+__all__ = (
+    "ExportDescriptor",
+    "FuncType",
+    "GlobalType",
+    "ImportDescriptor",
+    "MemoryType",
+    "ModuleInfo",
+    "TableType",
+    "parse",
+)
 
 VALTYPES: Final = {
     0x7F: "i32",
@@ -26,22 +39,50 @@ KINDS: Final = ("function", "table", "memory", "global", "tag")
 
 
 class FuncType(NamedTuple):
-    params: tuple[str, ...]
+    """A function's type: `parameters` and `results` are value types (`"i32"`, `"f64"`, ...)."""
+
+    parameters: tuple[str, ...]
     results: tuple[str, ...]
+
+    @property
+    def params(self) -> tuple[str, ...]:  # what it was called here before it was called what the JavaScript API does
+        return self.parameters
+
+
+class MemoryType(NamedTuple):
+    """A memory's type, in 64 KiB pages; `maximum` is None when it has none."""
+
+    minimum: int
+    maximum: int | None = None
+    shared: bool = False
+
+
+class TableType(NamedTuple):
+    """A table's type: `element` is `"funcref"` or `"externref"`; `maximum` is None when it has none."""
+
+    element: str
+    minimum: int
+    maximum: int | None = None
+
+
+class GlobalType(NamedTuple):
+    """A global's type: its value type (`"i32"`, ...) and whether it can be written."""
+
+    value: str
+    mutable: bool
 
 
 class ImportDescriptor(NamedTuple):
     module: str
     name: str
-    kind: str
-    type: FuncType | str | None  # a function's signature, a global's value type, else None
-    mutable: bool | None = None  # for a global: can it be written (a mutable one must be imported as a Global)
+    kind: str  # "function" | "table" | "memory" | "global" | "tag"
+    type: FuncType | TableType | MemoryType | GlobalType | None  # None for a tag
 
 
 class ExportDescriptor(NamedTuple):
     name: str
     kind: str  # "function" | "table" | "memory" | "global" | "tag"
-    type: FuncType | str | None
+    type: FuncType | TableType | MemoryType | GlobalType | None  # None for a tag
 
 
 class ModuleInfo(NamedTuple):
@@ -75,11 +116,15 @@ class _Reader:
         self.pos += n
         return s
 
-    def limits(self) -> None:
+    def limits(self) -> tuple[int, int | None, bool]:
+        """(minimum, maximum or None, shared). Bit 0 of the flags has a maximum, bit 1 is shared, bit 2 is a 64-bit
+        index (the numbers are read the same), bit 3 a page size of its own (skipped)."""
         flags = self.u32()
-        self.u32()
-        if flags & 1:
+        minimum = self.u32()
+        maximum = self.u32() if flags & 1 else None
+        if flags & 8:
             self.u32()
+        return minimum, maximum, bool(flags & 2)
 
     def skip_leb(self) -> None:
         while self.byte() & 0x80:
@@ -112,10 +157,22 @@ def parse(wasm: bytes) -> ModuleInfo:
     r.pos = 8
     types: list[FuncType] = []
     func_types: list[int] = []  # type index of every function: imported ones first
-    global_types: list[str] = []  # value type of every global: imported ones first
+    table_types: list[TableType] = []  # of every table, memory and global: imported ones first
+    memory_types: list[MemoryType] = []
+    global_types: list[GlobalType] = []
     imports: list[ImportDescriptor] = []
     raw_exports: list[tuple[str, int, int]] = []
     custom: list[tuple[str, bytes]] = []
+
+    def table_type() -> TableType:
+        element = r.valtype()
+        minimum, maximum, _ = r.limits()
+        return TableType(element, minimum, maximum)
+
+    def memory_type() -> MemoryType:
+        minimum, maximum, shared = r.limits()
+        return MemoryType(minimum, maximum, shared)
+
     try:
         while r.pos < len(wasm):
             section_id = r.byte()
@@ -136,31 +193,39 @@ def parse(wasm: bytes) -> ModuleInfo:
             elif section_id == 2:
                 for _ in range(r.u32()):
                     module, name, kind = r.name(), r.name(), r.byte()
-                    desc: FuncType | str | None = None
-                    mutable = False
+                    desc: FuncType | TableType | MemoryType | GlobalType | None = None
                     if kind == 0:
                         func_types.append(index := r.u32())
                         desc = types[index]
                     elif kind == 1:
-                        r.byte()
-                        r.limits()
+                        table_types.append(desc := table_type())
                     elif kind == 2:
-                        r.limits()
+                        memory_types.append(desc := memory_type())
                     elif kind == 3:
-                        global_types.append(desc := r.valtype())
-                        mutable = r.byte() == 1
+                        value = r.valtype()
+                        global_types.append(desc := GlobalType(value, r.byte() == 1))
                     elif kind == 4:
                         r.byte()
                         r.u32()
                     else:
                         raise ValueError(f"unknown import kind {kind}")
-                    imports.append(ImportDescriptor(module, name, KINDS[kind], desc, mutable if kind == 3 else None))
+                    imports.append(ImportDescriptor(module, name, KINDS[kind], desc))
             elif section_id == 3:
                 func_types.extend(r.u32() for _ in range(r.u32()))
+            elif section_id == 4:
+                for _ in range(r.u32()):
+                    if r.data[r.pos] == 0x40:  # a table with its own initial value: 0x40 0x00 type limits expression
+                        r.pos += 2
+                        table_types.append(table_type())
+                        r.skip_const_expr()
+                    else:
+                        table_types.append(table_type())
+            elif section_id == 5:
+                memory_types.extend(memory_type() for _ in range(r.u32()))
             elif section_id == 6:
                 for _ in range(r.u32()):
-                    global_types.append(r.valtype())
-                    r.byte()
+                    value = r.valtype()
+                    global_types.append(GlobalType(value, r.byte() == 1))
                     r.skip_const_expr()
             elif section_id == 7:
                 for _ in range(r.u32()):
@@ -170,10 +235,14 @@ def parse(wasm: bytes) -> ModuleInfo:
         raise ValueError("truncated WebAssembly binary") from exc
     exports: list[ExportDescriptor] = []
     for name, kind, index in raw_exports:
-        desc = None
+        found: FuncType | TableType | MemoryType | GlobalType | None = None
         if kind == 0:
-            desc = types[func_types[index]]
+            found = types[func_types[index]]
+        elif kind == 1:
+            found = table_types[index]
+        elif kind == 2:
+            found = memory_types[index]
         elif kind == 3:
-            desc = global_types[index]
-        exports.append(ExportDescriptor(name, KINDS[kind], desc))
+            found = global_types[index]
+        exports.append(ExportDescriptor(name, KINDS[kind], found))
     return ModuleInfo(tuple(imports), tuple(exports), tuple(custom))

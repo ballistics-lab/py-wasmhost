@@ -25,7 +25,7 @@ def target(session: str) -> wasmhost.Backend:
 
 def test_a_global_on_its_own(target: wasmhost.Backend) -> None:
     g = wasmhost.Global("i32", 7, mutable=True)
-    assert (g.type, g.mutable, g.value) == ("i32", True, 7)
+    assert (g.type(), g.mutable, g.value) == (wasmhost.GlobalType("i32", True), True, 7)
     g.value = 99
     assert g.value == 99
     frozen = wasmhost.Global("f64", 1.5)

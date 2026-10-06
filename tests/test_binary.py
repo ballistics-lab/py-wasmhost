@@ -1,7 +1,7 @@
 import pytest
 import wasm_builder as wb
 
-from wasmhost import FuncType
+from wasmhost import FuncType, GlobalType, MemoryType, TableType
 from wasmhost._binary import parse
 
 
@@ -12,7 +12,8 @@ def test_exports_have_types() -> None:
     assert by_name["add64"].type == FuncType(("i64", "i64"), ("i64",))
     assert by_name["dup"].type == FuncType(("i32",), ("i32", "i32"))
     assert by_name["memory"].kind == "memory"
-    assert by_name["counter"].kind == "global" and by_name["counter"].type == "i32"
+    assert by_name["counter"].kind == "global" and by_name["counter"].type == GlobalType("i32", True)
+    assert by_name["ten"].type == GlobalType("i32", False)  # an export tells whether it can be written
 
 
 def test_const_expr_containing_the_end_opcode() -> None:
@@ -54,3 +55,37 @@ def test_a_custom_section_between_the_others() -> None:
 def test_a_truncated_custom_section_is_rejected() -> None:
     with pytest.raises(ValueError):
         parse(wb.arith() + b"\x00\x7f\x01a")  # says 127 bytes, has 2
+
+
+def test_limits_of_memories_and_tables_are_read() -> None:
+    assert {e.name: e.type for e in parse(wb.arith()).exports}["memory"] == MemoryType(1, 4, False)
+    (wanted,) = parse(wb.uses_memory()).imports  # imports env.memory, at least one page, no maximum
+    assert wanted.type == MemoryType(1, None, False)
+    (own,) = (e for e in parse(wb.tables(imported=False)).exports if e.kind == "table")
+    assert own.type == TableType("funcref", 2, None)
+    (imported,) = parse(wb.tables(imported=True)).imports
+    assert imported.type == TableType("funcref", 2, None)
+    (counter,) = parse(wb.imports_global()).imports
+    assert counter.type == GlobalType("i32", True)  # a mutable one: imported as a Global
+
+
+def test_a_shared_memory_and_a_maximum_are_read() -> None:
+    types = [wb.functype([], [])]
+    shared = b"\x03\x01\x04"  # flags: a maximum and shared; minimum 1, maximum 4
+    wasm = (
+        b"\0asm\x01\x00\x00\x00"
+        + wb.section(1, wb.vec(types))
+        + wb.section(3, wb.vec([wb.uleb(0)]))
+        + wb.section(5, wb.vec([shared, b"\x00\x02"]))
+        + wb.section(7, wb.vec([wb.name("m") + b"\x02\x00", wb.name("n") + b"\x02\x01"]))
+        + wb.section(10, wb.vec([wb.body(b"")]))
+    )
+    by_name = {e.name: e.type for e in parse(wasm).exports}
+    assert by_name["m"] == MemoryType(1, 4, True)
+    assert by_name["n"] == MemoryType(2, None, False)
+
+
+def test_function_types_have_the_names_of_the_javascript_api() -> None:
+    kind = FuncType(("i32", "i64"), ("f64",))
+    assert (kind.parameters, kind.results) == (("i32", "i64"), ("f64",))
+    assert kind.params == kind.parameters  # the name it had before

@@ -27,7 +27,7 @@ from ._api import (
     validate,
 )
 from ._backend import Backend
-from ._binary import ExportDescriptor, FuncType, ImportDescriptor
+from ._binary import ExportDescriptor, FuncType, GlobalType, ImportDescriptor, MemoryType, TableType
 from ._js import GIJavaScriptCoreBackend, JSBackend, JSContextBackend, NodeBackend
 from ._jsc import JSCBackend
 from ._native import Wasm3Backend, WasmtimeBackend
@@ -48,6 +48,7 @@ __all__ = (
     "Function",
     "GIJavaScriptCoreBackend",
     "Global",
+    "GlobalType",
     "ImportDescriptor",
     "Instance",
     "Instantiated",
@@ -56,10 +57,12 @@ __all__ = (
     "JSContextBackend",
     "LinkError",
     "Memory",
+    "MemoryType",
     "Module",
     "NodeBackend",
     "Ref",
     "Table",
+    "TableType",
     "Trap",
     "Wasm3Backend",
     "WasmError",

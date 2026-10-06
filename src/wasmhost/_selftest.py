@@ -2,7 +2,7 @@
 
 Made for Pythonista (or any iOS Python app), where nothing else can be run to see whether wasmhost works: it
 walks through the things that could go wrong there -- the Objective-C bridge, `WebAssembly` and `BigInt` in the
-engine, calls, memory, globals, memories and tables made on their own, custom sections, traps, batches -- prints
+engine, calls, memory, globals, memories and tables made on their own, custom sections, types, traps, batches -- prints
 one line for each, and ends with a summary and the cost of a call. If something fails, send the whole output.
 """
 
@@ -21,6 +21,7 @@ from typing import Any
 
 from ._api import Global, Instance, Memory, Module, Table, get_backend, validate
 from ._backend import Backend
+from ._binary import FuncType, GlobalType, MemoryType, TableType
 from ._errors import CompileError, LinkError, Trap
 from ._js import JSBackend
 from ._registry import AUTO_ORDER, BACKENDS
@@ -197,6 +198,7 @@ def _selftest_backend(backend: Backend, out: Callable[[str], object]) -> _Report
     step("memory: made on its own, imported, shared", lambda: _memory_on_its_own(backend))
     step("table: made on its own, imported, shared", lambda: _table_on_its_own(backend))
     step("custom sections", lambda: _custom_sections(backend))
+    step("type reflection: type() of a function, memory, table and global", lambda: _types(backend))
     step("an isolated instance", lambda: _isolated(backend))
     step("exception handling (which encodings the engine takes)", lambda: _exceptions(backend))
     step("call cost", lambda: _timing(backend, box["i"]))
@@ -384,6 +386,28 @@ def _custom_sections(backend: Backend) -> str:
     _expect(Module.customSections(module, "absent"), [])
     _expect(Instance(module).exports.add(2, 3), 5)  # a custom section does not get in the way
     return "two of one name, none of another"
+
+
+def _types(backend: Backend) -> str:
+    """The type reflection of the JavaScript API: `type()` of a function, a memory and a global, and, where the
+    backend makes them on its own, of a memory, a table and a global from a descriptor."""
+    ex = Instance(Module(MODULE, backend=backend)).exports
+    _expect(ex.add.type(), FuncType(("i32", "i32"), ("i32",)))
+    _expect(ex.memory.type(), MemoryType(1, 4, False))
+    _expect((ex.counter.type(), ex.ten.type()), (GlobalType("i32", True), GlobalType("i32", False)))
+    _expect(ex.grow(1), 1)  # the module's own memory.grow
+    _expect(ex.memory.type(), MemoryType(2, 4, False))  # the minimum is the size now
+    made: list[str] = []
+    if backend.supports("import.memory"):
+        _expect(Memory({"initial": 1, "maximum": 3}, backend=backend).type(), MemoryType(1, 3, False))
+        made.append("memory")
+    if backend.supports("import.table"):
+        _expect(Table({"element": "anyfunc", "initial": 2}, backend=backend).type(), TableType("funcref", 2, None))
+        made.append("table")
+    if backend.supports("import.global"):
+        _expect(Global({"value": "f64", "mutable": True}, 1.5, backend=backend).type(), GlobalType("f64", True))
+        made.append("global")
+    return "from a descriptor: " + (", ".join(made) or "nothing on this backend")
 
 
 def _exceptions(backend: Backend) -> str:

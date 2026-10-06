@@ -30,7 +30,16 @@ from ._backend import (
     WriteStep,
     normalize,
 )
-from ._binary import ExportDescriptor, FuncType, ImportDescriptor, ModuleInfo, parse
+from ._binary import (
+    ExportDescriptor,
+    FuncType,
+    GlobalType,
+    ImportDescriptor,
+    MemoryType,
+    ModuleInfo,
+    TableType,
+    parse,
+)
 from ._errors import CompileError, LinkError, Trap, WasmError
 from ._registry import BACKENDS, default_backend
 
@@ -135,6 +144,11 @@ class Function:
             return None
         return values[0] if len(values) == 1 else tuple(values)
 
+    def type(self) -> FuncType:
+        """The function's type (`WebAssembly.Function.type` of the type reflection proposal): its `parameters` and
+        `results`."""
+        return self._type
+
     def _funcref(self) -> Any:
         if not self._instance._backend.supports("table.funcs"):
             raise NotImplementedError(f"the {self._instance._backend.name} backend has no function references")
@@ -151,26 +165,67 @@ def _limits(initial: object, maximum: object, what: str) -> None:
         raise ValueError(f"the maximum size of a {what} is an int, not less than the initial size")
 
 
-class Memory:
-    """`WebAssembly.Memory`: an exported linear memory, or `Memory(initial, maximum)` (in pages of 64 KiB) made on its
-    own, which can be given to instances as an import (and shared by them). Bytes are copied in and out (nothing is
-    shared with the runtime)."""
+def _sizes(
+    spec: int | Mapping[str, Any] | MemoryType | TableType, maximum: int | None, what: str
+) -> tuple[Any, int | None]:
+    """The initial and the maximum size of a memory or a table, from `initial, maximum`, or from a descriptor: a
+    mapping `{"initial": 1, "maximum": 3}` as in the JavaScript API, or a type (`MemoryType`, `TableType`) as `type()`
+    gives it. A `shared` memory is refused: there are no threads here."""
+    if isinstance(spec, Mapping):
+        descriptor = spec
+        if maximum is not None:
+            raise TypeError(f"a descriptor of a {what} has its own maximum")
+        initial = descriptor.get("initial", descriptor.get("minimum"))
+        if initial is None:
+            raise TypeError(f"the descriptor of a {what} needs an `initial` size")
+        if descriptor.get("shared"):
+            raise NotImplementedError("a shared memory: there are no threads")
+        return initial, descriptor.get("maximum")
+    if isinstance(spec, (MemoryType, TableType)):
+        if maximum is not None:
+            raise TypeError(f"a type of a {what} has its own maximum")
+        if getattr(spec, "shared", False):
+            raise NotImplementedError("a shared memory: there are no threads")
+        return spec.minimum, spec.maximum
+    return spec, maximum
 
-    def __init__(self, initial: int, maximum: int | None = None, *, backend: Backend | str | None = None) -> None:
-        _limits(initial, maximum, "memory")
+
+class Memory:
+    """`WebAssembly.Memory`: an exported linear memory, or one made on its own with `Memory(initial, maximum)` (in
+    pages of 64 KiB) or, as in JavaScript, `Memory({"initial": 1, "maximum": 3})` (a `MemoryType` will do too), which
+    can be given to instances as an import (and shared by them). Bytes are copied in and out (nothing is shared with
+    the runtime)."""
+
+    def __init__(
+        self,
+        initial: int | Mapping[str, Any] | MemoryType,
+        maximum: int | None = None,
+        *,
+        backend: Backend | str | None = None,
+    ) -> None:
+        size, limit = _sizes(initial, maximum, "memory")
+        _limits(size, limit, "memory")
         target = _backend(backend)
         if not target.supports("import.memory"):
             raise NotImplementedError(f"the {target.name} backend can't make a memory on its own")
         self._backend = target
-        self._handle = target.new_memory(initial, maximum)
+        self._handle = target.new_memory(size, limit)
+        self._maximum: int | None = limit
         self.name: str | None = None
 
     @classmethod
-    def _wrap(cls, backend: Backend, handle: Any, name: str | None = None) -> Memory:
+    def _wrap(cls, backend: Backend, handle: Any, name: str | None = None, type_: MemoryType | None = None) -> Memory:
         """A memory that already exists: an export."""
         self = object.__new__(cls)
         self._backend, self._handle, self.name = backend, handle, name
+        self._maximum = None if type_ is None else type_.maximum
         return self
+
+    def type(self) -> MemoryType:
+        """`WebAssembly.Memory.type` of the type reflection proposal: `minimum` (the size now, in pages, as the
+        specification has it; JavaScriptCore keeps the initial size here), `maximum` (None if there is none) and
+        `shared` (never)."""
+        return MemoryType(len(self) // PAGE_SIZE, self._maximum, False)
 
     def __len__(self) -> int:
         return self._backend.memory_size(self._handle)
@@ -229,46 +284,62 @@ class Memory:
 
 
 class Global:
-    """`WebAssembly.Global`: `Global("i32", 7, mutable=True)` makes one on its own, which can be given to an instance
-    as an import (and shared by several); an exported one comes from `instance.exports`. `value` reads it and, for a
-    mutable one, writes it (an immutable one raises TypeError, as in JavaScript)."""
+    """`WebAssembly.Global`: `Global("i32", 7, mutable=True)` makes one on its own, or, as in JavaScript,
+    `Global({"value": "i32", "mutable": True}, 7)` (a `GlobalType` will do too); it can be given to an instance as an
+    import (and shared by several). An exported one comes from `instance.exports`. `value` reads it and, for a
+    mutable one, writes it (an immutable one raises TypeError, as in JavaScript); `type()` is its `GlobalType`."""
 
     def __init__(
         self,
-        kind: str,
+        kind: str | Mapping[str, Any] | GlobalType,
         value: int | float = 0,
         *,
         mutable: bool = False,
         backend: Backend | str | None = None,
     ) -> None:
-        if kind not in ("i32", "i64", "f32", "f64"):
-            raise ValueError(f"a global of type {kind!r}: expected i32, i64, f32 or f64")
+        valtype: Any = kind
+        if isinstance(kind, Mapping):
+            valtype, mutable = kind.get("value"), bool(kind.get("mutable", mutable))
+        elif isinstance(kind, GlobalType):
+            valtype, mutable = kind.value, kind.mutable
+        if valtype not in ("i32", "i64", "f32", "f64"):
+            raise ValueError(f"a global of type {valtype!r}: expected i32, i64, f32 or f64")
         target = _backend(backend)
         if not target.supports("import.global"):
             raise NotImplementedError(f"the {target.name} backend can't make a global on its own")
         self._backend = target
-        self._handle = target.new_global(kind, _check(value, kind), mutable)
+        self._handle = target.new_global(valtype, _check(value, valtype), mutable)
         self.name: str | None = None
-        self.type = kind
-        self.mutable: bool | None = mutable
+        self._kind: str = valtype
+        self.mutable = mutable
 
     @classmethod
-    def _wrap(cls, backend: Backend, handle: Any, kind: str, name: str | None = None) -> Global:
+    def _wrap(cls, backend: Backend, handle: Any, type_: GlobalType, name: str | None = None) -> Global:
         """A global that already exists: an export."""
         self = object.__new__(cls)
-        self._backend, self._handle, self.name, self.type, self.mutable = backend, handle, name, kind, None
+        self._backend, self._handle, self.name, self._kind, self.mutable = (
+            backend,
+            handle,
+            name,
+            type_.value,
+            type_.mutable,
+        )
         return self
+
+    def type(self) -> GlobalType:
+        """`WebAssembly.Global.type` of the type reflection proposal: the value type and whether it can be written."""
+        return GlobalType(self._kind, bool(self.mutable))
 
     @property
     def value(self) -> int | float:
-        return self._backend.global_get(self._handle, self.type)
+        return self._backend.global_get(self._handle, self._kind)
 
     @value.setter
     def value(self, new: int | float) -> None:
-        self._backend.global_set(self._handle, self.type, _check(new, self.type))
+        self._backend.global_set(self._handle, self._kind, _check(new, self._kind))
 
     def __repr__(self) -> str:
-        return f"<wasmhost.Global {self.name or ''}: {self.type}{' mutable' if self.mutable else ''}>"
+        return f"<wasmhost.Global {self.name or ''}: {self._kind}{' mutable' if self.mutable else ''}>"
 
 
 class Ref:
@@ -426,34 +497,56 @@ class FuncRef:
 
 
 class Table:
-    """`WebAssembly.Table` of functions: an exported one, or `Table("funcref", initial, maximum)` made on its own,
+    """`WebAssembly.Table` of functions: an exported one, or one made on its own, `Table("funcref", initial, maximum)`
+    or, as in JavaScript, `Table({"element": "anyfunc", "initial": 2, "maximum": 4})` (a `TableType` will do too),
     which can be given to instances as an import (and shared by them). `get(i)` is a `FuncRef` (or None for an empty
     entry); `set(i, f)` takes an exported `Function`, a `FuncRef` or None. Only `"funcref"` tables are supported."""
 
     def __init__(
         self,
-        kind: str = "funcref",
+        element: str | Mapping[str, Any] | TableType = "funcref",
         initial: int = 0,
         maximum: int | None = None,
         *,
         backend: Backend | str | None = None,
     ) -> None:
+        if isinstance(element, Mapping):
+            kind = element.get("element", "funcref")
+        elif isinstance(element, TableType):
+            kind = element.element
+        else:
+            kind = element
+        size, limit = _sizes(element, maximum, "table") if not isinstance(element, str) else (initial, maximum)
+        if kind == "anyfunc":  # what the JavaScript API called it first
+            kind = "funcref"
         if kind != "funcref":
             raise NotImplementedError(f"a table of {kind!r}: only funcref tables are supported")
-        _limits(initial, maximum, "table")
+        _limits(size, limit, "table")
         target = _backend(backend)
         if not target.supports("import.table"):
             raise NotImplementedError(f"the {target.name} backend can't make a table on its own")
         self._backend = target
-        self._handle = target.new_table(initial, maximum)
+        self._handle = target.new_table(size, limit)
+        self._maximum: int | None = limit
         self.name: str | None = None
 
     @classmethod
-    def _wrap(cls, backend: Backend, handle: Any, name: str | None = None) -> Table:
+    def _wrap(cls, backend: Backend, handle: Any, name: str | None = None, type_: TableType | None = None) -> Table:
         """A table that already exists: an export."""
         self = object.__new__(cls)
         self._backend, self._handle, self.name = backend, handle, name
+        self._maximum = None if type_ is None else type_.maximum
         return self
+
+    def type(self) -> TableType:
+        """`WebAssembly.Table.type` of the type reflection proposal: the `element` type, `minimum` (the length now)
+        and `maximum` (None if there is none)."""
+        return TableType("funcref", len(self), self._maximum)
+
+    @property
+    def length(self) -> int:
+        """`WebAssembly.Table.length`: the same as `len(table)`."""
+        return len(self)
 
     def _need(self) -> None:
         if not self._backend.supports("table.funcs"):
@@ -569,15 +662,21 @@ def _resolve_imports(
             if not callable(value):
                 raise LinkError(f"import {where} is not a function")
             found.append(HostFunction(d.module, d.name, d.type, value))
-        elif d.kind == "global" and isinstance(d.type, str):
-            if isinstance(value, (int, float)) and not isinstance(value, bool) and not d.mutable:
-                value = Global(d.type, value, backend=module._backend)  # a number is an immutable global
+        elif d.kind == "global" and isinstance(d.type, GlobalType):
+            if isinstance(value, (int, float)) and not isinstance(value, bool) and not d.type.mutable:
+                value = Global(d.type.value, value, backend=module._backend)  # a number is an immutable global
             if not isinstance(value, Global):
-                raise LinkError(f"import {where} is not a Global" + (" (it is mutable)" if d.mutable else ""))
+                raise LinkError(f"import {where} is not a Global" + (" (it is mutable)" if d.type.mutable else ""))
             if value._backend is not module._backend:
                 raise LinkError(f"import {where} was made on another backend ({value._backend.name})")
-            if value.type != d.type:
-                raise LinkError(f"import {where} is an {value.type}, the module wants an {d.type}")
+            mine = value.type()
+            if mine.value != d.type.value:
+                raise LinkError(f"import {where} is an {mine.value}, the module wants an {d.type.value}")
+            if mine.mutable != d.type.mutable:
+                raise LinkError(
+                    f"import {where} is {'mutable' if mine.mutable else 'immutable'}, "
+                    f"the module wants {'a mutable' if d.type.mutable else 'an immutable'} one"
+                )
             found.append(HostObject(d.module, d.name, "global", value._handle))
         elif d.kind in ("memory", "table"):
             cls = Memory if d.kind == "memory" else Table
@@ -624,14 +723,15 @@ class Instance:
         for e in module._info.exports:
             if e.kind == "function" and isinstance(e.type, FuncType):
                 items[e.name] = Function(self, e.name, e.type)
-            elif e.kind == "memory":
-                items[e.name] = Memory._wrap(self._backend, self._backend.export_memory(self._handle, e.name), e.name)
-            elif e.kind == "global" and isinstance(e.type, str):
-                items[e.name] = Global._wrap(
-                    self._backend, self._backend.export_global(self._handle, e.name, e.type), e.type, e.name
-                )
-            elif e.kind == "table":
-                items[e.name] = Table._wrap(self._backend, self._backend.export_table(self._handle, e.name), e.name)
+            elif e.kind == "memory" and isinstance(e.type, MemoryType):
+                handle = self._backend.export_memory(self._handle, e.name)
+                items[e.name] = Memory._wrap(self._backend, handle, e.name, e.type)
+            elif e.kind == "global" and isinstance(e.type, GlobalType):
+                handle = self._backend.export_global(self._handle, e.name, e.type.value)
+                items[e.name] = Global._wrap(self._backend, handle, e.type, e.name)
+            elif e.kind == "table" and isinstance(e.type, TableType):
+                handle = self._backend.export_table(self._handle, e.name)
+                items[e.name] = Table._wrap(self._backend, handle, e.name, e.type)
         self.exports = _Exports(items)
 
     def batch(self) -> Batch:
