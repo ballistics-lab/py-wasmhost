@@ -3,6 +3,8 @@
     python examples/wasi_sh.py                              # a prompt; `exit` or the end of the input leaves
     python examples/wasi_sh.py -c 'echo hi | tr a-z A-Z'    # one command line, then exit (with its exit status)
     python examples/wasi_sh.py --backend node               # pick the engine (default: wasmhost.get_backend())
+    python examples/wasi_sh.py --home                       # the real files under ~ (`/` to the shell)
+    python examples/wasi_sh.py --root DIR [--readonly]      # the same for another real directory
 
     $ x=5; echo $((x * 2))
     10
@@ -26,8 +28,18 @@
 It is made for Pythonista 3 on an iPhone (and PythonIDE): Python 3.10, the standard library and wasmhost, nothing else,
 no process to start and nothing to install. wasmhost is the engine (there `jscontext`, Apple's JavaScriptCore); this
 file is the rest of the computer a program expects: a WASI host in Python (`class Wasi`) over a file system that is a
-dict (`class Vfs`). Nothing here touches a real file: the tree (`/`, `/tmp`, `/dev/null`) and the pipes are Python
-objects, and they are gone when the script ends.
+dict (`class Vfs`). By default nothing here touches a real file: the tree (`/`, `/tmp`, `/dev/null`) and the pipes are
+Python objects, and they are gone when the script ends.
+
+With `--home` (or `--root DIR`, `class RealVfs`) the shell works on the real files instead: `~` (in Pythonista, the
+data container of the app, with `Documents/` in it) is `/` to it. Inside it everything is allowed and is real: it can
+read, create, change and delete any file or directory there, hidden ones too, and no question is asked. Outside it
+nothing can be named, as with the directories a WASI program is given: `..` stops at the root, `/etc/passwd` means
+`~/etc/passwd`, and a symbolic link is followed only if what it points to is inside as well (one that leads out is
+refused with an error). `--readonly` lets the shell read and nothing else. Names are the real ones, in UTF-8 (bytes
+that are not UTF-8 are kept as they are); on iOS APFS does not tell `A` from `a`, a file iCloud has not downloaded is a
+small `.name.icloud` file, and a very large directory is listed whole when `ls` reads it.
+`/dev/null` and `/tmp` are not made there: make a `tmp` folder if a script wants one.
 
 Works: `cd`, `$(...)`, pipes, `>`, `>>`, `<`, here-documents, functions, `if`/`for`/`while`/`case`, `read`, `test`,
 `printf`, arithmetic, `.` (source a file), and `cat ls cp mv rm mkdir find du touch stat grep sed awk sort uniq cut tr
@@ -57,11 +69,13 @@ from __future__ import annotations
 
 import argparse
 import codecs
+import errno
 import hashlib
 import io
 import itertools
 import os
 import posixpath
+import stat
 import struct
 import sys
 import tarfile
@@ -80,7 +94,14 @@ WASM_SHA256 = "195b770af8fad458de09144abd3cc3e688a9a83907ca90f7938a253253dfb9b3"
 ENV = {"PATH": "/", "HOME": "/", "TERM": "dumb", "LANG": "C.UTF-8", "PS1": "$ ", "PS2": "> ", "USER": "root"}
 # WASI errno numbers (they are not the platform's).
 ESUCCESS, EBADF, EBUSY, EEXIST, EINVAL, EISDIR, ENOENT, ENOSYS = 0, 8, 10, 20, 28, 31, 44, 52
-ENOTDIR, ENOTEMPTY, EPERM, ESPIPE = 54, 55, 63, 70
+ENOTDIR, ENOTEMPTY, EPERM, EROFS, ESPIPE, ENOTCAPABLE = 54, 55, 63, 69, 70, 76
+ERRNO = {  # the platform's errno of an OSError, as WASI numbers it
+    errno.EACCES: 2, errno.EBADF: EBADF, errno.EBUSY: EBUSY, errno.EEXIST: EEXIST, errno.EFBIG: 22,
+    errno.EINVAL: EINVAL, errno.EIO: 29, errno.EISDIR: EISDIR, errno.ELOOP: 32, errno.EMFILE: 33,
+    errno.ENAMETOOLONG: 37, errno.ENOENT: ENOENT, errno.ENOMEM: 48, errno.ENOSPC: 51, errno.ENOSYS: ENOSYS,
+    errno.ENOTDIR: ENOTDIR, errno.ENOTEMPTY: ENOTEMPTY, errno.EPERM: EPERM, errno.EROFS: EROFS,
+    errno.ESPIPE: ESPIPE, errno.EXDEV: 75,
+}  # fmt: skip
 FILETYPE_CHAR, FILETYPE_DIR, FILETYPE_FILE = 2, 3, 4
 RIGHT_READ, RIGHT_WRITE, RIGHT_ALLOCATE, RIGHT_SET_SIZE = 1 << 1, 1 << 6, 1 << 8, 1 << 22
 ALL_RIGHTS = 0xFFFFFFFFFFFFFFFF
@@ -99,7 +120,21 @@ class WasiError(Exception):
         self.code = code
 
 
-# --- the file system: a dict
+# --- the file systems: a dict, or a real directory. Both answer the same questions (`Wasi` asks only these).
+
+
+def filetype_of(mode: int) -> int:
+    if stat.S_ISDIR(mode):
+        return FILETYPE_DIR
+    if stat.S_ISREG(mode):
+        return FILETYPE_FILE
+    if stat.S_ISLNK(mode):
+        return 7
+    return FILETYPE_CHAR if stat.S_ISCHR(mode) else 0
+
+
+def pack_stat(dev: int, ino: int, filetype: int, nlink: int, size: int, atime: int, mtime: int, ctime: int) -> bytes:
+    return struct.pack("<QQBxxxxxxxQQQQQ", dev, ino, filetype, nlink, size, atime, mtime, ctime)
 
 
 class Node:
@@ -116,15 +151,58 @@ class Node:
     def filetype(self) -> int:
         return {"dir": FILETYPE_DIR, "file": FILETYPE_FILE}.get(self.kind, FILETYPE_CHAR)
 
-    @property
-    def size(self) -> int:
-        return len(self.data)
-
     def stat(self) -> bytes:
         nlink = 2 if self.kind == "dir" else 1
-        return struct.pack(
-            "<QQBxxxxxxxQQQQQ", 1, self.ino, self.filetype, nlink, self.size, self.atime, self.mtime, self.ctime
-        )
+        return pack_stat(1, self.ino, self.filetype, nlink, len(self.data), self.atime, self.mtime, self.ctime)
+
+
+class Handle:
+    """An open file, whatever it is kept in. A duplicated descriptor shares it; it is closed with the last one."""
+
+    def __init__(self) -> None:
+        self.refs = 1
+
+    def read(self, offset: int, size: int) -> bytes:
+        raise NotImplementedError
+
+    def write(self, offset: int | None, data: bytes) -> int:
+        """Write DATA at OFFSET (None: at the end); the offset after it."""
+        raise NotImplementedError
+
+    def size(self) -> int:
+        raise NotImplementedError
+
+    def stat(self) -> bytes:
+        raise NotImplementedError
+
+    def close(self) -> None:
+        self.refs -= 1
+
+
+class MemHandle(Handle):
+    def __init__(self, node: Node) -> None:
+        super().__init__()
+        self.node = node
+
+    def read(self, offset: int, size: int) -> bytes:
+        return bytes(self.node.data[offset : offset + size])
+
+    def write(self, offset: int | None, data: bytes) -> int:
+        node = self.node
+        if node.kind == "null":
+            return 0 if offset is None else offset
+        start = len(node.data) if offset is None else offset
+        if start > len(node.data):
+            node.data += bytes(start - len(node.data))
+        node.data[start : start + len(data)] = data
+        node.mtime = time.time_ns()
+        return start + len(data)
+
+    def size(self) -> int:
+        return len(self.node.data)
+
+    def stat(self) -> bytes:
+        return self.node.stat()
 
 
 class Vfs:
@@ -221,6 +299,54 @@ class Vfs:
         del old_parent.entries[old_name]
         new_parent.entries[new_name] = node
 
+    # What `Wasi` asks of a file system.
+
+    def stat(self, path: str, follow: bool = True) -> bytes:
+        return self.find(path).stat()  # (no links here)
+
+    def open(self, path: str, oflags: int, read: bool, write: bool) -> Handle | None:
+        """The file at PATH, made (oflags 1), emptied (8) as the flags say; None for a directory."""
+        try:
+            node = self.find(path)
+        except WasiError as exc:
+            if exc.code != ENOENT or not oflags & 1:
+                raise
+            node = self.create(path, "file")
+        else:
+            if oflags & 1 and oflags & 4:
+                raise WasiError(EEXIST)
+        if node.kind == "dir":
+            if write:
+                raise WasiError(EISDIR)
+            return None
+        if oflags & 2:
+            raise WasiError(ENOTDIR)
+        if oflags & 8 and node.kind == "file":
+            node.data = bytearray()
+            node.mtime = time.time_ns()
+        return MemHandle(node)
+
+    def create_dir(self, path: str) -> None:
+        self.create(path, "dir")
+
+    def listing(self, path: str) -> list[tuple[str, int, int]]:
+        """(name, inode, filetype) of what is in the directory, with `.` and `..`, in the order `ls` of this build
+        wants: it does not sort, and lists what it is given from the last name to the first."""
+        directory = self.find(path)
+        parent = self.find(posixpath.dirname(path))
+        names = sorted(directory.entries.items(), key=lambda item: item[0], reverse=True)
+        return [(name, node.ino, node.filetype) for name, node in names] + [
+            ("..", parent.ino, FILETYPE_DIR),
+            (".", directory.ino, FILETYPE_DIR),
+        ]
+
+    def set_times(self, path: str, atime: int | None, mtime: int | None) -> None:
+        node = self.find(path)
+        if atime is not None:
+            node.atime = atime
+        if mtime is not None:
+            node.mtime = mtime
+
     # What the program of a script of yours may want: put a file in, take one out.
 
     def write_file(self, path: str, data: bytes) -> None:
@@ -238,6 +364,135 @@ class Vfs:
         return bytes(node.data)
 
 
+class RealHandle(Handle):
+    def __init__(self, osfd: int) -> None:
+        super().__init__()
+        self.osfd = osfd
+
+    def read(self, offset: int, size: int) -> bytes:
+        return os.pread(self.osfd, size, offset)
+
+    def write(self, offset: int | None, data: bytes) -> int:
+        start = os.fstat(self.osfd).st_size if offset is None else offset
+        done = 0
+        while done < len(data):
+            done += os.pwrite(self.osfd, data[done:], start + done)
+        return start + done
+
+    def size(self) -> int:
+        return os.fstat(self.osfd).st_size
+
+    def stat(self) -> bytes:
+        return RealVfs.pack(os.fstat(self.osfd))
+
+    def close(self) -> None:
+        self.refs -= 1
+        if self.refs == 0:
+            os.close(self.osfd)
+
+
+class RealVfs:
+    """A real directory as `/`: the shell can read, change and delete what is in it, and can name nothing outside.
+
+    Every name is looked up inside ROOT: `..` stops at it, an absolute path starts from it, and a symbolic link that
+    leads out of it is refused (a link may be followed only to something that is inside). READONLY refuses every change.
+    """
+
+    def __init__(self, root: str, readonly: bool = False) -> None:
+        self.root = os.path.realpath(os.path.expanduser(root))
+        os.makedirs(self.root, exist_ok=True)
+        self.readonly = readonly
+
+    normal = staticmethod(Vfs.normal)
+
+    def host(self, path: str, follow: bool = True) -> str:
+        """The real path of PATH. With FOLLOW false the last name is not looked through (to remove or rename a link)."""
+        rel = path.lstrip("/")
+        full = os.path.join(self.root, rel) if rel else self.root
+        real = os.path.realpath(full)
+        if not follow and rel:
+            real = os.path.join(os.path.realpath(os.path.dirname(full)), os.path.basename(full))
+        if real != self.root and not real.startswith(self.root + os.sep):
+            raise WasiError(ENOTCAPABLE)
+        return full
+
+    def changing(self) -> None:
+        if self.readonly:
+            raise WasiError(EROFS)
+
+    @staticmethod
+    def pack(st: os.stat_result) -> bytes:
+        return pack_stat(
+            st.st_dev, st.st_ino, filetype_of(st.st_mode), st.st_nlink, st.st_size, st.st_atime_ns, st.st_mtime_ns,
+            st.st_ctime_ns,
+        )  # fmt: skip
+
+    def stat(self, path: str, follow: bool = True) -> bytes:
+        full = self.host(path, follow)
+        return self.pack(os.stat(full) if follow else os.lstat(full))
+
+    def open(self, path: str, oflags: int, read: bool, write: bool) -> Handle | None:
+        full = self.host(path)
+        try:
+            exists = os.stat(full)
+        except FileNotFoundError:
+            exists = None
+        if exists is None:
+            if not oflags & 1:
+                raise WasiError(ENOENT)
+            self.changing()
+        elif oflags & 1 and oflags & 4:
+            raise WasiError(EEXIST)
+        if exists is not None and stat.S_ISDIR(exists.st_mode):
+            if write:
+                raise WasiError(EISDIR)
+            return None
+        if oflags & 2:
+            raise WasiError(ENOTDIR)
+        if write or oflags & 8:
+            self.changing()
+        flags = os.O_RDWR if read and write else os.O_WRONLY if write else os.O_RDONLY
+        flags |= getattr(os, "O_CLOEXEC", 0)
+        flags |= (
+            (os.O_CREAT if oflags & 1 else 0) | (os.O_EXCL if oflags & 4 else 0) | (os.O_TRUNC if oflags & 8 else 0)
+        )
+        return RealHandle(os.open(full, flags, 0o666))
+
+    def create_dir(self, path: str) -> None:
+        self.changing()
+        os.mkdir(self.host(path, follow=False))
+
+    def remove(self, path: str, directory: bool) -> None:
+        self.changing()
+        full = self.host(path, follow=False)
+        if directory:
+            os.rmdir(full)
+        else:
+            if os.path.isdir(full) and not os.path.islink(full):
+                raise WasiError(EISDIR)
+            os.unlink(full)
+
+    def rename(self, source: str, target: str) -> None:
+        self.changing()
+        os.rename(self.host(source, follow=False), self.host(target, follow=False))
+
+    def listing(self, path: str) -> list[tuple[str, int, int]]:
+        full = self.host(path)
+        out = []
+        for name in sorted(os.listdir(full), reverse=True):
+            st = os.lstat(os.path.join(full, name))  # a link is told as one, and not looked through
+            out.append((name, st.st_ino, filetype_of(st.st_mode)))
+        here = os.stat(full)
+        up = os.stat(self.host(posixpath.dirname(path)))
+        return [*out, ("..", up.st_ino, FILETYPE_DIR), (".", here.st_ino, FILETYPE_DIR)]
+
+    def set_times(self, path: str, atime: int | None, mtime: int | None) -> None:
+        self.changing()
+        full = self.host(path)
+        st = os.stat(full)
+        os.utime(full, ns=(st.st_atime_ns if atime is None else atime, st.st_mtime_ns if mtime is None else mtime))
+
+
 # --- descriptors
 
 
@@ -247,13 +502,13 @@ class Pipe:
 
 
 class Fd:
-    """An open descriptor: a standard stream, a directory (by path), a file (by node) or an end of a pipe."""
+    """An open descriptor: a standard stream, a directory (by path), a file (by handle) or an end of a pipe."""
 
     def __init__(
         self,
         kind: str,
         path: str = "",
-        node: Node | None = None,
+        handle: Handle | None = None,
         pipe: Pipe | None = None,
         readable: bool = True,
         writable: bool = True,
@@ -261,18 +516,24 @@ class Fd:
     ) -> None:
         self.kind = kind  # "stdin", "stdout", "stderr", "dir", "file", "pipe"
         self.path = path
-        self.node = node
+        self.handle = handle
         self.pipe = pipe
         self.readable = readable
         self.writable = writable
         self.append = append
         self.offset = [0]  # a cell: a duplicate shares it, as POSIX makes descriptors of one open file do
-        self.listing: list[tuple[str, Node]] | None = None  # a directory being read
+        self.listing: list[tuple[str, int, int]] | None = None  # a directory being read
 
     def duplicate(self) -> Fd:
-        other = Fd(self.kind, self.path, self.node, self.pipe, self.readable, self.writable, self.append)
+        other = Fd(self.kind, self.path, self.handle, self.pipe, self.readable, self.writable, self.append)
         other.offset = self.offset
+        if self.handle is not None:
+            self.handle.refs += 1
         return other
+
+    def release(self) -> None:
+        if self.handle is not None:
+            self.handle.close()
 
 
 class Wasi:
@@ -284,7 +545,7 @@ class Wasi:
 
     def __init__(
         self,
-        vfs: Vfs,
+        vfs: Vfs | RealVfs,
         argv: list[str],
         stdin: Callable[[int], bytes],
         stdout: Callable[[bytes], None],
@@ -340,6 +601,8 @@ class Wasi:
                 method(*args)
             except WasiError as exc:
                 return exc.code
+            except OSError as exc:
+                return ERRNO.get(exc.errno or 0, 29)
             return ESUCCESS
 
         return call
@@ -405,7 +668,10 @@ class Wasi:
         if entry is None:
             return -1
         if fd != new:
+            old = self.fds.get(new)
             self.fds[new] = entry.duplicate()
+            if old is not None:
+                old.release()
         return new
 
     def host_winsize(self, rows_ptr: int, cols_ptr: int) -> None:
@@ -482,9 +748,10 @@ class Wasi:
     # --- reading and writing
 
     def fd_close(self, fd: int) -> None:
-        self.entry(fd)
+        entry = self.entry(fd)
         if fd >= FIRST_FREE_FD:
             del self.fds[fd]
+            entry.release()
 
     def fd_fdstat_get(self, fd: int, buf: int) -> None:
         entry = self.entry(fd)
@@ -496,10 +763,10 @@ class Wasi:
 
     def fd_filestat_get(self, fd: int, buf: int) -> None:
         entry = self.entry(fd)
-        if entry.node is not None:
-            self.mem.write(buf, entry.node.stat())
+        if entry.handle is not None:
+            self.mem.write(buf, entry.handle.stat())
         elif entry.kind == "dir":
-            self.mem.write(buf, self.vfs.find(entry.path).stat())
+            self.mem.write(buf, self.vfs.stat(entry.path))
         else:
             self.mem.write(buf, struct.pack("<QQBxxxxxxxQQQQQ", 0, 0, FILETYPE_CHAR, 1, 0, 0, 0, 0))
 
@@ -523,13 +790,9 @@ class Wasi:
             data = bytes(entry.pipe.buffer[:size])
             del entry.pipe.buffer[:size]
             return data
-        if entry.kind == "file" and entry.node is not None:
-            node = entry.node
-            if node.kind == "null":
-                return b""
-            start = entry.offset[0]
-            data = bytes(node.data[start : start + size])
-            entry.offset[0] = start + len(data)
+        if entry.kind == "file" and entry.handle is not None:
+            data = entry.handle.read(entry.offset[0], size)
+            entry.offset[0] += len(data)
             return data
         raise WasiError(EISDIR if entry.kind == "dir" else EBADF)
 
@@ -550,25 +813,17 @@ class Wasi:
             self.stderr(data)
         elif entry.kind == "pipe" and entry.pipe is not None:
             entry.pipe.buffer += data
-        elif entry.kind == "file" and entry.node is not None:
-            node = entry.node
-            if node.kind == "null":
-                return
-            start = len(node.data) if entry.append else entry.offset[0]
-            if start > len(node.data):
-                node.data += bytes(start - len(node.data))
-            node.data[start : start + len(data)] = data
-            entry.offset[0] = start + len(data)
-            node.mtime = time.time_ns()
+        elif entry.kind == "file" and entry.handle is not None:
+            entry.offset[0] = entry.handle.write(None if entry.append else entry.offset[0], data)
         else:
             raise WasiError(EISDIR if entry.kind == "dir" else EBADF)
 
     def fd_seek(self, fd: int, offset: int, whence: int, out: int) -> None:
         entry = self.entry(fd)
-        if entry.kind != "file" or entry.node is None:
+        if entry.kind != "file" or entry.handle is None:
             raise WasiError(ESPIPE)
         offset = offset - (1 << 64) if offset >= 1 << 63 else offset
-        base = (0, entry.offset[0], entry.node.size)[whence] if whence in (0, 1, 2) else None
+        base = (0, entry.offset[0], entry.handle.size())[whence] if whence in (0, 1, 2) else None
         if base is None or base + offset < 0:
             raise WasiError(EINVAL)
         entry.offset[0] = base + offset
@@ -579,20 +834,13 @@ class Wasi:
         if entry.kind != "dir":
             raise WasiError(ENOTDIR)
         if cookie == 0 or entry.listing is None:  # the names as they are when the reading starts, whatever is removed
-            directory = self.vfs.find(entry.path)
-            # This build's `ls` does not sort and lists what it is given from the last name to the first; so the names
-            # are given in descending order (and `.` and `..` at the end), which makes the list come out ascending.
-            entry.listing = [
-                *sorted(directory.entries.items(), key=lambda item: item[0], reverse=True),
-                ("..", self.vfs.find(posixpath.dirname(entry.path))),
-                (".", directory),
-            ]
+            entry.listing = self.vfs.listing(entry.path)
         names = entry.listing
         out = b""
         for index in range(cookie, len(names)):
-            name, node = names[index]
-            raw = name.encode()
-            out += struct.pack("<QQIBxxx", index + 1, node.ino, len(raw), node.filetype) + raw
+            name, ino, filetype = names[index]
+            raw = name.encode("utf-8", "surrogateescape")  # a name of the real file system may not be UTF-8
+            out += struct.pack("<QQIBxxx", index + 1, ino, len(raw), filetype) + raw
             if len(out) >= size:
                 break
         out = out[:size]  # a cut entry tells the caller there is more
@@ -614,50 +862,28 @@ class Wasi:
         out: int,
     ) -> None:
         path = self.resolve(dirfd, ptr, size)
-        try:
-            node: Node | None = self.vfs.find(path)
-        except WasiError as exc:
-            if exc.code != ENOENT or not oflags & 1:
-                raise
-            node = None
-        if node is None:  # created
-            node = self.vfs.create(path, "file")
-        elif oflags & 1 and oflags & 4:
-            raise WasiError(EEXIST)
         write = bool(rights & (RIGHT_WRITE | RIGHT_SET_SIZE | RIGHT_ALLOCATE))
         read = bool(rights & RIGHT_READ) or not write
-        if node.kind == "dir":
-            if write:
-                raise WasiError(EISDIR)
-            self.put32(out, self.new_fd(Fd("dir", path, node)))
+        handle = self.vfs.open(path, oflags, read, write)
+        if handle is None:  # a directory
+            self.put32(out, self.new_fd(Fd("dir", path)))
             return
-        if oflags & 2:
-            raise WasiError(ENOTDIR)
-        if oflags & 8 and node.kind == "file":
-            node.data = bytearray()
-            node.mtime = time.time_ns()
-        entry = Fd("file", path, node, readable=read, writable=write, append=bool(fdflags & 1))
+        entry = Fd("file", path, handle, readable=read, writable=write, append=bool(fdflags & 1))
         self.put32(out, self.new_fd(entry))
 
     def path_filestat_get(self, fd: int, flags: int, ptr: int, size: int, buf: int) -> None:
-        self.mem.write(buf, self.vfs.find(self.resolve(fd, ptr, size)).stat())
+        self.mem.write(buf, self.vfs.stat(self.resolve(fd, ptr, size), bool(flags & 1)))
 
     def path_filestat_set_times(
         self, fd: int, flags: int, ptr: int, size: int, atim: int, mtim: int, fst_flags: int
     ) -> None:
-        node = self.vfs.find(self.resolve(fd, ptr, size))
         now = time.time_ns()
-        if fst_flags & 2:
-            node.atime = now
-        elif fst_flags & 1:
-            node.atime = atim
-        if fst_flags & 8:
-            node.mtime = now
-        elif fst_flags & 4:
-            node.mtime = mtim
+        atime = now if fst_flags & 2 else atim if fst_flags & 1 else None
+        mtime = now if fst_flags & 8 else mtim if fst_flags & 4 else None
+        self.vfs.set_times(self.resolve(fd, ptr, size), atime, mtime)
 
     def path_create_directory(self, fd: int, ptr: int, size: int) -> None:
-        self.vfs.create(self.resolve(fd, ptr, size), "dir")
+        self.vfs.create_dir(self.resolve(fd, ptr, size))
 
     def path_remove_directory(self, fd: int, ptr: int, size: int) -> None:
         self.vfs.remove(self.resolve(fd, ptr, size), directory=True)
@@ -669,7 +895,7 @@ class Wasi:
         self.vfs.rename(self.resolve(fd, ptr, size), self.resolve(new_fd, new_ptr, new_size))
 
     def path_readlink(self, fd: int, ptr: int, size: int, buf: int, buf_size: int, used_ptr: int) -> None:
-        self.vfs.find(self.resolve(fd, ptr, size))
+        self.vfs.stat(self.resolve(fd, ptr, size))
         raise WasiError(EINVAL)  # there are no links: whatever exists is not one
 
     def path_link(self, fd: int, flags: int, ptr: int, size: int, new_fd: int, new_ptr: int, new_size: int) -> None:
@@ -721,7 +947,7 @@ def find_wasm(explicit: str | None = None) -> str:
 class Shell:
     """One ash, on a file system of its own. `run` is one session; its input is either LINES or a prompt (`input()`)."""
 
-    def __init__(self, module: wasmhost.Module, vfs: Vfs | None = None) -> None:
+    def __init__(self, module: wasmhost.Module, vfs: Vfs | RealVfs | None = None) -> None:
         self.module = module
         self.vfs = vfs if vfs is not None else Vfs()
 
@@ -810,10 +1036,19 @@ def main() -> int:
     parser.add_argument("-c", dest="command", metavar="LINE", help="run this command line and exit with its status")
     parser.add_argument("--backend", choices=sorted(wasmhost.BACKENDS), help="the engine (default: the first found)")
     parser.add_argument(
+        "--root", metavar="DIR", help="a real directory to be `/` (made if missing); default: an in-memory file system"
+    )
+    parser.add_argument("--home", action="store_true", help="the real files under ~ are `/` (as --root ~)")
+    parser.add_argument("--readonly", action="store_true", help="with --root: the shell can read the files, not change")
+    parser.add_argument(
         "--wasm", help="the busybox.wasm to use (default: downloaded once into the temporary directory)"
     )
     args = parser.parse_args()
 
+    if args.home:
+        args.root = args.root or "~"
+    if args.readonly and not args.root:
+        parser.error("--readonly is for --home or --root DIR")
     path = find_wasm(args.wasm)
     backend = wasmhost.get_backend(args.backend)
     banner = f"BusyBox ash (wasi-sh {VERSION}) in WebAssembly, on the {backend.name} backend of wasmhost"
@@ -828,10 +1063,14 @@ def main() -> int:
         raise SystemExit(
             f"the {backend.name} backend can't take busybox.wasm (it uses WebAssembly exception handling): {exc}"
         ) from exc
-    shell = Shell(module)
+    vfs = RealVfs(args.root, args.readonly) if args.root else Vfs()
+    shell = Shell(module, vfs)
     if args.command is not None:
         return shell.run(args.command)
-    print("An empty in-memory file system, gone when you leave. `exit` leaves. Try: ls /dev; echo hi | wc")
+    if isinstance(vfs, RealVfs):
+        print(f"REAL FILES: {vfs.root} is `/`{' (read only)' if vfs.readonly else ''}; changes and deletions are real.")
+    else:
+        print("An empty in-memory file system, gone when you leave. `exit` leaves. Try: ls /dev; echo hi | wc")
     return shell.run()
 
 
