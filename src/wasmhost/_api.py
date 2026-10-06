@@ -97,8 +97,8 @@ def get_backend(backend: Backend | str | None = None) -> Backend:
 
 
 def set_backend(backend: Backend | str | None) -> None:
-    """Choose the default backend by name (`"node"`, `"gi-jsc"`, `"jscontext"`, `"wasmtime"`, `"wasm3"`) or instance;
-    None forgets it, and the next use picks again."""
+    """Choose the default backend by name (`"node"`, `"bun"`, `"gi-jsc"`, `"jscontext"`, `"wasmtime"`, `"wasm3"`) or
+    instance; None forgets it, and the next use picks again."""
     global _default
     _default = None if backend is None else _backend(backend)
 

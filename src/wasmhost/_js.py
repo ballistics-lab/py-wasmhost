@@ -617,13 +617,14 @@ class NodeBackend(JSBackend):
     """A long-lived `node` process evaluating scripts in a `vm` context (see the protocol above)."""
 
     name = "node"
+    program = "node"  # what is looked for on PATH
     features = JSBackend.features | {"imports"}
 
     def __init__(self, node: str | None = None) -> None:
         super().__init__()
-        node = node or shutil.which("node")
+        node = node or shutil.which(self.program)
         if not node:
-            raise FileNotFoundError("node not found on PATH")
+            raise FileNotFoundError(f"{self.program} not found on PATH")
         self._proc = subprocess.Popen(
             [node, "-e", _NODE_LOOP],
             stdin=subprocess.PIPE,
@@ -632,7 +633,7 @@ class NodeBackend(JSBackend):
             encoding="utf-8",
         )
         if self._proc.stdin is None or self._proc.stdout is None:  # can't happen with PIPE; narrows the types
-            raise RuntimeError("node started without stdin/stdout pipes")
+            raise RuntimeError(f"{self.program} started without stdin/stdout pipes")
         self._stdin = self._proc.stdin
         self._stdout = self._proc.stdout
         atexit.register(self.close)
@@ -654,7 +655,7 @@ class NodeBackend(JSBackend):
         while True:
             line = self._stdout.readline()
             if not line:
-                raise RuntimeError(f"node exited (status {self._proc.poll()})")
+                raise RuntimeError(f"{self.program} exited (status {self._proc.poll()})")
             reply = json.loads(line)
             if "cb" in reply:  # a host function is being called: answer it (it may evaluate again, nested)
                 ident, args_json = reply["cb"]
@@ -673,3 +674,12 @@ class NodeBackend(JSBackend):
             self._proc.wait(timeout=5)
         if not self._stdout.closed:
             self._stdout.close()
+
+
+class BunBackend(NodeBackend):
+    """Bun, which is JavaScriptCore (as in Safari and on iOS) in a runtime of its own, running the very script
+    `NodeBackend` runs: a long-lived process, one JSON line each way, a synchronous read of its stdin to wait for the
+    answer of a host function. Nothing differs but the program."""
+
+    name = "bun"
+    program = "bun"

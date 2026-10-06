@@ -2,7 +2,7 @@
 
 WebAssembly from **CPython, PyPy and Pythonista**, with the JavaScript WebAssembly API: modules, instances, memory,
 globals, and host functions (Python callables the module calls). It runs on whichever backend is available:
-JavaScriptCore's `JSContext` in Pythonista on iOS, JavaScriptCore or Node on a computer, or, when installed,
+JavaScriptCore's `JSContext` in Pythonista on iOS, JavaScriptCore, Node or Bun on a computer, or, when installed,
 wasmtime or wasm3. Plain Python, no dependencies, no C extension of its own.
 
 [![license]][MIT]
@@ -77,7 +77,7 @@ prints the pass time too.
 ```shell
 uv add wasmhost
 
-# With wasmtime, the in-process JIT (otherwise Node or WebKitGTK JavaScriptCore is used)
+# With wasmtime, the in-process JIT (otherwise Node, Bun or WebKitGTK JavaScriptCore is used)
 uv add wasmhost[wasmtime]
 ```
 
@@ -86,7 +86,7 @@ uv add wasmhost[wasmtime]
 ```shell
 pip install wasmhost
 
-# With wasmtime, the in-process JIT (otherwise Node or WebKitGTK JavaScriptCore is used)
+# With wasmtime, the in-process JIT (otherwise Node, Bun or WebKitGTK JavaScriptCore is used)
 pip install wasmhost[wasmtime]
 ```
 
@@ -116,7 +116,7 @@ returns what the signature says: `None`, one value, or a tuple for several resul
 
 How a host function is called depends on the backend: `wasmtime` and `wasm3` call the Python function themselves; the
 JavaScript engines that are JavaScriptCore (`jsc`, and `jscontext` on iOS) do it through its C API, which makes a
-JavaScript function that calls Python; Node writes a request on its pipe and waits for the answer, reading its
+JavaScript function that calls Python; Node and Bun write a request on their pipe and waits for the answer, reading its
 stdin synchronously. Only `gi-jsc` can't: PyGObject has no way to make a JavaScript function that calls Python.
 
 ## Globals
@@ -229,6 +229,7 @@ fallback if the C API ever fails. The self-test reports which was used (`N bytes
 | `jsc` | Linux, macOS | JavaScriptCore's C API through `ctypes`, no PyGObject: `apt install libjavascriptcoregtk-4.1-0` (macOS uses the system framework) |
 | `gi-jsc` | Linux | the same engine through PyGObject (`apt install gir1.2-javascriptcoregtk-4.1 python3-gi`) |
 | `node` | anywhere with Node.js | `node` on `PATH` |
+| `bun` | anywhere with [Bun](https://bun.sh) | `bun` on `PATH`. It is JavaScriptCore (as in Safari and on iOS) in a runtime of its own, and runs the very script `node` does |
 
 With nothing configured, the first backend that starts wins, in the order shown: the native runtimes when they are installed, then the JavaScript engines. (On Pythonista nothing above `jscontext` can be installed, so it is the pick there; on a Mac that has rubicon-objc, `wasmtime` still comes first.) Each backend's constructor is its
 own probe: it fails when its runtime is missing. Choose one with `WASMHOST_BACKEND=<name>`,
@@ -246,6 +247,7 @@ Not every backend can do everything; `backend.supports(...)` says:
 | `jsc` | yes | yes | yes | yes | yes | no |
 | `gi-jsc` | yes | yes | no | yes | yes | no |
 | `node` | yes | yes | yes | yes | yes | no |
+| `bun` | yes | yes | yes | yes | yes | no |
 
 ## Try it on a device
 
@@ -276,20 +278,21 @@ documented`) and counts as passed. If something fails, send the whole output. On
 | Linux, CPython 3.14t | `jsc` | 27/27 | 32 / 102 us |
 | Linux, CPython 3.14t | `gi-jsc` | 27/27 (host functions: not available, as documented) | 35 / 62 us |
 | Linux, CPython 3.14t | `node` | 27/27 | 82 / 340 us |
+| Linux, CPython 3.11, Bun 1.4.2 | `bun` | 32/32 | 133 / 287 us |
 | Linux, CPython 3.14t | `wasmtime` | 21/21 | 66 / 212 us |
 | Linux, CPython 3.14t | `wasm3` | 21/21 | 3 / 63 us |
 | Linux, CPython 3.10 and PyPy 3.10 | `node` | 25/25 (an earlier version; and the test suite on 3.10) | |
 
 The counts of the Linux rows are for the current version (the first two phone rows are for `0.0.2b1`: the self-test has
 grown since); the times are one run of the self-test each, so read them as an order of magnitude. A host function costs about
-what a call does, plus a round trip on `node` (measured once: about 4 us on `wasm3`, 50 us on `wasmtime` and `jsc`,
+what a call does, plus a round trip on `node` or `bun` (measured once: about 4 us on `wasm3`, 50 us on `wasmtime` and `jsc`,
 200 us on `node`, per host call including the export around it).
 
 Host functions and the C API bytes path on `jscontext` have run on both iOS apps above; on Linux they also run
 against a fake `objc_util` whose `c` is the real JavaScriptCore library, and on macOS in CI against a real
 Objective-C `JSContext` through rubicon-objc. Not run on a device: the `rubicon-objc` bridge (both iOS apps have
 `objc_util`, so it isn't needed there). Node's synchronous wait for a host function's answer has run in CI on Linux,
-macOS and Windows.
+macOS and Windows; Bun's, in CI on Linux and macOS (not on Windows yet).
 
 ### A note on wasmtime and `faulthandler`
 
@@ -319,6 +322,7 @@ which it is meant to be done.
 ```bash
 uv run pytest                            # every backend that starts here
 uv run pytest --wasm-backend node        # one backend: it must start, or the run stops with an error
+uv run pytest --wasm-backend bun         # needs `bun` on PATH
 uv run pytest --wasm-backend wasmtime    # or wasm3, or jsc (needs the JavaScriptCore library)
 uv run pytest --wasm-backend gi-jsc      # needs PyGObject: run it with a system-site-packages venv (see the CI job)
 uv run pyright && uv run ruff check

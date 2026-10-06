@@ -40,7 +40,7 @@ from ._binary import (
     i32,
     i64,
 )
-from ._js import GIJavaScriptCoreBackend, JSBackend, JSContextBackend, NodeBackend
+from ._js import BunBackend, GIJavaScriptCoreBackend, JSBackend, JSContextBackend, NodeBackend
 from ._jsc import JSCBackend
 from ._native import Wasm3Backend, WasmtimeBackend
 from ._registry import AUTO_ORDER, BACKENDS, JS_AUTO_ORDER, JS_BACKENDS, default_backend
@@ -53,6 +53,7 @@ __all__ = (
     "JS_BACKENDS",
     "Backend",
     "Batch",
+    "BunBackend",
     "CompileError",
     "ExportDescriptor",
     "FuncType",
