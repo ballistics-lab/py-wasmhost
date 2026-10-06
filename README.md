@@ -318,8 +318,13 @@ which it is meant to be done.
 - **Memory is copied** on every read and write (no view onto the engine's own buffer), which costs on large buffers.
 - **Limits on untrusted code**: no ceiling on memory other than a memory's own maximum, and no time or fuel limit.
 - **`async` compile and instantiate**, like the JavaScript API's.
+- **Threads.** A module built with `-pthread` (the WebAssembly threads proposal: a `shared` memory that the module
+  imports, atomic instructions, threads made by the host as several instances of the module on one memory) does not
+  run: `Memory(..., shared=True)` raises `NotImplementedError`, so it can not be given as an import. Build without
+  threads (`-pthread` off, for wasm-ld `--no-threads`). A wasm instance runs in one thread, and a backend is
+  not safe to call from two threads at once (there is no lock yet: BACKLOG B-304 adds one).
 - **Newer proposals**: no API for `WebAssembly.Tag` and `WebAssembly.Exception` (the self-test only reports which
-  encodings of exceptions an engine takes), shared memory and threads, SIMD, `memory64`, multi-memory, GC types.
+  encodings of exceptions an engine takes), SIMD, `memory64`, multi-memory, GC types.
   Whether a module that uses them runs is up to the engine.
 - **WASI** is not part of wasmhost: a module that imports `wasi_snapshot_preview1` needs a host that provides it.
 
