@@ -113,10 +113,11 @@ class ModuleInfo(NamedTuple):
     imports: tuple[ImportDescriptor, ...]
     exports: tuple[ExportDescriptor, ...]
     custom: tuple[tuple[str, bytes], ...] = ()  # the custom sections (name, contents), in order
-    # What the active `elem` segments put in the tables: (table index, slot, type of the function). Only the plain
-    # forms (a table, an `i32.const` offset, function indexes); the others are left out. Imported tables come first
+    # What the active `elem` segments put in the tables: (table index, slot, type of the function, index of the
+    # global that the offset is added to or None). The offset is an `i32.const` or a `global.get`; passive and
+    # declarative segments put nothing in a table by themselves, so they are left out. Imported tables come first
     # in the numbering, then the module's own, and `table_exports` says which index each exported table has.
-    elems: tuple[tuple[int, int, FuncType], ...] = ()
+    elems: tuple[tuple[int, int, FuncType, int | None], ...] = ()
     table_exports: tuple[tuple[str, int], ...] = ()
     has_start: bool = False  # the module runs code while it is made, which may change its tables
 
@@ -203,7 +204,7 @@ def parse(wasm: bytes) -> ModuleInfo:
     imports: list[ImportDescriptor] = []
     raw_exports: list[tuple[str, int, int]] = []
     custom: list[tuple[str, bytes]] = []
-    raw_elems: list[tuple[int, int, int]] = []  # table, slot, function index
+    raw_elems: list[tuple[int, int, int, int | None]] = []  # table, slot, function index, global
     has_start = False
 
     def table_type() -> TableType:
@@ -277,17 +278,30 @@ def parse(wasm: bytes) -> ModuleInfo:
             elif section_id == 9:
                 for _ in range(r.u32()):
                     flag = r.byte()
-                    if flag not in (0, 2):  # passive, declarative and expression forms are not read
+                    if flag in (1, 3, 5, 7):  # passive or declarative: nothing goes into a table by itself
+                        break  # (and the segments after it are not read: their layout needs this one's)
+                    table = r.u32() if flag in (2, 6) else 0
+                    op = r.byte()
+                    if op not in (0x41, 0x23):  # an offset that is neither i32.const nor global.get
                         break
-                    table = r.u32() if flag == 2 else 0
-                    if r.byte() != 0x41:  # not an i32.const offset
-                        break
-                    offset = r.s32()
+                    value = r.s32() if op == 0x41 else r.u32()
                     if r.byte() != 0x0B:
                         break
-                    if flag == 2:
-                        r.byte()  # elemkind
-                    raw_elems.extend((table, offset + i, r.u32()) for i in range(r.u32()))
+                    base = value if op == 0x41 else None
+                    glob = None if op == 0x41 else value
+                    if flag in (2, 6):
+                        r.byte()  # elemkind or reftype
+                    count = r.u32()
+                    for i in range(count):
+                        if flag < 4:
+                            index = r.u32()
+                        else:  # an expression: ref.func index end (anything else, e.g. ref.null, has no function)
+                            if r.byte() != 0xD2:
+                                r.skip_const_expr()
+                                continue
+                            index = r.u32()
+                            r.byte()
+                        raw_elems.append((table, (base or 0) + i, index, glob))
             r.pos = end
     except IndexError as exc:
         raise ValueError("truncated WebAssembly binary") from exc
@@ -303,6 +317,6 @@ def parse(wasm: bytes) -> ModuleInfo:
         elif kind == 3:
             found = global_types[index]
         exports.append(ExportDescriptor(name, KINDS[kind], found))
-    elems = tuple((t, s, types[func_types[f]]) for t, s, f in raw_elems if f < len(func_types))
+    elems = tuple((t, s, types[func_types[f]], g) for t, s, f, g in raw_elems if f < len(func_types))
     table_exports = tuple((n, i) for n, k, i in raw_exports if k == 1)
     return ModuleInfo(tuple(imports), tuple(exports), tuple(custom), elems, table_exports, has_start)

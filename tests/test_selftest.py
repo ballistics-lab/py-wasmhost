@@ -1,4 +1,5 @@
 import pytest
+import test_elem_signatures
 
 import wasmhost
 from wasmhost import _cli, _selftest
@@ -35,6 +36,7 @@ def test_module_constants_are_the_test_modules() -> None:
     assert _selftest.MEMORY_USER == wb.uses_memory()
     assert _selftest.TABLE_OWN == wb.tables(imported=False)
     assert _selftest.TABLE_IMPORT == wb.tables(imported=True)
+    assert _selftest.TABLE_ELEM == test_elem_signatures.module()
     assert _selftest.EXCEPTIONS_FINAL == wb.exceptions(final=True)
     assert _selftest.EXCEPTIONS_LEGACY == wb.exceptions(final=False)
 

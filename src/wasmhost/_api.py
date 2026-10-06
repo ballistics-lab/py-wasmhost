@@ -870,8 +870,17 @@ class Instance:
             if isinstance(items.get(name), Table):
                 tables[index] = items[name]
         known: dict[Any, FuncType] = backend.__dict__.setdefault("_signatures", {})
-        for table_index, slot, ftype in info.elems[:1024]:
+        globals_ = [d for d in info.imports if d.kind == "global"]
+        for table_index, slot, ftype, glob in info.elems[:1024]:
             table = tables.get(table_index)
+            if glob is not None:  # the offset is an imported global: its value now, a number or a Global
+                if glob >= len(globals_):
+                    continue
+                given = (imports or {}).get(globals_[glob].module, {}).get(globals_[glob].name)
+                base = given.value if isinstance(given, Global) else given
+                if isinstance(base, bool) or not isinstance(base, int):
+                    continue
+                slot += base
             handle = None if table is None else backend.table_get(table._handle, slot)
             if handle is not None:
                 known.setdefault(backend.function_key(handle), ftype)

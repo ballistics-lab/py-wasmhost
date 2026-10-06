@@ -86,6 +86,12 @@ TABLE_OWN = bytes.fromhex(
     "0b"
 )
 
+# Two functions (add, mul) that no one exports, put in the slots 0 and 1 of the exported table by an `elem` segment.
+TABLE_ELEM = bytes.fromhex(
+    "0061736d01000000010a0260027f7f017f600000030403000001040401700002070901057461626c6501000908010041000b"
+    "0200010a14030700200020016a0b0700200020016c0b02000b"
+)
+
 # The same module, but its table is imported as env.table (two entries at least) instead of its own.
 TABLE_IMPORT = bytes.fromhex(
     "0061736d01000000010e0260027f7f017f60037f7f7f017f020f0103656e76057461626c650170000203040300000107"
@@ -404,7 +410,10 @@ def _functions(backend: Backend) -> str:
         except ValueError:
             other.signature = add_type  # the engine does not say: given by hand
     _expect(other(2, 3), 5)
-    return "identity, equality, signature rules; a table entry called"
+    entry = Instance(Module(TABLE_ELEM, backend=backend)).exports.table.get(1)  # put there by an `elem` segment
+    assert entry is not None
+    _expect((entry.signature, entry(6, 7)), (add_type, 42))  # known without being told, on every backend
+    return "identity, equality, signature rules, a function of an elem segment; a table entry called"
 
 
 def _custom(name: str, payload: bytes) -> bytes:
