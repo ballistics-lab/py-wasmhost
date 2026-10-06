@@ -124,7 +124,7 @@ def test_an_entry_read_from_a_table_goes_into_another(tables: wasmhost.Backend) 
     assert len(source) == 2
     source.set(0, provider.exports.add)
     ref = source.get(0)
-    assert isinstance(ref, wasmhost.FuncRef)
+    assert isinstance(ref, wasmhost.Function)
     target = wasmhost.Table("funcref", 2)
     target.set(0, ref)
     user = wasmhost.Instance(wasmhost.Module(wb.tables(imported=True)), {"env": {"table": target}})

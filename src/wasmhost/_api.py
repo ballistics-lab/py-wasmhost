@@ -14,8 +14,10 @@ It runs on a backend (see `_backend.py`): a JavaScript engine's own `WebAssembly
 
 from __future__ import annotations
 
-from collections.abc import Iterator, Mapping
-from typing import Any, NamedTuple
+import functools
+import weakref
+from collections.abc import Callable, Iterator, Mapping
+from typing import Any, NamedTuple, cast
 
 from ._backend import (
     Backend,
@@ -46,7 +48,6 @@ from ._registry import BACKENDS, default_backend
 __all__ = (
     "Batch",
     "CompileError",
-    "FuncRef",
     "Function",
     "Global",
     "Instance",
@@ -126,36 +127,150 @@ def _check(value: object, kind: str) -> int | float:
 
 
 class Function:
-    """An exported function. Call it; `params` and `results` are its value types (`"i32"`, `"f64"`, ...)."""
+    """A function of the module that can be called: an export (`instance.exports.add`) or an entry of a table
+    (`table.get(0)`), and one function is one object, as in JavaScript (`table.get(0) is instance.exports.add` when
+    the table holds it).
 
-    def __init__(self, instance: Instance, name: str, functype: FuncType) -> None:
-        self._instance = instance
-        self.name = name
-        self._type = functype
-        self.params = functype.params
-        self.results = functype.results
+    `signature` is its `FuncType`, or None when it is not known (the engine does not say what a function it found in
+    a table is, and a JavaScript engine never does). Reading it asks nothing of the engine. `type()` gives the type
+    and, if the signature is not known yet, looks for it (a `ValueError` if it can't be found); a call does the same,
+    once. A signature can be set by hand: `f.signature = FuncType((i32, i32), (i32,))`, which works on every
+    backend; a function whose type is known for certain (from the module, from the engine) can only be given the
+    same one (`ValueError` otherwise). The signature does not count in `==` and `hash`: two `Function`s are equal
+    when they are the same function of the engine.
+
+    A wrong signature given by hand is the caller's mistake, as with `ctypes`: wasmtime checks it and refuses; a
+    JavaScript engine calls the function with what it is given, and the result may be nonsense."""
+
+    def __init__(
+        self,
+        backend: Backend,
+        handle: Any,
+        *,
+        instance: Instance | None = None,
+        name: str | None = None,
+        signature: FuncType | None = None,
+    ) -> None:
+        self._backend = backend
+        self._h = handle
+        self._key = backend.function_key(handle)
+        self._instance = instance  # whose export it is, for a Batch
+        self.name = name  # its name as an export
+        self._signature: FuncType | None = signature
+        self._known = signature is not None  # known for certain: from the module or the engine, not set by hand
+
+    def _adopt(self, instance: Instance | None, name: str | None, signature: FuncType | None) -> None:
+        """What another way to the same function knows (an export that was a table entry before)."""
+        if self._instance is None:
+            self._instance = instance
+        if self.name is None:
+            self.name = name
+        if signature is not None and not self._known:
+            self._signature, self._known = signature, True
+
+    @property
+    def signature(self) -> FuncType | None:
+        return self._signature
+
+    @signature.setter
+    def signature(self, value: FuncType | None) -> None:
+        if value is None:
+            if self._known:
+                raise ValueError(f"the type of this function is known, {self._signature}: it can't be taken away")
+            self._signature = None
+            return
+        given: Any = value  # the annotation says FuncType; a caller may pass anything
+        if not isinstance(given, FuncType):
+            raise TypeError("a signature is a FuncType: FuncType((i32, i32), (i32,))")
+        for kind in (*value.parameters, *value.results):
+            if kind not in ("i32", "i64", "f32", "f64"):
+                raise ValueError(f"a function of {kind!r}: only i32, i64, f32 and f64 can be called from here")
+        if self._known and value != self._signature:
+            raise ValueError(f"this function is known to be {self._signature}, not {value}")
+        self._signature = value
+
+    def type(self) -> FuncType:
+        """The type of the function (`WebAssembly.Function.type` of the type reflection proposal). Looks for it when
+        it is not known yet; a `ValueError` when it can't be found, and then `signature` can be set by hand."""
+        if self._signature is None:
+            found = self._backend.function_type(self._h)
+            if found is None:
+                raise ValueError(
+                    f"no signature found for {self.name or 'this function'}: set `signature` "
+                    "(a FuncType: the engine does not tell the type of a function of a table)"
+                )
+            self._signature, self._known = found, True
+        return self._signature
+
+    @property
+    def parameters(self) -> tuple[str, ...] | None:
+        return None if self._signature is None else self._signature.parameters
+
+    @property
+    def params(self) -> tuple[str, ...] | None:  # what `parameters` was called
+        return self.parameters
+
+    @property
+    def results(self) -> tuple[str, ...] | None:
+        return None if self._signature is None else self._signature.results
+
+    @property
+    def _type(self) -> FuncType:  # for a Batch, which only takes exports, whose type is known
+        return self.type()
 
     def __call__(self, *args: object) -> Any:
-        if len(args) != len(self.params):
-            raise TypeError(f"{self.name}() takes {len(self.params)} arguments ({len(args)} given)")
-        checked = [_check(a, k) for a, k in zip(args, self.params, strict=True)]
-        values = self._instance._backend.call(self._instance._handle, self.name, checked, self._type)
-        if not self.results:
+        ftype = self.type()
+        if len(args) != len(ftype.parameters):
+            raise TypeError(
+                f"{self.name or 'the function'}() takes {len(ftype.parameters)} arguments ({len(args)} given)"
+            )
+        checked = [_check(a, k) for a, k in zip(args, ftype.parameters, strict=True)]
+        values = self._backend.call_ref(self._h, checked, ftype)
+        if not ftype.results:
             return None
         return values[0] if len(values) == 1 else tuple(values)
 
-    def type(self) -> FuncType:
-        """The function's type (`WebAssembly.Function.type` of the type reflection proposal): its `parameters` and
-        `results`."""
-        return self._type
+    def __eq__(self, other: object) -> bool:
+        return isinstance(other, Function) and other._backend is self._backend and other._key == self._key
 
-    def _funcref(self) -> Any:
-        if not self._instance._backend.supports("table.funcs"):
-            raise NotImplementedError(f"the {self._instance._backend.name} backend has no function references")
-        return self._instance._backend.export_function(self._instance._handle, self.name)
+    def __hash__(self) -> int:
+        return hash((id(self._backend), self._key))
 
     def __repr__(self) -> str:
-        return f"<wasmhost.Function {self.name}({', '.join(self.params)}) -> ({', '.join(self.results)})>"
+        label = self.name or "(a table entry)"
+        if self._signature is None:
+            return f"<wasmhost.Function {label}: signature not known>"
+        parameters, results = self._signature.parameters, self._signature.results
+        return f"<wasmhost.Function {label}({', '.join(parameters)}) -> ({', '.join(results)})>"
+
+
+def _function(
+    backend: Backend,
+    handle: Any,
+    *,
+    instance: Instance | None = None,
+    name: str | None = None,
+    signature: FuncType | None = None,
+) -> Function:
+    """The `Function` of a function of the engine, the same one every time: found by the key of the function, so
+    what wasmtime-py makes anew each time (a `Func` for each `table.get`) is still the same object here. The cache
+    holds them weakly: it keeps nothing alive."""
+    cache = cast(
+        "weakref.WeakValueDictionary[Any, Function]",
+        backend.__dict__.setdefault("_functions", weakref.WeakValueDictionary()),
+    )
+    key = backend.function_key(handle)
+    found = cache.get(key)
+    if found is None:
+        found = Function(backend, handle, instance=instance, name=name, signature=signature)
+        if signature is None:  # an engine that knows the type (wasmtime) says so at once
+            native = backend.function_type(handle)
+            if native is not None:
+                found._signature, found._known = native, True
+        cache[key] = found
+    else:
+        found._adopt(instance, name, signature)
+    return found
 
 
 def _limits(initial: object, maximum: object, what: str) -> None:
@@ -428,14 +543,16 @@ class Batch:
     def call(self, function: Function, *args: object) -> Ref:
         """Call an exported function. The result is a `Ref`; for a function without one its value is None."""
         if function._instance is not self._instance:
-            raise ValueError("a function of another instance")
-        if len(args) != len(function.params):
-            raise TypeError(f"{function.name}() takes {len(function.params)} arguments ({len(args)} given)")
-        if len(function.results) > 1:
+            raise ValueError("a function of another instance, or one that this instance does not export")
+        ftype = function.type()  # an export's type is known
+        name = function.name or ""
+        if len(args) != len(ftype.parameters):
+            raise TypeError(f"{name}() takes {len(ftype.parameters)} arguments ({len(args)} given)")
+        if len(ftype.results) > 1:
             raise NotImplementedError("multi-value results in a batch")
-        operands = tuple(self._operand(a, k) for a, k in zip(args, function.params, strict=True))
-        ref = self._new(function.results[0] if function.results else "void")
-        self._steps.append(CallStep(ref._index, function.name, operands, function._type))
+        operands = tuple(self._operand(a, k) for a, k in zip(args, ftype.parameters, strict=True))
+        ref = self._new(ftype.results[0] if ftype.results else "void")
+        self._steps.append(CallStep(ref._index, name, operands, ftype))
         return ref
 
     def write(self, memory: Memory, offset: int | Ref, data: bytes | bytearray | memoryview) -> None:
@@ -485,22 +602,12 @@ class Batch:
             self.run()
 
 
-class FuncRef:
-    """A function reference, what `Table.get` returns: it can be put in a table again, but not called."""
-
-    def __init__(self, backend: Backend, handle: Any) -> None:
-        self._backend = backend
-        self._handle = handle
-
-    def __repr__(self) -> str:
-        return "<wasmhost.FuncRef>"
-
-
 class Table:
     """`WebAssembly.Table` of functions: an exported one, or one made on its own, `Table("funcref", initial, maximum)`
     or, as in JavaScript, `Table({"element": "anyfunc", "initial": 2, "maximum": 4})` (a `TableType` will do too),
-    which can be given to instances as an import (and shared by them). `get(i)` is a `FuncRef` (or None for an empty
-    entry); `set(i, f)` takes an exported `Function`, a `FuncRef` or None. Only `"funcref"` tables are supported."""
+    which can be given to instances as an import (and shared by them). `get(i)` is a `Function` (or None for an empty
+    entry), the same one every time, as the function it is: the very object the module exports, if it does; `set(i, f)`
+    takes a `Function` or None. Only `"funcref"` tables are supported."""
 
     def __init__(
         self,
@@ -560,26 +667,19 @@ class Table:
         self._need()
         return self._backend.table_grow(self._handle, int(delta))
 
-    def get(self, index: int) -> FuncRef | None:
+    def get(self, index: int) -> Function | None:
         self._need()
         handle = self._backend.table_get(self._handle, int(index))
-        return None if handle is None else FuncRef(self._backend, handle)
+        return None if handle is None else _function(self._backend, handle)
 
-    def set(self, index: int, value: Function | FuncRef | None) -> None:
+    def set(self, index: int, value: Function | None) -> None:
         self._need()
-        handle: Any = None
-        if isinstance(value, Function):
-            owner = value._instance._backend
-            handle = value._funcref()
-        elif isinstance(value, FuncRef):
-            owner, handle = value._backend, value._handle
-        elif value is None:
-            owner = self._backend
-        else:
-            raise TypeError("a table entry is an exported Function, a FuncRef or None")
-        if owner is not self._backend:
+        given: Any = value
+        if given is not None and not isinstance(given, Function):
+            raise TypeError("a table entry is a Function or None")
+        if value is not None and value._backend is not self._backend:
             raise ValueError("a function of another backend")
-        self._backend.table_set(self._handle, int(index), handle)
+        self._backend.table_set(self._handle, int(index), None if value is None else value._h)
 
     def __repr__(self) -> str:
         return f"<wasmhost.Table {self.name or ''} length {len(self)}>"
@@ -588,20 +688,34 @@ class Table:
 Export = Function | Memory | Global | Table
 
 
+class _LazyFunction:
+    """An exported function that is not made yet: asking the engine for it costs a trip, and not every export is
+    ever used."""
+
+    def __init__(self, make: Callable[[], Function]) -> None:
+        self.make = make
+
+
 class _Exports:
     """`instance.exports`: attribute and item access, and iteration over the names (like the JS object)."""
 
-    def __init__(self, items: dict[str, Export]) -> None:
+    def __init__(self, items: dict[str, Export | _LazyFunction]) -> None:
         self._items = items
+
+    def _get(self, name: str) -> Export:
+        item = self._items[name]
+        if isinstance(item, _LazyFunction):
+            item = self._items[name] = item.make()
+        return item
 
     def __getattr__(self, name: str) -> Any:  # like the JS object: any export, typed by what it is
         try:
-            return self._items[name]
+            return self._get(name)
         except KeyError:
             raise AttributeError(name) from None
 
     def __getitem__(self, name: str) -> Export:
-        return self._items[name]
+        return self._get(name)
 
     def __contains__(self, name: object) -> bool:
         return name in self._items
@@ -719,10 +833,10 @@ class Instance:
             raise NotImplementedError(f"the {backend.name} backend has one store for everything: no isolated instances")
         self._backend = backend
         self._handle = backend.instantiate(module._handle, hosts, isolated=isolated)
-        items: dict[str, Export] = {}
+        items: dict[str, Export | _LazyFunction] = {}
         for e in module._info.exports:
             if e.kind == "function" and isinstance(e.type, FuncType):
-                items[e.name] = Function(self, e.name, e.type)
+                items[e.name] = _LazyFunction(functools.partial(self._export_function, e.name, e.type))
             elif e.kind == "memory" and isinstance(e.type, MemoryType):
                 handle = self._backend.export_memory(self._handle, e.name)
                 items[e.name] = Memory._wrap(self._backend, handle, e.name, e.type)
@@ -733,6 +847,10 @@ class Instance:
                 handle = self._backend.export_table(self._handle, e.name)
                 items[e.name] = Table._wrap(self._backend, handle, e.name, e.type)
         self.exports = _Exports(items)
+
+    def _export_function(self, name: str, ftype: FuncType) -> Function:
+        handle = self._backend.export_function(self._handle, name)
+        return _function(self._backend, handle, instance=self, name=name, signature=ftype)
 
     def batch(self) -> Batch:
         """Steps done together (on a JavaScript engine, in one trip), the later ones using the earlier results."""

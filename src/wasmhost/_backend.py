@@ -13,7 +13,7 @@ global, whatever its runtime raises itself.
 
 from __future__ import annotations
 
-from collections.abc import Callable, Sequence
+from collections.abc import Callable, Hashable, Sequence
 from typing import Any, NamedTuple, cast
 
 from ._binary import FuncType
@@ -226,7 +226,23 @@ class Backend:
         raise NotImplementedError
 
     def export_function(self, instance: Any, name: str) -> Any:
+        """The handle of an exported function, as `table_get` gives one: the operations below take it."""
         raise NotImplementedError
+
+    def call_ref(self, func: Any, args: Sequence[int | float], ftype: FuncType) -> list[int | float]:
+        """Call a function by its handle (what `export_function` and `table_get` return) with already-checked
+        arguments; the results, in order."""
+        raise NotImplementedError
+
+    def function_key(self, func: Any) -> Hashable:
+        """What tells the functions of this backend apart: the same function gives the same key, whichever handle
+        it came by (an export and the entry of a table that holds it), and another function another key."""
+        raise NotImplementedError
+
+    def function_type(self, func: Any) -> FuncType | None:
+        """The type of the function as the engine knows it, or None when the engine does not say (a JavaScript
+        engine does not: its API has no types of functions)."""
+        return None
 
     def table_grow(self, table: Any, delta: int) -> int:
         """Grow by `delta` null entries; the previous length."""

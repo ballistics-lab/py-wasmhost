@@ -14,7 +14,7 @@ from collections.abc import Callable, Sequence
 from typing import Any, NamedTuple, cast
 
 from ._backend import Backend, HostFunction, HostObject, check_results
-from ._binary import FuncType
+from ._binary import FuncType, f32, f64, i32, i64
 from ._errors import CompileError, LinkError, Trap
 
 __all__ = ("Wasm3Backend", "WasmtimeBackend")
@@ -63,6 +63,14 @@ class _Wasm3Instance:
         if (m := self.memories.get(name)) is None:
             m = self.memories[name] = self.module.get_memory(name)
         return m
+
+
+class _Wasm3Function:
+    """An exported function of a wasm3 instance: the instance and the name, which is all pywasm3 lets us hold."""
+
+    def __init__(self, instance: _Wasm3Instance, name: str) -> None:
+        self.instance = instance
+        self.name = name
 
 
 class Wasm3Backend(Backend):
@@ -121,6 +129,15 @@ class Wasm3Backend(Backend):
         if result is None:
             return []
         return list(cast("Sequence[int | float]", result)) if isinstance(result, tuple) else [result]
+
+    def export_function(self, instance: _Wasm3Instance, name: str) -> _Wasm3Function:
+        return _Wasm3Function(instance, name)  # pywasm3 has no function objects of its own to hold: by name
+
+    def call_ref(self, func: _Wasm3Function, args: Sequence[int | float], ftype: FuncType) -> list[int | float]:
+        return self.call(func.instance, func.name, args, ftype)
+
+    def function_key(self, func: _Wasm3Function) -> tuple[int, str]:
+        return (id(func.instance), func.name)  # an instance of its own for each, and the Function keeps it alive
 
     def export_memory(self, instance: _Wasm3Instance, name: str) -> Any:
         return instance.memory(name)  # pywasm3's Memory: looked up afresh on every access, so it survives a grow
@@ -257,6 +274,29 @@ class WasmtimeBackend(Backend):
 
     def export_function(self, instance: _WasmtimeInstance, name: str) -> _WasmtimeObject:
         return _WasmtimeObject(instance.store, instance.exports[name])
+
+    def call_ref(self, func: _WasmtimeObject, args: Sequence[int | float], ftype: FuncType) -> list[int | float]:
+        try:
+            result = func.obj(func.store, *args)
+        except self._wt.Trap as exc:
+            raise Trap(str(exc)) from None
+        if result is None:
+            return []
+        return list(cast("Sequence[int | float]", result)) if isinstance(result, list) else [result]
+
+    def function_key(self, func: _WasmtimeObject) -> tuple[int, int]:
+        # wasmtime-py makes a new Func on every `table.get`, but what it stands for is the pair of the store and the
+        # index in it (`getattr`: a name that begins with two underscores is mangled inside a class)
+        raw = func.obj._func  # pyright: ignore[reportPrivateUsage]
+        return (int(raw.store_id), int(getattr(raw, "__private")))  # noqa: B009
+
+    def function_type(self, func: _WasmtimeObject) -> FuncType | None:
+        ftype = func.obj.type(func.store)
+        names = {str(i32): i32, str(i64): i64, str(f32): f32, str(f64): f64}
+        try:
+            return FuncType(tuple(names[str(t)] for t in ftype.params), tuple(names[str(t)] for t in ftype.results))
+        except KeyError:  # a type that can't be called from here (v128, a reference)
+            return None
 
     def table_grow(self, table: _WasmtimeObject, delta: int) -> int:
         try:

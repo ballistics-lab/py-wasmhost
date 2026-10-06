@@ -73,7 +73,7 @@ def _translate(text: str) -> BaseException | None:
 # the calls that use an i64), so any JavaScriptCore with WebAssembly runs it.
 _JS = r"""
 globalThis.__wh = (function () {
-    var mods = [], insts = [], objs = [], HEX = [], UNHEX = new Uint8Array(128), q;
+    var mods = [], insts = [], objs = [], ids = new Map(), HEX = [], UNHEX = new Uint8Array(128), q;
     for (q = 0; q < 256; q++) HEX.push((q + 256).toString(16).slice(1));
     for (q = 0; q < 10; q++) UNHEX[48 + q] = q;
     for (q = 0; q < 6; q++) { UNHEX[97 + q] = 10 + q; UNHEX[65 + q] = 10 + q; }
@@ -94,6 +94,13 @@ globalThis.__wh = (function () {
     function ret(r) {
         if (r === undefined) return '';
         return Array.isArray(r) ? r.map(fmt).join(',') : fmt(r);
+    }
+    // the number of an object: the same object gets the same number, whichever way it comes (an exported function
+    // and the entry of a table that holds it are one function, and have to be told to be)
+    function reg(o) {
+        var n = ids.get(o);
+        if (n === undefined) { objs.push(o); n = objs.length - 1; ids.set(o, n); }
+        return n;
     }
     return {
         compile: function (hex) { mods.push(new WebAssembly.Module(fromHex(hex))); return mods.length - 1; },
@@ -127,12 +134,12 @@ globalThis.__wh = (function () {
         tableget: function (o, i) {
             var f = objs[o].get(i);
             if (f === null) return '';
-            objs.push(f);
-            return String(objs.length - 1);
+            return String(reg(f));
         },
         tableset: function (o, i, f) { objs[o].set(i, f < 0 ? null : objs[f]); return ''; },
         o: function (n) { return objs[n]; },
-        obj: function (i, name) { objs.push(insts[i].exports[name]); return objs.length - 1; },
+        obj: function (i, name) { return reg(insts[i].exports[name]); },
+        callref: function (o, args) { return ret(objs[o].apply(undefined, args)); },
         get: function (o) { return fmt(objs[o].value); },
         set: function (o, v) { objs[o].value = v; return ''; },
         size: function (o) { return String(objs[o].buffer.byteLength); },
@@ -352,6 +359,14 @@ class JSBackend(Backend):
         literals = ",".join(_literal(a, k) for a, k in zip(args, ftype.params, strict=True))
         text = self._run(f"__wh.call({instance},{json.dumps(name)},[{literals}])")
         return [_parse(t, k) for t, k in zip(text.split(","), ftype.results, strict=True)] if ftype.results else []
+
+    def call_ref(self, func: int, args: Sequence[int | float], ftype: FuncType) -> list[int | float]:
+        literals = ",".join(_literal(a, k) for a, k in zip(args, ftype.params, strict=True))
+        text = self._run(f"__wh.callref({func},[{literals}])")
+        return [_parse(t, k) for t, k in zip(text.split(","), ftype.results, strict=True)] if ftype.results else []
+
+    def function_key(self, func: int) -> int:
+        return func  # one number for one function: the engine side sees to that
 
     def _o(self, fn: str, obj: int, *args: object) -> str:
         extra = "".join(f",{a}" for a in args)

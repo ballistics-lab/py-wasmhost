@@ -8,7 +8,6 @@ no C extension of its own.
 from ._api import (
     Batch,
     CompileError,
-    FuncRef,
     Function,
     Global,
     Instance,
@@ -57,7 +56,6 @@ __all__ = (
     "CompileError",
     "ExportDescriptor",
     "FuncType",
-    "FuncRef",
     "Function",
     "GIJavaScriptCoreBackend",
     "Global",
