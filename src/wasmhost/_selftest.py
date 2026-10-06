@@ -214,6 +214,7 @@ def _selftest_backend(backend: Backend, out: Callable[[str], object]) -> _Report
     step("table: made on its own, imported, shared", lambda: _table_on_its_own(backend))
     step("functions: one object per function, signature, a table entry", lambda: _functions(backend))
     step("async compile and instantiate, tasks at once", lambda: _async(backend))
+    step("threads: one backend, several threads, one call at a time", lambda: _threads(backend))
     step("custom sections", lambda: _custom_sections(backend))
     step("type reflection: type() of a function, memory, table and global", lambda: _types(backend))
     step("an isolated instance", lambda: _isolated(backend))
@@ -438,6 +439,32 @@ def _functions(backend: Backend) -> str:
         _expect(unknown(1, 2), 3)
         checked = "a wrong signature refused by the engine"
     return f"identity, equality, signature rules, a function of an elem segment, {checked}; a table entry called"
+
+
+def _threads(backend: Backend) -> str:
+    """Several threads calling into one backend each get right answers (its lock lets one in at a time)."""
+    try:
+        import threading
+    except ImportError:
+        return "skipped: this Python has no threads"
+    ex = Instance(Module(MODULE, backend=backend)).exports
+    wrong: list[str] = []
+
+    def work(seed: int) -> None:
+        for i in range(50):
+            if ex.add(seed, i) != seed + i:
+                wrong.append(f"{seed}+{i}")
+
+    threads = [threading.Thread(target=work, args=(n * 1000,)) for n in range(4)]
+    try:
+        for t in threads:
+            t.start()
+    except RuntimeError:
+        return "skipped: this Python can't start a thread"
+    for t in threads:
+        t.join()
+    _expect(wrong, [])
+    return "four threads, 50 calls each, all right"
 
 
 def _async(backend: Backend) -> str:

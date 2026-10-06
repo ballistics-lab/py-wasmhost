@@ -141,3 +141,15 @@ def test_the_features_the_new_code_relies_on(session: str) -> None:
     # "threads": a worker thread is allowed
     assert backend.supports("table.signatures") == (backend.name == "wasmtime")
     assert backend.supports("threads") == (backend.name in ("wasmtime", "node", "bun"))
+
+
+def test_the_trampoline_module_is_valid_for_any_callable_type(session: str) -> None:
+    from wasmhost._trampoline import module_for  # noqa: PLC0415
+
+    for ftype in (
+        FuncType((), ()),
+        FuncType((i32,), ()),
+        FuncType((i64, wasmhost.f32, wasmhost.f64), (i32,)),
+        FuncType((i32, i32), (i32, i64)),  # several results
+    ):
+        assert wasmhost.validate(module_for(ftype)), ftype
