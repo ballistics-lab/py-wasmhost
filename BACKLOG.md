@@ -238,6 +238,14 @@ Pythonista), де CI не буває. Він має відображати те,
       (coreutils.wasm на ньому не йде). Ідея: у `AUTO_ORDER` і README згадати цю різницю; перевірити, чи є JIT у
       `jscontext` (Pythonista) цим самим бенчмарком. Не міряно: пам'ять, f32/f64, SIMD, `wasmtime` з іншими
       налаштуваннями Cranelift, `node --jitless`.
+- [ ] **B-304a** (після B-304) Приклади на `asyncio` замість опитування в циклі зі `sleep`/`select`. Рішення власника:
+      перевести `examples/jslinux.py` (цикл `__runTimers`/`__takeReqs`/WebSocket/консоль з `select` і `time.sleep(0.005)`,
+      а на iOS потік для `input()`), `examples/pyodide.py` (`time.sleep(0.005)`, рядок ~565) і все інше, де є такий
+      цикл (`examples/coreutils.py`: `time.sleep` у `poll_oneoff`, це лишається блокуючим за означенням WASI, а
+      інтерактивний цикл оболонки можна). Умови: виклики рушія синхронні, тож у циклі подій їх слід віддавати через
+      замок бекенда з B-304 (`asyncio.to_thread` там, де бекенд не прив'язаний до потоку; на jscontext/jsc виконувати
+      на місці), без гонок; читання консолі: `loop.add_reader`, а де `select()` не працює (консоль iOS), `to_thread`
+      на `input()`. Кожен приклад лишається працювати на Pythonista; тести прикладів оновити разом із ним.
 - [ ] **B-303** Пакетні `read/write` для багатьох ділянок за один виклик (менше переходів рушій↔Python).
 - [ ] **B-304** (після B-201, див. «Порядок робіт») Асинхронні `compile`/`instantiate`, як у JS, де `WebAssembly.compile/instantiate` повертають проміс.
       Пропозиція (на обговорення): `async def compile(...)` і `async def instantiate(...)` на `asyncio`, а синхронні
