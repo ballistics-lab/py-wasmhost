@@ -931,13 +931,14 @@ def instantiate_sync(
     return Instantiated(module, Instance(module, imports))
 
 
-async def _offload(backend: Backend | str | None, work: Callable[[Backend], Any]) -> Any:
-    """Run `work(backend)` without holding up the event loop where that is safe: in a thread on a backend that says
-    "threads" (wasmtime, Node, Bun: not tied to the thread that made them; the backend's own lock lets one call in at
-    a time, so tasks never race), in place on one that is tied to its thread (the JavaScriptCore ones, wasm3), with a
-    turn of the loop before and after so that others get to run."""
+async def _offload(backend: Backend | str | None, work: Callable[[Backend], Any], threaded: bool) -> Any:
+    """Run `work(backend)`. By default in place, with a turn of the event loop before and after so that other tasks
+    get to run, which needs no threads at all (some Pythons have none that work). With `threaded=True`, on a backend
+    that says "threads" (wasmtime, Node, Bun: not tied to the thread that made them), in a worker thread, so that a
+    long compile does not hold the loop up; the backend's own lock lets one call in at a time, so tasks never race. A
+    backend that is tied to its thread (the JavaScriptCore ones, wasm3) always runs in place."""
     chosen = _backend(backend)
-    if chosen.supports("threads"):
+    if threaded and chosen.supports("threads"):
         return await asyncio.to_thread(work, chosen)
     await asyncio.sleep(0)
     try:
@@ -946,14 +947,21 @@ async def _offload(backend: Backend | str | None, work: Callable[[Backend], Any]
         await asyncio.sleep(0)
 
 
-async def compile(wasm: bytes | bytearray | memoryview, *, backend: Backend | str | None = None) -> Module:  # noqa: A001
-    """`WebAssembly.compile(bytes)`: a `Module`, awaited."""
-    return cast("Module", await _offload(backend, lambda chosen: Module(wasm, backend=chosen)))
+async def compile(  # noqa: A001
+    wasm: bytes | bytearray | memoryview, *, backend: Backend | str | None = None, threaded: bool = False
+) -> Module:
+    """`WebAssembly.compile(bytes)`: a `Module`, awaited. `threaded=True` does the work in a worker thread where the
+    backend allows it (see `instantiate`)."""
+    return cast("Module", await _offload(backend, lambda chosen: Module(wasm, backend=chosen), threaded))
 
 
 @overload
 async def instantiate(
-    wasm: Module, imports: Mapping[str, Mapping[str, object]] | None = None, *, backend: Backend | str | None = None
+    wasm: Module,
+    imports: Mapping[str, Mapping[str, object]] | None = None,
+    *,
+    backend: Backend | str | None = None,
+    threaded: bool = False,
 ) -> Instance: ...
 @overload
 async def instantiate(
@@ -961,19 +969,25 @@ async def instantiate(
     imports: Mapping[str, Mapping[str, object]] | None = None,
     *,
     backend: Backend | str | None = None,
+    threaded: bool = False,
 ) -> Instantiated: ...
 async def instantiate(
     wasm: bytes | bytearray | memoryview | Module,
     imports: Mapping[str, Mapping[str, object]] | None = None,
     *,
     backend: Backend | str | None = None,
+    threaded: bool = False,
 ) -> Instantiated | Instance:
     """`WebAssembly.instantiate(bytes | module, imports)`, awaited: from bytes an `Instantiated` (`module`,
-    `instance`), from a `Module` just the `Instance`. A host function in `imports` is called in the thread that does
-    the work (a worker thread on wasmtime, Node and Bun), so it should not touch what the event loop owns."""
+    `instance`), from a `Module` just the `Instance`.
+
+    By default the work is done in place, between two turns of the event loop: no threads are used (so it works where
+    Python's threads do not). `threaded=True` does it in a worker thread on a backend that allows it (wasmtime, Node,
+    Bun), which keeps the loop free during a long compile; a host function in `imports` is then called in that thread,
+    so it should not touch what the event loop owns."""
     return cast(
         "Instantiated | Instance",
-        await _offload(backend, lambda chosen: instantiate_sync(wasm, imports, backend=chosen)),
+        await _offload(backend, lambda chosen: instantiate_sync(wasm, imports, backend=chosen), threaded),
     )
 
 

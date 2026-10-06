@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 
+import pytest
 import wasm_builder as wb
 
 import wasmhost
@@ -57,3 +58,28 @@ def test_the_loop_keeps_running_while_a_module_is_made(session: str) -> None:
 
     asyncio.run(main())
     assert ticks == [0, 1, 2, 3, 4]
+
+
+def test_a_worker_thread_is_a_choice_and_gives_the_same_answers(session: str) -> None:
+    async def main() -> list[int]:
+        async def one(n: int) -> int:
+            module = await wasmhost.compile(wb.arith(), threaded=True)
+            inst = await wasmhost.instantiate(module, threaded=True)
+            return int(inst.exports.add(n, 1))
+
+        return list(await asyncio.gather(*(one(n) for n in range(8))))
+
+    assert asyncio.run(main()) == [n + 1 for n in range(8)]
+
+
+def test_by_default_no_thread_is_used(session: str, monkeypatch: pytest.MonkeyPatch) -> None:
+    def refuse(*args: object, **kwargs: object) -> None:
+        raise AssertionError("a thread was asked for")
+
+    monkeypatch.setattr(asyncio, "to_thread", refuse)
+
+    async def main() -> int:
+        inst = await wasmhost.instantiate(wasmhost.Module(wb.arith()))
+        return int(inst.exports.add(2, 3))
+
+    assert asyncio.run(main()) == 5

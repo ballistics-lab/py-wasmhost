@@ -449,17 +449,20 @@ def _async(backend: Backend) -> str:
     else:
         return "skipped: an event loop is already running here (asyncio.run can't nest)"
 
-    async def one(n: int) -> int:
-        module = await compile_async(MODULE, backend=backend)
-        instance = await instantiate_async(module, backend=backend)
+    async def one(n: int, threaded: bool) -> int:
+        module = await compile_async(MODULE, backend=backend, threaded=threaded)
+        instance = await instantiate_async(module, backend=backend, threaded=threaded)
         assert isinstance(instance, Instance)
         return int(instance.exports.add(n, n))
 
-    async def main() -> list[int]:
-        return list(await asyncio.gather(*(one(n) for n in range(6))))
+    async def main(threaded: bool) -> list[int]:
+        return list(await asyncio.gather(*(one(n, threaded) for n in range(6))))
 
-    _expect(asyncio.run(main()), [0, 2, 4, 6, 8, 10])
-    where = "in a worker thread" if backend.supports("threads") else "in place, a turn of the loop around it"
+    _expect(asyncio.run(main(False)), [0, 2, 4, 6, 8, 10])  # the default: no thread
+    where = "in place, a turn of the loop around it"
+    if backend.supports("threads"):
+        _expect(asyncio.run(main(True)), [0, 2, 4, 6, 8, 10])
+        where += "; and in worker threads when asked for"
     return f"six tasks at once; {where}"
 
 

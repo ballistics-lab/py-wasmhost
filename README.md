@@ -199,9 +199,10 @@ stays the initial size). A shared memory is refused (`NotImplementedError`): the
 
 `await wasmhost.compile(bytes)` and `await wasmhost.instantiate(bytes | module, imports)` are the JavaScript API's promises
 (`instantiate` of bytes gives `Instantiated(module, instance)`, of a `Module` just the `Instance`). The synchronous
-`Module(...)`, `Instance(...)` and `instantiate_sync(...)` stay. On `wasmtime`, `node` and `bun` the work goes to a worker
-thread, so the event loop is not held up; the JavaScriptCore backends and `wasm3` are tied to their thread and run in place,
-with a turn of the loop before and after.
+`Module(...)`, `Instance(...)` and `instantiate_sync(...)` stay. By default the work is done in place with a turn of the
+event loop before and after it, and uses **no threads**, so it works where Python's threads do not. `threaded=True` does it in a
+worker thread on `wasmtime`, `node` and `bun`, which keeps the loop free during a long compile (the JavaScriptCore backends
+and `wasm3` are tied to their thread and always run in place).
 
 A backend takes one call at a time: every call into it holds a lock of the backend's own (reentrant, so a host function
 may call back into the same backend), and two backends never wait for each other. Several tasks or threads may use one
