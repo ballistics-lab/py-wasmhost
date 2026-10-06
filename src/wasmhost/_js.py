@@ -633,7 +633,7 @@ class NodeBackend(JSBackend):
 
     name = "node"
     program = "node"  # what is looked for on PATH
-    features = JSBackend.features | {"imports"}
+    features = JSBackend.features | {"imports", "threads"}  # a process: any thread may talk to it, one at a time
 
     def __init__(self, node: str | None = None) -> None:
         super().__init__()

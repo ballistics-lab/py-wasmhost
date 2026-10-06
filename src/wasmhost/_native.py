@@ -197,6 +197,7 @@ class WasmtimeBackend(Backend):
             "memory.grow",
             "table.length",
             "table.funcs",
+            "threads",  # not tied to the thread that made it: calls may come from others, one at a time
             "table.signatures",  # a call of a function of another type than the one given is refused
             "imports",
             "import.global",

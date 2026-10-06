@@ -136,7 +136,7 @@ def test_a_module_that_imports_needs_an_import_object(session: str) -> None:
 
 
 def test_instantiate_shortcut(session: str) -> None:
-    module, instance = wasmhost.instantiate(wb.arith())
+    module, instance = wasmhost.instantiate_sync(wb.arith())
     assert instance.exports.add(20, 22) == 42
     assert wasmhost.Module.exports(module)
 

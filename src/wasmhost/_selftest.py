@@ -9,6 +9,7 @@ one line for each, and ends with a summary and the cost of a call. If something 
 from __future__ import annotations
 
 import argparse
+import asyncio
 import importlib.util
 import math
 import platform
@@ -20,6 +21,8 @@ from collections.abc import Callable
 from typing import Any
 
 from ._api import Global, Instance, Memory, Module, Table, get_backend, validate
+from ._api import compile as compile_async
+from ._api import instantiate as instantiate_async
 from ._backend import Backend
 from ._binary import FuncType, GlobalType, MemoryType, TableType, i32, i64
 from ._errors import CompileError, LinkError, Trap
@@ -210,6 +213,7 @@ def _selftest_backend(backend: Backend, out: Callable[[str], object]) -> _Report
     step("memory: made on its own, imported, shared", lambda: _memory_on_its_own(backend))
     step("table: made on its own, imported, shared", lambda: _table_on_its_own(backend))
     step("functions: one object per function, signature, a table entry", lambda: _functions(backend))
+    step("async compile and instantiate, tasks at once", lambda: _async(backend))
     step("custom sections", lambda: _custom_sections(backend))
     step("type reflection: type() of a function, memory, table and global", lambda: _types(backend))
     step("an isolated instance", lambda: _isolated(backend))
@@ -434,6 +438,29 @@ def _functions(backend: Backend) -> str:
         _expect(unknown(1, 2), 3)
         checked = "a wrong signature refused by the engine"
     return f"identity, equality, signature rules, a function of an elem segment, {checked}; a table entry called"
+
+
+def _async(backend: Backend) -> str:
+    """`await compile(...)` and `await instantiate(...)`, many tasks at once: each gets its own right answer."""
+    try:
+        asyncio.get_running_loop()
+    except RuntimeError:
+        pass
+    else:
+        return "skipped: an event loop is already running here (asyncio.run can't nest)"
+
+    async def one(n: int) -> int:
+        module = await compile_async(MODULE, backend=backend)
+        instance = await instantiate_async(module, backend=backend)
+        assert isinstance(instance, Instance)
+        return int(instance.exports.add(n, n))
+
+    async def main() -> list[int]:
+        return list(await asyncio.gather(*(one(n) for n in range(6))))
+
+    _expect(asyncio.run(main()), [0, 2, 4, 6, 8, 10])
+    where = "in a worker thread" if backend.supports("threads") else "in place, a turn of the loop around it"
+    return f"six tasks at once; {where}"
 
 
 def _custom(name: str, payload: bytes) -> bytes:

@@ -14,10 +14,11 @@ It runs on a backend (see `_backend.py`): a JavaScript engine's own `WebAssembly
 
 from __future__ import annotations
 
+import asyncio
 import functools
 import weakref
 from collections.abc import Callable, Iterator, Mapping
-from typing import Any, NamedTuple, cast
+from typing import Any, NamedTuple, cast, overload
 
 from ._backend import (
     Backend,
@@ -905,15 +906,75 @@ class Instantiated(NamedTuple):
     instance: Instance
 
 
-def instantiate(
+@overload
+def instantiate_sync(
+    wasm: Module, imports: Mapping[str, Mapping[str, object]] | None = None, *, backend: Backend | str | None = None
+) -> Instance: ...
+@overload
+def instantiate_sync(
     wasm: bytes | bytearray | memoryview,
     imports: Mapping[str, Mapping[str, object]] | None = None,
     *,
     backend: Backend | str | None = None,
-) -> Instantiated:
-    """`WebAssembly.instantiate(bytes, imports)`: compile and instantiate in one step."""
+) -> Instantiated: ...
+def instantiate_sync(
+    wasm: bytes | bytearray | memoryview | Module,
+    imports: Mapping[str, Mapping[str, object]] | None = None,
+    *,
+    backend: Backend | str | None = None,
+) -> Instantiated | Instance:
+    """`WebAssembly.instantiate` without the promise: from bytes, a `Module` and an `Instance` (an `Instantiated`);
+    from a `Module`, just the `Instance`."""
+    if isinstance(wasm, Module):
+        return Instance(wasm, imports)
     module = Module(wasm, backend=backend)
     return Instantiated(module, Instance(module, imports))
+
+
+async def _offload(backend: Backend | str | None, work: Callable[[Backend], Any]) -> Any:
+    """Run `work(backend)` without holding up the event loop where that is safe: in a thread on a backend that says
+    "threads" (wasmtime, Node, Bun: not tied to the thread that made them; the backend's own lock lets one call in at
+    a time, so tasks never race), in place on one that is tied to its thread (the JavaScriptCore ones, wasm3), with a
+    turn of the loop before and after so that others get to run."""
+    chosen = _backend(backend)
+    if chosen.supports("threads"):
+        return await asyncio.to_thread(work, chosen)
+    await asyncio.sleep(0)
+    try:
+        return work(chosen)
+    finally:
+        await asyncio.sleep(0)
+
+
+async def compile(wasm: bytes | bytearray | memoryview, *, backend: Backend | str | None = None) -> Module:  # noqa: A001
+    """`WebAssembly.compile(bytes)`: a `Module`, awaited."""
+    return cast("Module", await _offload(backend, lambda chosen: Module(wasm, backend=chosen)))
+
+
+@overload
+async def instantiate(
+    wasm: Module, imports: Mapping[str, Mapping[str, object]] | None = None, *, backend: Backend | str | None = None
+) -> Instance: ...
+@overload
+async def instantiate(
+    wasm: bytes | bytearray | memoryview,
+    imports: Mapping[str, Mapping[str, object]] | None = None,
+    *,
+    backend: Backend | str | None = None,
+) -> Instantiated: ...
+async def instantiate(
+    wasm: bytes | bytearray | memoryview | Module,
+    imports: Mapping[str, Mapping[str, object]] | None = None,
+    *,
+    backend: Backend | str | None = None,
+) -> Instantiated | Instance:
+    """`WebAssembly.instantiate(bytes | module, imports)`, awaited: from bytes an `Instantiated` (`module`,
+    `instance`), from a `Module` just the `Instance`. A host function in `imports` is called in the thread that does
+    the work (a worker thread on wasmtime, Node and Bun), so it should not touch what the event loop owns."""
+    return cast(
+        "Instantiated | Instance",
+        await _offload(backend, lambda chosen: instantiate_sync(wasm, imports, backend=chosen)),
+    )
 
 
 def validate(wasm: bytes | bytearray | memoryview, *, backend: Backend | str | None = None) -> bool:

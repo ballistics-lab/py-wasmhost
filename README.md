@@ -195,6 +195,19 @@ of them goes: `FuncType((i32, i32), (i32,))` and `FuncType(("i32", "i32"), ("i32
 `minimum` is the size now, as the specification has it (a table's `minimum` in JavaScriptCore is too; its memory's
 stays the initial size). A shared memory is refused (`NotImplementedError`): there are no threads here.
 
+## Async and threads
+
+`await wasmhost.compile(bytes)` and `await wasmhost.instantiate(bytes | module, imports)` are the JavaScript API's promises
+(`instantiate` of bytes gives `Instantiated(module, instance)`, of a `Module` just the `Instance`). The synchronous
+`Module(...)`, `Instance(...)` and `instantiate_sync(...)` stay. On `wasmtime`, `node` and `bun` the work goes to a worker
+thread, so the event loop is not held up; the JavaScriptCore backends and `wasm3` are tied to their thread and run in place,
+with a turn of the loop before and after.
+
+A backend takes one call at a time: every call into it holds a lock of the backend's own (reentrant, so a host function
+may call back into the same backend), and two backends never wait for each other. Several tasks or threads may use one
+backend, one after the other; to run two engines side by side make two backends (`wasmhost.NodeBackend()` twice), the
+default one is shared. A host function must not wait for another thread that wants the same backend.
+
 ## Batches
 
 On a JavaScript engine every call into it has a fixed cost (a pipe to `node`, a bridged Objective-C call in
@@ -323,7 +336,6 @@ which it is meant to be done.
 - **Batches** do not take a multi-value result.
 - **Memory is copied** on every read and write (no view onto the engine's own buffer), which costs on large buffers.
 - **Limits on untrusted code**: no ceiling on memory other than a memory's own maximum, and no time or fuel limit.
-- **`async` compile and instantiate**, like the JavaScript API's.
 - **Threads.** A module built with `-pthread` (the WebAssembly threads proposal: a `shared` memory that the module
   imports, atomic instructions, threads made by the host as several instances of the module on one memory) does not
   run: `Memory(..., shared=True)` raises `NotImplementedError`, so it can not be given as an import. Build without
