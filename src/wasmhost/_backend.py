@@ -13,6 +13,8 @@ global, whatever its runtime raises itself.
 
 from __future__ import annotations
 
+import functools
+import threading
 from collections.abc import Callable, Hashable, Sequence
 from typing import Any, NamedTuple, cast
 
@@ -140,8 +142,45 @@ def evaluate(operand: Operand, values: dict[int, Any]) -> int | float:
     return left + right if tag == "+" else left - right if tag == "-" else left * right
 
 
+_UNLOCKED = frozenset({"supports"})  # what only reads the class
+
+
+def _locked(method: Callable[..., Any]) -> Callable[..., Any]:
+    @functools.wraps(method)
+    def wrapper(self: Backend, *args: Any, **kwargs: Any) -> Any:
+        with self._lock:  # pyright: ignore[reportPrivateUsage]
+            return method(self, *args, **kwargs)
+
+    wrapper.__wasmhost_locked__ = True  # type: ignore[attr-defined]
+    return wrapper
+
+
 class Backend:
-    """A runtime. Subclasses implement the primitives; `run_batch` has a sequential default."""
+    """A runtime. Subclasses implement the primitives; `run_batch` has a sequential default.
+
+    One backend is one engine, and an engine takes one call at a time: every public method of a backend holds the
+    backend's own lock while it runs, so two threads (or tasks) calling into the same backend go one after the
+    other, and two backends do not wait for each other. The lock is reentrant: a host function that the engine calls
+    from inside a call may call into the same backend again, in the same thread. (A host function that waits for
+    another thread which wants the same backend would wait forever: do not.)"""
+
+    _lock: threading.RLock
+
+    def __new__(cls, *args: Any, **kwargs: Any):  # noqa: ANN204 -- the type of `cls`, which a subclass sets
+        self = super().__new__(cls)
+        self._lock = threading.RLock()
+        return self
+
+    def __init_subclass__(cls, **kwargs: Any) -> None:
+        super().__init_subclass__(**kwargs)
+        for name, member in list(vars(cls).items()):
+            if (
+                not name.startswith("_")
+                and name not in _UNLOCKED
+                and isinstance(member, type(_locked))  # a plain function: not a property, a staticmethod, a number
+                and not getattr(member, "__wasmhost_locked__", False)
+            ):
+                setattr(cls, name, _locked(member))
 
     name: str = "?"
     # What the runtime can't do is left out: "memory.grow" (Memory.grow from Python), "table.length", "imports"

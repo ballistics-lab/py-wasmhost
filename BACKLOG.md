@@ -45,7 +45,7 @@ Pythonista), де CI не буває. Він має відображати те,
    ③ експорти й wasmtime лишаються прямими викликами; ④ `supports("table.signatures")` у `_native.py`/`_js.py`;
    ⑤ тести: функція іншого типу в слоті з анотацією на jsc/node/bun, на wasmtime без тремпліна; крок у селф-тесті;
    прибрати з README застереження про хибну анотацію.) Було: страховка через `call_indirect` (генератор wasm, перевірка типу рушієм).
-5. **B-304:** async (`async def compile/instantiate`, `instantiate_sync`, без гонок).
+5. **B-304:** (замок на бекенд зроблено: `Backend._lock`, `RLock` на кожен публічний метод, `tests/test_threads.py`; лишився сам async) async (`async def compile/instantiate`, `instantiate_sync`, без гонок).
 6. Далі за фазами: B-202, B-203, B-204, фаза 3 (пам'ять без копіювання), фаза 4 (обмеження для ненадійного коду).
 
 ## Прийняті рішення про API
