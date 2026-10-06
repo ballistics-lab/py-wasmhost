@@ -57,6 +57,10 @@ it works in Pythonista.
 `sort`, `cp`, `seq`, `wc` and the rest, and `lua`, with pipes and redirects, over a directory of the real file system.
 The WASI host for the modules is written in Python, on wasmhost; it is also a model of how to write one.
 
+`examples/wasi_sh.py` is a real POSIX shell, BusyBox `ash` with about fifty utilities (the wasi-sh project's
+`busybox.wasm`, downloaded once from npm), with pipes, `$(...)`, here-documents and functions, over a file system that is
+a Python dict: nothing real is touched. It is made for Pythonista (`input()` at the prompt, no terminal needed).
+
 `examples/coremark.py` runs CoreMark (the wasm3 project's build, in `examples/wasm/`) on every backend that starts here,
 to compare their speed. A runtime that finishes the last pass in under 10 s is not scored by CoreMark itself, so it
 prints the pass time too.
