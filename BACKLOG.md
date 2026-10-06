@@ -362,7 +362,7 @@ shared memory, memory64 (і GC), кожен із `supports(...)`.
 
 ## Приклади: оболонка для Pythonista (досліджено 2026-10-06)
 
-- [ ] **B-509** Оболонка для Pythonista на wasmhost з in-memory VFS. Агент зробив `examples/wasi_sh.py` (BusyBox ash з
+- [x] **B-509** (ЗРОБЛЕНО: власник підтвердив, що працює в Pythonista; `examples/wasi_sh.py` і тест у гілці `examples/zigcc`; режими: пам'ять за замовчуванням, `--home`, `--root DIR`, `--readonly`) Оболонка для Pythonista на wasmhost з in-memory VFS. Агент зробив `examples/wasi_sh.py` (BusyBox ash з
       проєкту `alganet/wasi-sh` v0.11.0, `busybox.wasm` 376 КБ з npm-тарболу, GPL-2.0 у бінарнику, ISC в обв'язці;
       SHA-256 перевіряється; `class Wasi` на 27 викликів preview1 + 9 `env.__host_*`, `class Vfs` на словнику) і
       `tests/test_wasi_sh_example.py` (7 тестів). Лежить у гілці `worktree-agent-ab8d16b75a0939152` (коміт `11a45db`,
