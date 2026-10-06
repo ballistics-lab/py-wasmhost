@@ -435,12 +435,17 @@ class JSBackend(Backend):
                     for a, k in zip(step.args, step.ftype.params, strict=True)
                 )
                 call = f"O[{step.func}]({operands})"
-                if step.ftype.results:
-                    kinds[step.out] = step.ftype.results[0]
-                    lines.append(f"r[{step.out}]={call};")
+                if len(step.ftype.results) > 1:  # an array in JavaScript: each element into its own slot
+                    for slot, kind in zip(step.outs, step.ftype.results, strict=True):
+                        kinds[slot] = kind
+                    stores = "".join(f"r[{slot}]=t[{i}];" for i, slot in enumerate(step.outs))
+                    lines.append(f"{{const t={call};{stores}}}")
+                elif step.ftype.results:
+                    kinds[step.outs[0]] = step.ftype.results[0]
+                    lines.append(f"r[{step.outs[0]}]={call};")
                 else:
-                    kinds[step.out] = "void"
-                    lines.append(f"r[{step.out}]=({call},0);")  # a 0 marks the step as done
+                    kinds[step.outs[0]] = "void"
+                    lines.append(f"r[{step.outs[0]}]=({call},0);")  # a 0 marks the step as done
             elif isinstance(step, WriteStep):
                 lines.append(f"W(O[{step.memory}],{_expr(step.offset)},{json.dumps(step.data.hex())});")
             elif isinstance(step, ReadStep):

@@ -547,20 +547,19 @@ class Batch:
         self._refs.append(ref)
         return ref
 
-    def call(self, function: Function, *args: object) -> Ref:
-        """Call an exported function. The result is a `Ref`; for a function without one its value is None."""
+    def call(self, function: Function, *args: object) -> Any:
+        """Call an exported function. The result is a `Ref`; for a function without one its value is None; for one
+        with several results (multi-value) a tuple of `Ref`s, one for each: `low, high = batch.call(split, x)`."""
         if function._instance is not self._instance:
             raise ValueError("a function of another instance, or one that this instance does not export")
         ftype = function.type()  # an export's type is known
         name = function.name or ""
         if len(args) != len(ftype.parameters):
             raise TypeError(f"{name}() takes {len(ftype.parameters)} arguments ({len(args)} given)")
-        if len(ftype.results) > 1:
-            raise NotImplementedError("multi-value results in a batch")
         operands = tuple(self._operand(a, k) for a, k in zip(args, ftype.parameters, strict=True))
-        ref = self._new(ftype.results[0] if ftype.results else "void")
-        self._steps.append(CallStep(ref._index, function._h, operands, ftype))
-        return ref
+        refs = [self._new(k) for k in ftype.results] or [self._new("void")]
+        self._steps.append(CallStep(tuple(r._index for r in refs), function._h, operands, ftype))
+        return tuple(refs) if len(refs) > 1 else refs[0]
 
     def write(self, memory: Memory, offset: int | Ref, data: bytes | bytearray | memoryview) -> None:
         self._check_memory(memory)

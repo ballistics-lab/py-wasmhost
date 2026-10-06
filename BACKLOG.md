@@ -212,7 +212,7 @@ Pythonista), де CI не буває. Він має відображати те,
 - [ ] **B-202** `Table(kind, initial, maximum, init)`: початкове значення.
 - [ ] **B-203** `externref` і `funcref` як значення глобалів і таблиць (зараз лише числа) і `Table("externref", …)`.
       Рішення з дизайну: як тримати Python-об'єкти на боці рушія (реєстр з ручками, звільнення).
-- [ ] **B-204** (це код, не лише документація: `Batch.call` зараз кидає `NotImplementedError("multi-value results in a batch")`, README це описує; чекає на рішення про форму результату, `Ref` чи кортеж `Ref`) Multi-value у `Batch`: кортеж результатів у пакеті (зараз README каже «не підтримується»).
+- [x] **B-204** (ЗРОБЛЕНО: кортеж `Ref`, `CallStep.outs`, `tests/test_batch_multi_value.py`, крок у селф-тесті; було: це код, не лише документація: `Batch.call` зараз кидає `NotImplementedError("multi-value results in a batch")`, README це описує; чекає на рішення про форму результату, `Ref` чи кортеж `Ref`) Multi-value у `Batch`: кортеж результатів у пакеті (зараз README каже «не підтримується»).
 
 Бекенди: wasmtime (повністю), wasm3 (частково), JS-рушії (через обгортки); те, чого нема, позначається
 `supports("table.externref")` тощо. Ризик: `externref` у JSC/Node потребує окремого шляху.

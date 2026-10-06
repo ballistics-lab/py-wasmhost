@@ -229,6 +229,7 @@ batch.run()
 out.value  # bytes (`.done` says whether the step ran)
 ```
 
+A function with several results gives a tuple of `Ref`s (`low, high = batch.call(split, x)`), each usable by later steps.
 A failing step (a trap, an out-of-bounds access) raises from `run()`, after the earlier steps' results are set.
 Only `i32` results can be used in arithmetic (`ptr * 8`, `ptr + 4`).
 
@@ -339,7 +340,6 @@ which it is meant to be done.
 
 - **Tables and references.** the signature of a table entry is not told by a JavaScript engine (set it by hand; wasmtime finds it); no `externref` (tables, globals or
   values); no start value for `Table(...)`; no `v128`.
-- **Batches** do not take a multi-value result.
 - **Memory is copied** on every read and write (no view onto the engine's own buffer), which costs on large buffers.
 - **Limits on untrusted code**: no ceiling on memory other than a memory's own maximum, and no time or fuel limit.
 - **Threads.** A module built with `-pthread` (the WebAssembly threads proposal: a `shared` memory that the module

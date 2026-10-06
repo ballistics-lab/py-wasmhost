@@ -660,8 +660,11 @@ def _batch(instance: Instance) -> None:
     b.write(ex.memory, three + 397, b"xyz")
     back = b.read(ex.memory, three * 100, 1)
     text = b.read(ex.memory, three + 397, three)
+    first, second = b.call(ex.dup, three)  # a multi-value result: one Ref for each, usable by the next step
+    again = b.call(ex.add, first, second)
     b.run()
     _expect((three.value, back.value, text.value), (3, b"A", b"xyz"))
+    _expect((first.value, second.value, again.value), (3, 3, 6))
 
 
 def _batch_error(instance: Instance) -> None:
