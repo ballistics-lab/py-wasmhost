@@ -151,8 +151,10 @@ mem.write(0, b"shared with every instance that imports it")
 
 table = wasmhost.Table("funcref", 2)
 user = wasmhost.Instance(module, {"env": {"table": table}})
-table.set(0, provider.exports.add)  # an exported Function (or a FuncRef, or None to empty the entry)
-table.get(0)  # a FuncRef: it goes into another table, it is not callable
+table.set(0, provider.exports.add)  # a Function (or None to empty the entry)
+table.get(0) is provider.exports.add  # True: one function is one object, as in JavaScript
+table.get(0).type()  # FuncType((i32, i32), (i32,)); wasmtime finds it, a JavaScript engine does not tell:
+# there a `ValueError` and `table.get(0).signature = FuncType((i32, i32), (i32,))` (a call looks for it, too)
 table.grow(2)  # the length before
 ```
 
@@ -306,7 +308,7 @@ Python's `faulthandler` (on with `python -X faulthandler`, and in pytest) replac
 What the JavaScript API has, or a module can need, and wasmhost does not have yet. `BACKLOG.md` has the order in
 which it is meant to be done.
 
-- **Tables and references.** `Table.get` is a `FuncRef`, not a callable function; no `externref` (tables, globals or
+- **Tables and references.** the signature of a table entry is not told by a JavaScript engine (set it by hand; wasmtime finds it); no `externref` (tables, globals or
   values); no start value for `Table(...)`; no `v128`.
 - **Batches** do not take a multi-value result.
 - **Memory is copied** on every read and write (no view onto the engine's own buffer), which costs on large buffers.

@@ -197,6 +197,7 @@ def _selftest_backend(backend: Backend, out: Callable[[str], object]) -> _Report
     step("globals: made on their own, imported, shared", lambda: _globals_on_their_own(backend))
     step("memory: made on its own, imported, shared", lambda: _memory_on_its_own(backend))
     step("table: made on its own, imported, shared", lambda: _table_on_its_own(backend))
+    step("functions: one object per function, signature, a table entry", lambda: _functions(backend))
     step("custom sections", lambda: _custom_sections(backend))
     step("type reflection: type() of a function, memory, table and global", lambda: _types(backend))
     step("an isolated instance", lambda: _isolated(backend))
@@ -371,6 +372,39 @@ def _table_on_its_own(backend: Backend) -> str:
     except NotImplementedError:
         return "functions shared across instances; an externref table is not supported yet, as documented"
     raise AssertionError("an externref table should be NotImplementedError")
+
+
+def _functions(backend: Backend) -> str:
+    """A function is one object (`table.get(0) is exports.add`), its signature is known for an export, can be given
+    by hand for a table entry the engine does not describe, and a wrong one is refused when it contradicts."""
+    if not (backend.supports("import.table") and backend.supports("table.funcs")):
+        return "no functions in tables on this backend"
+    provider = Instance(Module(TABLE_OWN, backend=backend)).exports
+    add = provider.add
+    add_type = FuncType((i32, i32), (i32,))
+    _expect((provider.add is add, add.signature, add.type()), (True, add_type, add_type))
+    table = Table("funcref", 2, backend=backend)
+    table.set(0, add)
+    entry = table.get(0)
+    _expect((entry is add, entry == add, hash(entry) == hash(add)), (True, True, True))
+    _expect(provider.mul == add, False)
+    try:
+        add.signature = FuncType((i32,), (i32,))
+    except ValueError:
+        pass
+    else:
+        raise AssertionError("a signature that contradicts the known one was accepted")
+    fresh = Table("funcref", 1, backend=backend)
+    fresh.set(0, add)
+    other = fresh.get(0)
+    assert other is not None
+    if other.signature is None:
+        try:
+            other.type()
+        except ValueError:
+            other.signature = add_type  # the engine does not say: given by hand
+    _expect(other(2, 3), 5)
+    return "identity, equality, signature rules; a table entry called"
 
 
 def _custom(name: str, payload: bytes) -> bytes:
