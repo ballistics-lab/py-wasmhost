@@ -113,6 +113,12 @@ class ModuleInfo(NamedTuple):
     imports: tuple[ImportDescriptor, ...]
     exports: tuple[ExportDescriptor, ...]
     custom: tuple[tuple[str, bytes], ...] = ()  # the custom sections (name, contents), in order
+    # What the active `elem` segments put in the tables: (table index, slot, type of the function). Only the plain
+    # forms (a table, an `i32.const` offset, function indexes); the others are left out. Imported tables come first
+    # in the numbering, then the module's own, and `table_exports` says which index each exported table has.
+    elems: tuple[tuple[int, int, FuncType], ...] = ()
+    table_exports: tuple[tuple[str, int], ...] = ()
+    has_start: bool = False  # the module runs code while it is made, which may change its tables
 
 
 class _Reader:
@@ -149,6 +155,16 @@ class _Reader:
         if flags & 8:
             self.u32()
         return minimum, maximum, bool(flags & 2)
+
+    def s32(self) -> int:
+        """A signed LEB128 (the operand of `i32.const`)."""
+        result = shift = 0
+        while True:
+            b = self.byte()
+            result |= (b & 0x7F) << shift
+            shift += 7
+            if not b & 0x80:
+                return result - (1 << shift) if b & 0x40 else result
 
     def skip_leb(self) -> None:
         while self.byte() & 0x80:
@@ -187,6 +203,8 @@ def parse(wasm: bytes) -> ModuleInfo:
     imports: list[ImportDescriptor] = []
     raw_exports: list[tuple[str, int, int]] = []
     custom: list[tuple[str, bytes]] = []
+    raw_elems: list[tuple[int, int, int]] = []  # table, slot, function index
+    has_start = False
 
     def table_type() -> TableType:
         element = r.valtype()
@@ -254,6 +272,22 @@ def parse(wasm: bytes) -> ModuleInfo:
             elif section_id == 7:
                 for _ in range(r.u32()):
                     raw_exports.append((r.name(), r.byte(), r.u32()))
+            elif section_id == 8:
+                has_start = True
+            elif section_id == 9:
+                for _ in range(r.u32()):
+                    flag = r.byte()
+                    if flag not in (0, 2):  # passive, declarative and expression forms are not read
+                        break
+                    table = r.u32() if flag == 2 else 0
+                    if r.byte() != 0x41:  # not an i32.const offset
+                        break
+                    offset = r.s32()
+                    if r.byte() != 0x0B:
+                        break
+                    if flag == 2:
+                        r.byte()  # elemkind
+                    raw_elems.extend((table, offset + i, r.u32()) for i in range(r.u32()))
             r.pos = end
     except IndexError as exc:
         raise ValueError("truncated WebAssembly binary") from exc
@@ -269,4 +303,6 @@ def parse(wasm: bytes) -> ModuleInfo:
         elif kind == 3:
             found = global_types[index]
         exports.append(ExportDescriptor(name, KINDS[kind], found))
-    return ModuleInfo(tuple(imports), tuple(exports), tuple(custom))
+    elems = tuple((t, s, types[func_types[f]]) for t, s, f in raw_elems if f < len(func_types))
+    table_exports = tuple((n, i) for n, k, i in raw_exports if k == 1)
+    return ModuleInfo(tuple(imports), tuple(exports), tuple(custom), elems, table_exports, has_start)

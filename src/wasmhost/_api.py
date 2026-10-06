@@ -264,7 +264,7 @@ def _function(
     if found is None:
         found = Function(backend, handle, instance=instance, name=name, signature=signature)
         if signature is None:  # an engine that knows the type (wasmtime) says so at once
-            native = backend.function_type(handle)
+            native = backend.function_type(handle) or backend.__dict__.get("_signatures", {}).get(key)
             if native is not None:
                 found._signature, found._known = native, True
         cache[key] = found
@@ -847,6 +847,34 @@ class Instance:
                 handle = self._backend.export_table(self._handle, e.name)
                 items[e.name] = Table._wrap(self._backend, handle, e.name, e.type)
         self.exports = _Exports(items)
+        self._learn_table_entries(module, imports, items)
+
+    def _learn_table_entries(
+        self, module: Module, imports: Mapping[str, Mapping[str, object]] | None, items: dict[str, Any]
+    ) -> None:
+        """Remember which function the `elem` segments put in each slot, by the identity of the function, so that a
+        `Table.get` of one on an engine that does not say what a function is still knows its signature. Right after
+        the instance is made, and not for a module with a start function (it may have changed the tables before we
+        looked); a slot rewritten later holds another function, which is known by itself or not at all."""
+        info = module._info
+        backend = self._backend
+        if not info.elems or info.has_start or not backend.supports("table.funcs"):
+            return
+        tables: dict[int, Table] = {}
+        own = [d for d in info.imports if d.kind == "table"]
+        for i, d in enumerate(own):
+            found = (imports or {}).get(d.module, {}).get(d.name)
+            if isinstance(found, Table):
+                tables[i] = found
+        for name, index in info.table_exports:
+            if isinstance(items.get(name), Table):
+                tables[index] = items[name]
+        known: dict[Any, FuncType] = backend.__dict__.setdefault("_signatures", {})
+        for table_index, slot, ftype in info.elems[:1024]:
+            table = tables.get(table_index)
+            handle = None if table is None else backend.table_get(table._handle, slot)
+            if handle is not None:
+                known.setdefault(backend.function_key(handle), ftype)
 
     def _export_function(self, name: str, ftype: FuncType) -> Function:
         handle = self._backend.export_function(self._handle, name)
