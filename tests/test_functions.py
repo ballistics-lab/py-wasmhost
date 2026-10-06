@@ -137,6 +137,7 @@ def test_instantiate_sync_of_a_module_is_an_instance(session: str) -> None:
 
 def test_the_features_the_new_code_relies_on(session: str) -> None:
     backend = wasmhost.get_backend()
-    # "table.signatures": the engine refuses a wrong type by itself (wasmtime only); "threads": a worker thread is allowed
+    # "table.signatures": the engine refuses a wrong type by itself (wasmtime only);
+    # "threads": a worker thread is allowed
     assert backend.supports("table.signatures") == (backend.name == "wasmtime")
     assert backend.supports("threads") == (backend.name in ("wasmtime", "node", "bun"))
