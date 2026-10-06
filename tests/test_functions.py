@@ -110,3 +110,33 @@ def test_a_wrong_signature_is_refused_not_obeyed(session: str) -> None:
         entry(1, 2)
     entry.signature = ADD  # the right one, by hand: it works
     assert entry(1, 2) == 3
+
+
+def test_wasmtime_key_of_a_function_is_what_we_think_it_is(session: str) -> None:
+    """The key that makes one function one object on wasmtime reads wasmtime-py's private fields (`store_id` and the
+    mangled `__private`): if a new wasmtime-py renames them, this says so, instead of every table entry turning into
+    a new object."""
+    if wasmhost.get_backend().name != "wasmtime":
+        pytest.skip("only wasmtime-py makes a new object for each table.get")
+    provider = wasmhost.Instance(wasmhost.Module(wb.tables(imported=False)))
+    raw = provider.exports.add._h.obj._func  # pyright: ignore[reportPrivateUsage]
+    assert isinstance(int(raw.store_id), int) and isinstance(int(getattr(raw, "__private")), int)  # noqa: B009
+    table = provider.exports.table
+    table.set(0, provider.exports.add)
+    first, second = table.get(0), table.get(0)
+    assert first is second and first is provider.exports.add
+
+
+def test_instantiate_sync_of_a_module_is_an_instance(session: str) -> None:
+    module = wasmhost.Module(wb.arith())
+    instance = wasmhost.instantiate_sync(module)
+    assert isinstance(instance, wasmhost.Instance) and instance.exports.add(1, 2) == 3
+    both = wasmhost.instantiate_sync(wb.arith())
+    assert isinstance(both, wasmhost.Instantiated)
+
+
+def test_the_features_the_new_code_relies_on(session: str) -> None:
+    backend = wasmhost.get_backend()
+    # "table.signatures": the engine refuses a wrong type by itself (wasmtime only); "threads": a worker thread is allowed
+    assert backend.supports("table.signatures") == (backend.name == "wasmtime")
+    assert backend.supports("threads") == (backend.name in ("wasmtime", "node", "bun"))
