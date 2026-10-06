@@ -292,7 +292,8 @@ isolated instance, which encodings of WebAssembly exceptions the engine takes (`
 (try/catch): no`: a module built with C++ exceptions, such as bclibc's `bclibc_wasm.wasm` from wasi-sdk, needs the final one),
 and the cost of a call. A check the backend can't do says so (`not available on this backend, as
 documented`) and counts as passed. If something fails, send the whole output. On a computer,
-`python -m wasmhost selftest --all` runs it on every backend that starts.
+`python -m wasmhost selftest --all` runs it on every backend that starts. Installed with pip, the same commands are
+there as `wasmhost selftest` and `wasmhost bench`.
 
 `python -m wasmhost bench [--backend NAME] [--no-jit]` times a call, a batch of three and the engine itself (a recursive
 `fib`, a loop) on each backend that starts, to choose one. `--no-jit` takes the JIT off JavaScriptCore

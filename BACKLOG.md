@@ -299,7 +299,7 @@ Pythonista), де CI не буває. Він має відображати те,
       `--dir ХОСТ::ГІСТЬ`, `--env K=V`), усе після модуля (і після `--`) без розбору йде програмі через
       `args_get`. Спершу перевіряються назви команд (`selftest`), усе інше трактується як файл модуля; файл із
       назвою команди запускається як `./selftest`. Підкоманда `selftest` лишається як є. Залежить від B-502.
-- [ ] **B-507** Точка входу `wasmhost`: `[project.scripts] wasmhost = "wasmhost._cli:main"` в `pyproject.toml`, щоб
+- [x] **B-507** (ЗРОБЛЕНО: `[project.scripts]`, `tests/test_cli_entry.py`; розширимо, коли з'явиться запуск модуля, B-506) Точка входу `wasmhost`: `[project.scripts] wasmhost = "wasmhost._cli:main"` в `pyproject.toml`, щоб
       писати `wasmhost myapp.wasm` і `wasmhost selftest`, а не `python -m wasmhost`. Зараз такої команди нема.
       Перевірити `uv lock --check` і колеса.
 - [ ] **B-508** Запуск модуля без WASI (як наші `fib` і `sum`): в нього нема `_start` і аргументів, тому окрема
