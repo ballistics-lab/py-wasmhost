@@ -332,7 +332,7 @@ shared memory, memory64 (і GC), кожен із `supports(...)`.
       тестів (140 passed, 7 skipped, як у Node) на Bun 1.4.2. CI: Linux і macOS (Windows не пробували). README, таблиці
       бекендів і можливостей. Bun це JavaScriptCore, тож він корисний як JSC на всіх ОС без GTK, ближчий до iOS.
 - [ ] **B-701b** Deno (`deno`): через `deno eval` і ту ж обв'язку (`deno eval -A`, той самий `_NODE_LOOP`) проходить
-      32/33 (на 2026-10-06, Deno 2.9.6, V8 15.0; ставиться через `npm install deno`). **Причину знайдено, це помилка
+      32/33 (на 2026-10-06, Deno 2.9.6 і 2.9.7, V8 15.0; npm-пакет `deno` відстає, 2.9.7 є лише бінарником з GitHub Releases). **Причину знайдено, це помилка
       самого Deno, не нашого коду:** крок «call cost» лише добиває вже мертвий процес (`BrokenPipeError`); Deno
       падає з Rust-паніком (`capacity overflow`, «Deno has panicked») на кроці «exception handling». Мінімальне
       відтворення без wasmhost: модуль, що кидає `WebAssembly.Exception`, і `vm.runInContext(src, ctx)` (`import vm
