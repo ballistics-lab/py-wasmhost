@@ -29,9 +29,6 @@ def load_example() -> ModuleType:
 def shell_for(root: Path) -> tuple[Any, list[str]]:
     if not wasmhost.get_backend().supports("imports"):
         pytest.skip(f"the {wasmhost.get_backend().name} backend can't take imports")
-    if wasmhost.get_backend().name == "wasm3":
-        # Rust's output uses multi-value, reference types and bulk memory; wasm3 stops it right after `args_get`.
-        pytest.skip("wasm3 can't run this build of coreutils")
     example = load_example()
     module = wasmhost.Module((EXAMPLES / "wasm" / "coreutils.wasm").read_bytes())
     out: list[str] = []

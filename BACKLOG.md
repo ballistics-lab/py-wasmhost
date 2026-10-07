@@ -298,8 +298,8 @@ Done when: `instance.exports.table.get(0)(1, 2)` works where the engine allows i
       Conclusion: in speed `jscontext` on iOS is closer to JavaScriptCore **without JIT** (on `fib(20)` 1.4 versus 1.7 ms, and
       not 0.2), so this matches the known fact: in Pythonista (a third-party app on iOS) there is no JIT. A comparison across different
       processors is rough; if desired, run the same `wasmhost bench` on several iPhones and add a line to the README; pywasm3 cannot be installed on iOS (a C extension), so
-      the advantage of `wasm3` there is only an estimate. Conclusion: where JIT is unavailable, `wasm3` wins several times over, but it cannot do multi-value, reference types, bulk memory
-      (coreutils.wasm does not run on it). An idea: mention this difference (there is no JIT on `jscontext`) in `AUTO_ORDER` and the README;
+      the advantage of `wasm3` there is only an estimate. Conclusion: where JIT is unavailable, `wasm3` wins several times over (it runs Rust builds and `coreutils.wasm` too, checked 2026-10-07, see B-505;
+      Pyodide it does not take: see B-505). An idea: mention this difference (there is no JIT on `jscontext`) in `AUTO_ORDER` and the README;
       Not measured: memory, f32/f64, SIMD, `wasmtime` with other
       Cranelift settings, `node --jitless`.
 - [ ] **B-304a** (after B-304) Examples on `asyncio` instead of polling in a loop with `sleep`/`select`. Owner decision:
@@ -451,7 +451,11 @@ files in a real folder, stdio, arguments, a clock, `sleep`), tests on wasmtime a
 - [ ] **B-503** A sandbox through `openat` with `dir_fd`, to remove the gap between checking the path and opening
       (right now `resolve()` checks, then `os.open`).
 - [ ] **B-504** Several preopen folders and a "read-only" mode.
-- [ ] **B-505** Tests on all backends; `wasm3` does not take Rust builds (multi-value, reference types), this goes into `supports`.
+- [ ] **B-505** Tests on all backends. **Correction (2026-10-07): an earlier note here said `wasm3` does not take Rust builds (multi-value, reference types, bulk memory); that was wrong and unchecked.**
+      Checked: a `std` program built with `rustc 1.97.0` for `wasm32-wasip1` (HashMap, `format!`, `u128`, arguments; 2.1 MB, uses `memory.copy` / `memory.fill`) and a `no_std` `wasm32-unknown-unknown` library
+      run on `wasm3` with the same output as on `wasmtime`; and `tests/test_coreutils_example.py` (3 tests) passes on `wasm3` with its skip taken off (the skip is now removed). What `wasm3` does not take is
+      still unmeasured as a list: Pyodide's `pyodide.asm.wasm` (not WASI-only: 280 imported globals, which our `wasm3` backend can't give (`supports("import.global")` is false), and `externref` in 149 function types) does not link.
+      So `supports` needs no "Rust" entry; what is left of this item is the tests themselves and the table of what each backend can run (see the WASI notes above).
 - [ ] **B-506** A command to run a module along the lines of `wasmtime myapp.wasm -- arg1 arg2 --verbose`. The grammar:
       `wasmhost [ОПЦІЇ ХОСТА] myapp.wasm [-- АРГУМЕНТИ ПРОГРАМИ]`: the options before the module belong to the host (`--backend`,
       `--dir ХОСТ::ГІСТЬ`, `--env K=V`), everything after the module (and after `--`) goes unparsed to the program through
@@ -550,7 +554,7 @@ shared memory, memory64 (and GC), each with `supports(...)`.
 
 - `examples/wasm/lua.wasm` was built without `longjmp`: any script error (syntax, `error()`, `pcall`) kills the
   interpreter. The cure is a different build of Lua.
-- `coreutils.wasm` does not run on `wasm3` (multi-value, reference types, bulk memory).
+- `coreutils.wasm` runs on `wasm3` too (checked 2026-10-07: `tests/test_coreutils_example.py` passes there; an older note and test skip said it didn't).
 - Whether JavaScriptCore on your iOS accepts the remaining features of `coreutils.wasm` has not been verified on a device.
 - `coreutils.wasm` weighs 10.8 MB (see B-004).
 
