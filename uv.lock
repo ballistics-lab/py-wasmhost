@@ -193,8 +193,8 @@ wheels = [
 
 [[package]]
 name = "pywasm3"
-version = "0.9.1.dev71+gfce65fd7f"
-source = { git = "https://github.com/wasm3/pywasm3?rev=fce65fd7fdffd8b6866a4a6f7612a0a5bc28b018#fce65fd7fdffd8b6866a4a6f7612a0a5bc28b018" }
+version = "0.9.1.dev75+g4c1334e03"
+source = { git = "https://github.com/wasm3/pywasm3?rev=4c1334e03b29f9576e9ef265f5cf7c7d5d51a37d#4c1334e03b29f9576e9ef265f5cf7c7d5d51a37d" }
 
 [[package]]
 name = "pyyaml"
@@ -408,7 +408,7 @@ dev = [
     { name = "pre-commit", specifier = ">=4.6.2" },
     { name = "pyright", specifier = ">=1.1.414" },
     { name = "pytest", specifier = ">=9.1.1" },
-    { name = "pywasm3", marker = "python_full_version >= '3.11' and platform_python_implementation == 'CPython'", git = "https://github.com/wasm3/pywasm3?rev=fce65fd7fdffd8b6866a4a6f7612a0a5bc28b018" },
+    { name = "pywasm3", marker = "python_full_version >= '3.11' and platform_python_implementation == 'CPython'", git = "https://github.com/wasm3/pywasm3?rev=4c1334e03b29f9576e9ef265f5cf7c7d5d51a37d" },
     { name = "rubicon-objc", marker = "sys_platform == 'darwin'", specifier = ">=0.5.4" },
     { name = "ruff", specifier = ">=0.16.8" },
     { name = "wasmtime", specifier = ">=49.0.0" },

@@ -72,7 +72,7 @@ dev = [
 [tool.uv.sources]
 # pywasm3's PyPI release is years behind the API Wasm3Backend uses; build it from the repo (uv also
 # fetches its wasm3 submodule). Needs a C compiler.
-pywasm3 = { git = "https://github.com/wasm3/pywasm3", rev = "fce65fd7fdffd8b6866a4a6f7612a0a5bc28b018" } # Py_mod_gil support (3790b9b) + merge
+pywasm3 = { git = "https://github.com/wasm3/pywasm3", rev = "4c1334e03b29f9576e9ef265f5cf7c7d5d51a37d" } # main of 2026-09-28: exception handling API, a newer wasm3, on top of Py_mod_gil support
 
 [tool.pytest.ini_options]
 minversion = "8.0"
