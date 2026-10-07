@@ -254,7 +254,9 @@ Done when: `instance.exports.table.get(0)(1, 2)` works where the engine allows i
 - [x] **B-301** (DONE 2026-10-07: `Memory.view` on wasmtime and wasm3, `supports("memory.view")`, the view is reset on a module call, batch, grow and instance creation, so there is no stale address; `tests/test_memory_view.py`, a step in the self-test. The gain is small (a 6 MB frame is ~6 ms of copying), the main bottleneck on the JS engines remains: encoding, see B-302) Memory without copying on the native backends (wasmtime, wasm3): a `memoryview` over the engine's buffer,
       with an honest rule: the view becomes invalid after `grow`. On the JS backends a copy remains.
 - [x] **B-302** (DONE 2026-10-07: `examples/coremark.py` already existed; the transfer of buffers is measured by `wasmhost bench --buffer KIB`, `_bench.measure_memory`, a test in `test_bench.py`; results below) A benchmark: `examples/coremark.py` plus a measurement of the transfer of large buffers (a frame, megabytes) before and after.
-- [x] **B-302a** (DONE 2026-10-07: the command and the measurements below, the buffer measurement of B-302 included) The results of comparing the backends (measured 2026-10-06, Linux, CPython 3.11; the best of three series) and what to
+- [ ] **B-302a** (PARTLY DONE 2026-10-07: the `bench` command, the measurements below and the buffer measurement of B-302 are done; still open: the
+      `AUTO_ORDER` comment about the missing JIT on `jscontext` (the README says it already), the rows of other iPhones, and what is listed as
+      not measured at the end) The results of comparing the backends (measured 2026-10-06, Linux, CPython 3.11; the best of three series) and what to
       do about them. Packaged as the command `python -m wasmhost bench [--backend] [--no-jit]` (`_bench.py`, `tests/test_bench.py`).
       **Transfer of a 1 MiB buffer into and out of memory (MB/s, Linux, CPython 3.11, `wasmhost bench --buffer 1024`, the best of three):**
       write / read: `wasmtime` ~5800 / ~1000; `wasm3` ~10000 / ~1350; `jsc` 43 / 29; `node` 15 / 11; `bun` 18 / 26.
