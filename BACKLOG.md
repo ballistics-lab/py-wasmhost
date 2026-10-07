@@ -73,7 +73,7 @@ steps fail; cause unknown, the owner suspects iSH's i386 emulator and will look 
 **After the rename the self-test on the device is 41/41 again (Pythonista, the wheel `0.1.0b3.dev20+gb9498e8f6`; the output does not print the version).**
 **Examples on the device (Pythonista, `jscontext`, the repo at `62f5f39`, wasmhost `0.1.0b3.dev23+g62f5f397d`, 2026-10-07):** `coreutils.py` works (it runs on `wasmhost.wasi.preview1` now), `coremark.py` works (score 1951.5, last pass
 15.4 s), `imports.py` works (host functions: nested calls, `i64`, several results, an exception out of a host function), `basic.py` works, `jitcheck.py` says 167 M iter/s, "interpreter likely (no JIT)" (as documented for iOS),
-`jslinux.py` connects (to `wss://relay.widgetry.org/`) and shows the shell prompt `/root #`, `pyodide.py` is ready in 1.9 s (Python 3.14.2, `emscripten`, `wasm32`; the snapshot of 31 MB and the other files came in "via C API"). `wasi_sh.py` works (BusyBox ash 1.38.0 on wasi-sh 0.11.0, the prompt `$`). `wasmclang.py` first failed in `add_tar` (Pythonista's `tarfile` object needs the size in `read()`); fixed in `03ca1f6`, and then
+`jslinux.py` connects (to `wss://relay.widgetry.org/`) and shows the shell prompt `/root #`, `pyodide.py` is ready in 1.9 s (Python 3.14.2, `emscripten`, `wasm32`; the snapshot of 31 MB and the other files came in "via C API"). `wasi_sh.py` works (BusyBox ash 1.38.0 on wasi-sh 0.11.0, the prompt `$`). `wasmclang.py` first failed in `add_tar` **under StaSh** (the owner: it ran without the fix in plain Pythonista; StaSh's `tarfile` object needs the size in `read()`); fixed in `03ca1f6`, and then
 it works on the device with its hybrid host: clang and lld compiled C and C++ in `jscontext` (the C++ link took 16 s of 22 s), the same output as on wasmtime and node (`fib(10) = 55`, a WASI program with `argc=3`, C++ with `std::vector` and `std::map`).
 
 **To do first, if the owner has not said otherwise:**
@@ -97,7 +97,7 @@ tidying (B-003), `coreutils.wasm` stays in git (B-004), `tiny-bclibc-wasm` (B-80
   assistant's environment; reading another repository takes `add_repo` (git only, no Actions logs).
 - `gi-jsc` takes no host functions (`supports("imports")` is false): a test that gives a module imports must skip there, as `tests/test_wasi_preview1_run.py` does (CI went red on it once).
 - On Windows `time.monotonic` ticks every 15.6 ms: a timing test uses `time.perf_counter` (a 30 ms sleep read as 16 ms on `windows-latest / 3.10`).
-- In Pythonista `tarfile.extractfile()` gives a `MyFileObject` whose `read()` needs the `size` (the standard one does not): pass `member.size` (`examples/wasmclang.py` failed on the device with `read() missing 1 required positional argument: 'size'`).
+- Under StaSh (not in plain Pythonista, the owner says) `tarfile.extractfile()` gives a `MyFileObject` whose `read()` needs the `size` (the standard one does not): pass `member.size` (`examples/wasmclang.py` failed there with `read() missing 1 required positional argument: 'size'`). When something fails on the device, ask whether it was run in StaSh or in Pythonista itself.
 - A mutation check that edits a file and puts it back within the same second, with the same size, can leave a stale `.pyc`: delete `__pycache__` before believing a result.
 - Facts: `jscontext` on iOS has **no JIT**, no wasmtime or wasm3 there, and neither timeout nor fuel; the owner works in Ukrainian, this file stays in English; a status mark (`[x]`) is set only on the owner's word.
 
