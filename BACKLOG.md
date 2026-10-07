@@ -64,7 +64,7 @@ the owner does). Newest commit: look at CI first. `Tests` was green on every job
 **Done** (phases 1 to 4): B-201 (`Function`, `signature`, `type()`, identity, `elem`, the safety net through `call_indirect`), B-202, B-204, B-301 (`Memory.view`), B-302 (`bench`),
 B-304 (a lock per backend, `await compile/instantiate`, threads only with `threaded=True`), B-507, B-509, fast buffers, Bun in CI, and **phase 4: B-401 (memory ceiling), B-402/B-403
 (timeout), B-404 (fuel)**, closed by the owner. The README has the limits in one section, "Limits for untrusted code". **Verified on the device by the owner** (Pythonista, iPhone 16,
-iOS 26, `jscontext`): self-test 38/38 (before the fuel step), buffers intact from 1 byte to 8 MiB, `await compile/instantiate`, multi-value in a batch, `wasi_sh --home`, `bench`.
+iOS 26, `jscontext`): self-test 41/41 on 2026-10-07 (with the WASI step; PythonIDE too), 38/38 before the fuel step, buffers intact from 1 byte to 8 MiB, `await compile/instantiate`, multi-value in a batch, `wasi_sh --home`, `bench`.
 **B-501 is done and closed (2026-10-07, with B-501.1 `wasi_unstable`)**: `src/wasmhost/wasi1.py`, all 46 functions of `wasi_snapshot_preview1` and the 45 of `wasi_unstable`, with tests and a self-test step (see B-501 below). **B-502 is in progress** (see the to-do list).
 **Also run by the owner (wasmhost 0.1.0b2, before the WASI step):** iSH-AOK (aarch64) on `wasmtime` and on `wasm3`, both 34/34; the original iSH (i686) on `wasm3`, 31/34 (a memory declared 1..4 pages is 4 pages
 from the start, so three memory steps fail; cause unknown, the owner suspects iSH's i386 emulator and will look when an issue is filed; see B-505 and the README).
@@ -74,8 +74,8 @@ from the start, so three memory steps fail; cause unknown, the owner suspects iS
    kind `wasi1` is (programs over a real folder, both snapshots): it is moved. `examples/wasmclang.py` answers the WASI calls with `memfs.wasm`, a file system that is itself a WebAssembly module, and `examples/wasi_sh.py` has
    a file system in a Python dict (`Vfs`), pipes without `fork` and nine `env.__host_*` hooks: neither fits `wasi1`, which works over real folders only. Moving them would need a file-system abstraction in `wasi1`
    (not planned; the owner decides).
-2. A device re-run of `wasmhost self test` (a fresh wheel: `git fetch --tags`, then `uv build --wheel`; the version comes from git tags): 41/41 expected on `jscontext` (35 on wasmtime and wasm3), where the
-   timeout and fuel steps say "not supported" instead of failing, and the WASI step should pass. Add a row to README "Where it has been run" when the owner reports it.
+2. ~~A device re-run of `wasmhost self test`~~ **Done 2026-10-07 by the owner** (wheel `0.1.0b3.dev14+gc14888b9c`, commit `c14888b`): 41/41 on Pythonista (iPhone 16, iOS 26, Python 3.10.4) and on PythonIDE (Python 3.14.7), both
+   on `jscontext`; the WASI step passes for both snapshots, the timeout and fuel steps say "not available", both encodings of exceptions are "yes". Rows are in README "Where it has been run".
 3. B-405 when upstream merges pywasm3's two PRs (#13, #14); B-406 is closed (option b: leave it, documented).
 4. Then the owner picks: B-203 (`externref`), a binary channel for node/bun (about 50 MB/s through the pipe and JSON now), B-006 (CI for examples).
 
