@@ -39,8 +39,9 @@ class _SubparsersLike(Protocol):
 def add_version_command(subparser: _SubparsersLike) -> None:
     ver = subparser.add_parser("version", help="show program's version number and exit")
 
-    def run_version(_args: argparse.Namespace) -> str:
-        return _VERSION
+    def run_version(_args: argparse.Namespace) -> int:
+        print(_VERSION)
+        return 0
 
     ver.set_defaults(run=run_version)
 
@@ -55,7 +56,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     def run_self_usage(_args: argparse.Namespace) -> int:
         self_command.print_usage(sys.stderr)  # no subcommand: the same as no command at all
-        return 2
+        parser.exit(2)
 
     self_command.set_defaults(run=run_self_usage)
 
@@ -77,8 +78,9 @@ def build_parser() -> argparse.ArgumentParser:
 
     help = commands.add_parser("help", help="show this help message and exit")
 
-    def run_help(_args: argparse.Namespace) -> str:
-        return parser.format_help()
+    def run_help(_args: argparse.Namespace) -> int:
+        parser.print_help()
+        return 0
 
     help.set_defaults(run=run_help)
     return parser
@@ -91,8 +93,4 @@ def main(argv: Sequence[str] | None = None) -> int:
     if command is None:  # no command
         parser.print_help(sys.stderr)
         return 2
-    result = command(args)
-    if isinstance(result, str):  # `version`, `help`: a text that was asked for, then success
-        print(result)
-        return 0
-    return result
+    return command(args)

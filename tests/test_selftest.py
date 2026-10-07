@@ -57,7 +57,9 @@ def test_version_and_help_succeed_and_self_alone_is_a_usage_error(capsys: pytest
     assert capsys.readouterr().out.strip() == _cli._VERSION  # pyright: ignore[reportPrivateUsage]
     assert _cli.main(["help"]) == 0
     assert "usage: python -m wasmhost" in capsys.readouterr().out
-    assert _cli.main(["self"]) == 2  # no subcommand: usage and a failure, as with no command at all
+    with pytest.raises(SystemExit) as stop:
+        _cli.main(["self"])  # no subcommand: usage and a failure, as with no command at all
+    assert stop.value.code == 2
     assert "usage: python -m wasmhost self" in capsys.readouterr().err
 
 
