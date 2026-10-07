@@ -69,7 +69,7 @@ decision, the history has two copies, about 21 MB: a squash would leave one); `t
 **Not covered by tests:** `examples/wasmclang.py`, `jslinux.py` (unavailable in the assistant's environment: `bellard.org` is blocked), `coremark.py`;
 the "Examples" step in CI runs only `basic.py` and `imports.py` (B-006). B-302a is only partly done (see its entry).
 
-**Next candidates:** B-203 (`externref`), a binary channel for node/bun (about 50 MB/s through the pipe and JSON now), phase 4 is done but for fuel (B-401 the memory ceiling, B-402/B-403 the timeout and its tests, where an engine can: none on iOS). Fact (confirmed by the owner, matches the measurements): `jscontext` on iOS has **no JIT**, so for pure computation `wasm3` would be faster than
+**Next candidates:** B-203 (`externref`), a binary channel for node/bun (about 50 MB/s through the pipe and JSON now), phase 4 is done (B-401 the memory ceiling, B-402/B-403 the timeout and its tests, where an engine can: none on iOS); a fuel limit (wasmtime `consume_fuel`, wasm3 `gas_limit`) is only a possible extra, not an item. Fact (confirmed by the owner, matches the measurements): `jscontext` on iOS has **no JIT**, so for pure computation `wasm3` would be faster than
 JavaScriptCore there, but `pywasm3` cannot be installed on iOS (a C extension).
 
 ## Order of work
@@ -373,9 +373,14 @@ Done when: transferring a buffer of megabytes is not copied on wasmtime and wasm
       so a function that is not one of those is not timed; a `Timeout` in a batch drops the results of the steps before it (the termination can't be caught in the script).
       **Not possible, and `supports("timeout")` is false:** **bun** (its `vm` timeout does not stop a wasm loop: the process hangs, had to be killed); **JavaScriptCore**
       (`jscontext`, `jsc`, `gi-jsc`: `JSContextGroupSetExecutionTimeLimit` is exported and stops a JavaScript loop in 0.30 s, but a wasm loop runs on: probed with
-      `libjavascriptcoregtk` 2.52.6 on Linux; not probed on a device, but the owner's view that JSC has no interruption holds), so **on iOS there is no time limit**; **wasm3** (no gas or
-      interruption in pywasm3). A backend without it raises `NotImplementedError` from `Instance(timeout=)`, and the self-test step does not run the loop there.
-      Open: no fuel (a count of instructions, deterministic, no thread: wasmtime has `consume_fuel`, same cost issue as epochs); not verified on macOS/Windows or a device (CI will say).
+      `libjavascriptcoregtk` 2.52.6 on Linux; not probed on a device, but the owner's view that JSC has no interruption holds), so **on iOS there is no time limit**; **wasm3** (no time limit: a call holds the GIL,
+      so no thread can act; probed 2026-10-07: pywasm3's `request_suspend()` from a `threading.Timer`, with `suspendable = True`, never ran and `spin()` hung). **Correction (2026-10-07): an
+      earlier note here and in the README said "no gas or interruption in pywasm3"; that was wrong and unchecked: the pinned pywasm3 has `Runtime.gas_limit` / `gas_used` (and `Module.gasLimit`),
+      and an endless loop under a limit ends with `[trap] out of gas` (1.3 s for 5e6 units, the runtime fine afterwards).** A backend without it raises `NotImplementedError` from
+      `Instance(timeout=)`, and the self-test step does not run the loop there.
+      Not done: fuel (a count of instructions, deterministic, no thread), which is not a numbered item: it was only in this item's title. wasmtime has `consume_fuel` (same cost question as epochs: a
+      second engine), wasm3 has `gas_limit` (cheap, no second engine); neither JavaScriptCore nor Node/Bun can count, and iOS has neither wasmtime nor wasm3, so it would not help there.
+      Not verified on macOS/Windows or a device by this item itself (CI was green on every platform).
       Found on the way: a trap in the start function leaked out of wasmtime as its own `Trap` (fixed: `Trap` is not a `WasmtimeError`); `wasm3` does not run the start function when the
       instance is made, but at the first call.
 - [x] **B-403** (DONE 2026-10-07, with B-402: `tests/test_timeout.py`, 36 tests) Tests "a module with an infinite loop" on every backend that can do this:

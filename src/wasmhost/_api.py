@@ -933,7 +933,7 @@ class Instance:
     a store of its own, like an isolated one, so it can't share a Memory, Table or Global made outside it. On Node a
     function or table of the instance is timed, but a `Timeout` in a batch drops the results of the steps before it.
     The JavaScriptCore engines and Bun can't stop a wasm loop (a script's time limit does not reach it), and wasm3
-    has no way to either."""
+    can't on time (a call holds the GIL, so no timer thread runs; its gas count could limit instructions instead)."""
 
     def __init__(
         self,

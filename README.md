@@ -387,8 +387,10 @@ which it is meant to be done.
   wall-clock time, per call (a batch is one call; the start function is under it too), host functions included. **Where the engine
   can't, `Instance(timeout=)` is a `NotImplementedError`** (`backend.supports("timeout")`): the JavaScriptCore ones (`jscontext`, `jsc`,
   `gi-jsc`: a script's time limit does not reach a wasm loop, checked with `JSContextGroupSetExecutionTimeLimit`), `bun` (its `vm`
-  timeout leaves a wasm loop running) and `wasm3` (no way to). So on iOS there is no time limit: do not run untrusted code there
-  expecting one. There is no fuel limit.
+  timeout leaves a wasm loop running) and `wasm3` (a call holds the GIL, so no thread can stop it on time: a timer's
+  `request_suspend()` never ran and the call hung; checked 2026-10-07). So on iOS there is no time limit: do not run untrusted
+  code there expecting one. There is no fuel limit either, though `wasmtime` (`consume_fuel`) and `wasm3` (pywasm3's `gas_limit`,
+  which ends a call with `[trap] out of gas`) could count instructions; nothing here uses that yet.
 - **Threads.** A module built with `-pthread` (the WebAssembly threads proposal: a `shared` memory that the module
   imports, atomic instructions, threads made by the host as several instances of the module on one memory) does not
   run: `Memory(..., shared=True)` raises `NotImplementedError`, so it can not be given as an import. Build without
