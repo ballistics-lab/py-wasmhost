@@ -473,8 +473,8 @@ out of memory (MB/s) and the engine itself (a recursive
 | Linux, CPython 3.14t                                                      | `wasm3`                   | 29/29                                                                                                                                     | 3 / 63 us             |
 | Linux, CPython 3.10 and PyPy 3.10                                         | `node`                    | 25/25 (an earlier version; and the test suite on 3.10)                                                                                    |                       |
 
-The counts of the Linux rows are for the current version (the first two phone rows are for `0.0.2b1`: the self-test has
-grown since); the times are one run of the self-test each, so read them as an order of magnitude. A host function costs about
+Each count is that of the version the row was run on, and the self-test has grown since the older rows (it has 35 steps on
+`wasmtime` and `wasm3` now, and 41 on the JavaScript engines); the times are one run of the self-test each, so read them as an order of magnitude. A host function costs about
 what a call does, plus a round trip on `node` or `bun` (measured once: about 4 us on `wasm3`, 50 us on `wasmtime` and `jsc`,
 200 us on `node`, per host call including the export around it).
 
