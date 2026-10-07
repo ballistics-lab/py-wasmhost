@@ -21,7 +21,7 @@ from . import BACKENDS, Instance, Module, Trap, WasmError, get_backend, set_back
 from .wasi.preview1 import WasiExit, Wasip1
 
 # The options that take a value: the command line is split before argparse sees it, to find the module.
-VALUE_OPTIONS = frozenset({"--backend", "--dir", "--env", "--invoke", "--max-memory", "--timeout", "--fuel"})
+VALUE_OPTIONS = frozenset({"--argv0", "--backend", "--dir", "--env", "--invoke", "--max-memory", "--timeout", "--fuel"})
 INFO_OPTIONS = frozenset({"-h", "--help"})
 TRAP_EXIT = 134  # what wasmtime exits with on a trap
 
@@ -58,6 +58,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--env", action="append", default=[], metavar="NAME[=VALUE]", help="set a variable (NAME alone: copy it)"
     )
+    parser.add_argument("--argv0", metavar="ARGV0", help="the program's argv[0] (default: the module's path)")
     parser.add_argument("--invoke", metavar="FUNCTION", help="call an exported function with the arguments")
     parser.add_argument("--max-memory", type=int, metavar="PAGES", help="the most 64 KiB pages a memory may have")
     parser.add_argument("--timeout", type=float, metavar="SECONDS", help="stop the program after that long")
@@ -161,7 +162,7 @@ def run(host_args: Sequence[str], path: str, program_args: Sequence[str]) -> int
             get_backend()
         module = Module(wasm)
         wasi = Wasip1(
-            args=[path, *([] if args.invoke else program_args)],
+            args=[args.argv0 if args.argv0 is not None else path, *([] if args.invoke else program_args)],
             env=_environment(args.env),
             preopens=_preopens(args.dir),
             stdin=sys.stdin.buffer,

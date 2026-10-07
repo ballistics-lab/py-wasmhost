@@ -472,7 +472,7 @@ there as `wasmhost self test` and `wasmhost bench`.
 command (`wasmhost.wasi.Wasip1`) and its exit code is the command's; `--invoke FUNCTION` calls an exported function
 instead, the words after the module being its arguments (`wasmhost run --invoke add m.wasm 2 3` prints `5`; one result
 per line, a float as Rust prints it: `0.5`, `NaN`, `inf`). Options: `--backend`, `--dir HOST[::GUEST]` (repeatable),
-`--readonly`, `--env NAME[=VALUE]`, `--max-memory PAGES`, `--timeout SECONDS`, `--fuel UNITS`. A trap exits with 134, as in
+`--readonly`, `--env NAME[=VALUE]`, `--argv0 NAME`, `--max-memory PAGES`, `--timeout SECONDS`, `--fuel UNITS`. A trap exits with 134, as in
 wasmtime; any other error with 1. Everything after the module belongs to the program.
 
 `python -m wasmhost bench [--backend NAME] [--no-jit] [--buffer KIB]` times a call, a batch of three, moving a buffer in and

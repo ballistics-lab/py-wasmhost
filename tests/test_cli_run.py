@@ -100,3 +100,9 @@ def test_values_are_written_as_rust_does() -> None:
         ("i32", -5, "-5"),
     ):
         assert _run.format_value(kind, value) == text
+
+
+def test_argv0_names_the_program(session: str, tmp_path: Path) -> None:
+    args = _run.build_parser().parse_args(["--argv0", "tool", "--dir", "a::b", "--env", "X=1"])
+    assert (args.argv0, args.dir, args.env) == ("tool", ["a::b"], ["X=1"])
+    assert _run.split_command(["--argv0", "tool", "a.wasm", "x"]) == (["--argv0", "tool"], "a.wasm", ["x"])
