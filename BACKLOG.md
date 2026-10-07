@@ -71,7 +71,8 @@ here; `jsc`, `gi-jsc` and `jscontext` only in CI); on Python 3.15.0rc3 the whole
 8 MiB, `await compile/instantiate`, `wasi_sh --home`, `bench`. iSH-AOK (aarch64, wasmhost 0.1.0b2): `wasmtime` and `wasm3`, both 34/34. The original iSH (i686, `wasm3` only): 31/34, a memory declared 1..4 pages is 4 pages from the start so three memory
 steps fail; cause unknown, the owner suspects iSH's i386 emulator and will look when an issue is filed (B-505, README "Backends"). The rows are in README "Where it has been run".
 **Examples on the device (Pythonista, `jscontext`, the repo at `62f5f39`, wasmhost `0.1.0b3.dev23+g62f5f397d`, 2026-10-07):** `coreutils.py` works (it runs on `wasmhost.wasi.preview1` now), `coremark.py` works (score 1951.5, last pass
-15.4 s), `imports.py` works (host functions: nested calls, `i64`, several results, an exception out of a host function). `wasmclang.py` failed in `add_tar` (Pythonista's `tarfile` object needs the size in `read()`), fixed in
+15.4 s), `imports.py` works (host functions: nested calls, `i64`, several results, an exception out of a host function), `basic.py` works, `jitcheck.py` says 167 M iter/s, "interpreter likely (no JIT)" (as documented for iOS),
+`jslinux.py` connects (to `wss://relay.widgetry.org/`) and shows the shell prompt `/root #`, `pyodide.py` is ready in 1.9 s (Python 3.14.2, `emscripten`, `wasm32`; the snapshot of 31 MB and the other files came in "via C API"). `wasmclang.py` failed in `add_tar` (Pythonista's `tarfile` object needs the size in `read()`), fixed in
 `03ca1f6`; not yet confirmed on the device, and its new hybrid host (`preview1.Wasip1` for the calls that are not about files) has not run there at all.
 
 **To do first, if the owner has not said otherwise:**
@@ -84,8 +85,8 @@ steps fail; cause unknown, the owner suspects iSH's i386 emulator and will look 
    backends, B-506/B-508 the command line to run a module).
 
 **Deferred by owner decision:** B-303 (until it is really needed), B-304a (examples on asyncio), the rest of phase 5 (it waits for a command), `wasmhost.vfs`, Deno (B-701b: a bug in Deno itself). **Waiting for the owner:** the branch name and
-tidying (B-003), `coreutils.wasm` stays in git (B-004), `tiny-bclibc-wasm` (B-803). **Not covered by tests:** `examples/wasmclang.py` (run by hand on wasmtime on 2026-10-07: the same output before and after the change), `jslinux.py`
-(`bellard.org` is blocked in the assistant's environment), `coremark.py`; the "Examples" step in CI runs only `basic.py` and `imports.py` (B-006).
+tidying (B-003), `coreutils.wasm` stays in git (B-004), `tiny-bclibc-wasm` (B-803). **Not covered by tests:** `examples/wasmclang.py` (run by hand on wasmtime and node on 2026-10-07: the same output before and after the change), `jslinux.py`
+(`bellard.org` is blocked in the assistant's environment; the owner ran it on the device), `coremark.py` (the owner ran it on the device); the "Examples" step in CI runs only `basic.py` and `imports.py` (B-006).
 
 **Things that bit this session (read before touching the same code):**
 - wasm3: 128 live runtimes per process at most, and an `Instance` is in a reference cycle, so only the cyclic collector frees it (B-406); the `session` fixture in `tests/conftest.py` calls `gc.collect()` for that reason. `suspendable` and
