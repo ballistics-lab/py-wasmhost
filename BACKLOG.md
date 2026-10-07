@@ -53,7 +53,7 @@ the feature itself:
 ## Current state (2026-10-07; `examples/zigcc` was merged into `main` by the owner and deleted, work goes on in `claude/loving-hawking-u966j0`)
 
 **Done in the branch and verified** (pre-commit is green; the full `pytest` passes on wasmtime, jsc, node, bun, wasm3; CI is green on all platforms;
-the self-test has 32 steps on wasmtime/wasm3 and 38 on the JS engines): B-201 (steps 1-4: `Function`, `signature`, `type()`, identity, `elem`, the
+the self-test has 33 steps on wasmtime/wasm3 and 39 on the JS engines): B-201 (steps 1-4: `Function`, `signature`, `type()`, identity, `elem`, the
 safety net through `call_indirect`), B-202 (the initial value of a table), B-204 (multi-value in a batch), B-301 (`Memory.view`), B-302 (`bench`
 with buffer transfer), B-304 (a lock per backend, `await compile/instantiate`, threads only with `threaded=True`), B-507 (the `wasmhost` command),
 B-509 (`wasi_sh.py`, `--home`), fast buffers (a typed array through the C API on jsc/jscontext, base64 on node/bun), Bun as a backend in CI, tests for
@@ -69,7 +69,7 @@ decision, the history has two copies, about 21 MB: a squash would leave one); `t
 **Not covered by tests:** `examples/wasmclang.py`, `jslinux.py` (unavailable in the assistant's environment: `bellard.org` is blocked), `coremark.py`;
 the "Examples" step in CI runs only `basic.py` and `imports.py` (B-006). B-302a is only partly done (see its entry).
 
-**Next candidates:** B-203 (`externref`), a binary channel for node/bun (about 50 MB/s through the pipe and JSON now), phase 4: B-402 (time or fuel) and B-403 (infinite-loop tests); B-401, the memory ceiling, is done. Fact (confirmed by the owner, matches the measurements): `jscontext` on iOS has **no JIT**, so for pure computation `wasm3` would be faster than
+**Next candidates:** B-203 (`externref`), a binary channel for node/bun (about 50 MB/s through the pipe and JSON now), phase 4 is done but for fuel (B-401 the memory ceiling, B-402/B-403 the timeout and its tests, where an engine can: none on iOS). Fact (confirmed by the owner, matches the measurements): `jscontext` on iOS has **no JIT**, so for pure computation `wasm3` would be faster than
 JavaScriptCore there, but `pywasm3` cannot be installed on iOS (a C extension).
 
 ## Order of work
@@ -362,7 +362,7 @@ Done when: transferring a buffer of megabytes is not copied on wasmtime and wasm
       Limits of this: only memories; no time or fuel (B-402); a bigger-than-needed ceiling costs nothing, but a module compiled with a custom page
       size is not supported. **Verified by the owner on the device (Pythonista, iPhone 16, iOS 26, `jscontext`, 2026-10-07): self-test 38/38**, both steps
       run (not "not available"), a call 36 us, a batch of 3 83 us. CI was green on all platforms (run 37616628414).
-- [ ] **B-402** (IMPLEMENTED 2026-10-07 on the owner's word to start, waiting for the owner's word to close; self-test step "timeout: Instance(timeout=) stops an endless loop, where the engine can", `tests/test_timeout.py`)
+- [x] **B-402** (DONE 2026-10-07, on the owner's word; CI green on every platform, run 37626340443; not run on a device: there `supports("timeout")` is false and the step says so; self-test step "timeout: Instance(timeout=) stops an endless loop, where the engine can", `tests/test_timeout.py`)
       A timeout: `Instance(module, imports, timeout=seconds)`, also `instantiate` and `instantiate_sync`; a call that runs longer ends with `wasmhost.Timeout`
       (a `Trap`), and the instance can be called again. Wall-clock time, per call (a batch is one call), the start function included.
       Measured before building (2026-10-07, Linux): **wasmtime** epochs stop a loop (0.30 s for 0.3 s asked) but a tight loop runs about 3 times slower (0.032 -> 0.105 s for
@@ -378,7 +378,7 @@ Done when: transferring a buffer of megabytes is not copied on wasmtime and wasm
       Open: no fuel (a count of instructions, deterministic, no thread: wasmtime has `consume_fuel`, same cost issue as epochs); not verified on macOS/Windows or a device (CI will say).
       Found on the way: a trap in the start function leaked out of wasmtime as its own `Trap` (fixed: `Trap` is not a `WasmtimeError`); `wasm3` does not run the start function when the
       instance is made, but at the first call.
-- [ ] **B-403** (IMPLEMENTED 2026-10-07, same state: `tests/test_timeout.py`, 36 tests) Tests "a module with an infinite loop" on every backend that can do this:
+- [x] **B-403** (DONE 2026-10-07, with B-402: `tests/test_timeout.py`, 36 tests) Tests "a module with an infinite loop" on every backend that can do this:
       `wasmtime` and `node` stop it; the others are skipped with the reason, and `test_a_backend_that_cannot_says_so` checks that they refuse honestly.
 
 Risks: JSC has no interruption, so on iOS this is not guaranteed; a separate note is needed about what the sandbox does not
