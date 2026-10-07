@@ -55,9 +55,9 @@ it works in Pythonista.
 
 `examples/coreutils.py` is a small shell over uutils coreutils (Rust, built to WASI, in `examples/wasm/`): `ls`, `cat`,
 `sort`, `cp`, `seq`, `wc` and the rest, and `lua`, with pipes and redirects, over a directory of the real file system.
-The WASI host for the modules is `wasmhost.wasi1` (see [WASI](#wasi)); the example only gives it a directory and a limit on what a
-pipe may carry. `wasmclang.py` takes the calls that are not about files from `wasi1` and leaves the file calls to `memfs.wasm`, a file system that is
-itself a WebAssembly module; `wasi_sh.py` keeps a host of its own (a file system in a Python dict, pipes and hooks), because `wasi1` is the
+The WASI host for the modules is `wasmhost.wasi.preview1` (see [WASI](#wasi)); the example only gives it a directory and a limit on what a
+pipe may carry. `wasmclang.py` takes the calls that are not about files from `wasi.preview1` and leaves the file calls to `memfs.wasm`, a file system that is
+itself a WebAssembly module; `wasi_sh.py` keeps a host of its own (a file system in a Python dict, pipes and hooks), because `wasi.preview1` is the
 specification's calls over real folders and nothing more.
 
 `examples/wasi_sh.py` is a real POSIX shell, BusyBox `ash` with about fifty utilities (the wasi-sh project's
@@ -387,7 +387,7 @@ engines, about 5 times slower on a tight loop).
 
 ## WASI
 
-`wasmhost.wasi1` is a host for `wasi_snapshot_preview1` (WASI 0.1), the interface that Rust (`wasm32-wasip1`), wasi-sdk, Zig and
+`wasmhost.wasi.preview1` is a host for `wasi_snapshot_preview1` (WASI 0.1), the interface that Rust (`wasm32-wasip1`), wasi-sdk, Zig and
 most "command line" modules are built against: all 46 functions of the specification, in plain Python, standard library only. It also
 offers `wasi_unstable`, the first snapshot, which older toolchains (wasienv, wasm-clang) still produce and which the Lua build of
 `examples/coreutils.py` imports from. It is checked against the specification's own `witx` files of both snapshots (names, signatures,
@@ -396,9 +396,9 @@ the numbers of errors and flags, the layout of the records), and its self-test s
 ```python
 import sys
 from wasmhost import Module
-from wasmhost.wasi1 import Wasi
+from wasmhost.wasi.preview1 import Wasip1
 
-wasi = Wasi(
+wasi = Wasip1(
     args=["prog", "-v"],
     env={"HOME": "/"},
     preopens={"/": "some/folder"},
@@ -408,6 +408,9 @@ wasi = Wasi(
 code = wasi.run(Module(open("prog.wasm", "rb").read()))  # the exit code: what `proc_exit` was given, else 0
 ```
 
+- **Names.** `wasmhost.wasi` is a package with a module for each version of WASI: `preview1` is WASI 0.1, with the class `Wasip1`,
+  which the package exports too (`from wasmhost.wasi import Wasip1`). A class has the version in its name, so a later `Wasip2`
+  cannot be taken for it.
 - **Folders.** `preopens` maps the name the program sees to a folder of the host; several can be given, and a name that leaves its
   folder (`..`, an absolute name, a link that points out) is refused with `ENOTCAPABLE`. The check and the open are two steps, so
   another process changing the folder in between can still get past it.
@@ -455,7 +458,7 @@ out of memory (MB/s) and the engine itself (a recursive
 | Pythonista 3, Python 3.10.4, iPhone 16 (iPhone17,3), iOS 26 (Darwin 25.6) | `jscontext` (`objc_util`) | **35/35**, bytes `via C API`, both encodings of exceptions, functions and signatures, async, threads (wasmhost 0.0.4.dev64)               | 68 / 156 us           |
 | Pythonista 3, Python 3.10.4, iPhone 16 (iPhone17,3), iOS 26 (Darwin 25.6) | `jscontext` (`objc_util`) | **36/36**, a 1 MiB buffer moves at 5400 MB/s in and 12700 MB/s out (a typed array through the C API; through hex it was about 40) (wasmhost 0.0.4.dev84) | 36 / 84 us |
 | Pythonista 3, Python 3.10.4, iPhone 16 (iPhone17,3), iOS 26 (Darwin 25.6) | `jscontext` (`objc_util`) | **38/38**, a memory held by the maximum of an imported `Memory` and by `Instance(max_memory=)` (wasmhost 0.1.0b2.dev3)                       | 36 / 83 us            |
-| Pythonista 3, Python 3.10.4, iPhone 16 (iPhone17,3), iOS 26 (Darwin 25.6) | `jscontext` (`objc_util`) | **41/41**, `wasmhost.wasi1`: a WASI program of each snapshot (`wasi_snapshot_preview1` and `wasi_unstable`) with arguments, stdout, a file and an exit code; timeout and fuel "not available", as documented (wasmhost 0.1.0b3.dev14) | 47 / 111 us |
+| Pythonista 3, Python 3.10.4, iPhone 16 (iPhone17,3), iOS 26 (Darwin 25.6) | `jscontext` (`objc_util`) | **41/41**, `wasmhost.wasi.preview1`: a WASI program of each snapshot (`wasi_snapshot_preview1` and `wasi_unstable`) with arguments, stdout, a file and an exit code; timeout and fuel "not available", as documented (wasmhost 0.1.0b3.dev14) | 47 / 111 us |
 | PythonIDE, Python 3.14.7, `ios-13.0-arm64-iphoneos`                       | `jscontext` (`objc_util`) | **25/25**, bytes `via C API`, host functions (wasmhost 0.0.2b1)                                                                           | 39 / 77 us            |
 | PythonIDE, Python 3.14.7, `ios-13.0-arm64-iphoneos` | `jscontext` (`objc_util`) | **41/41**, the same, WASI step included (wasmhost 0.1.0b3.dev14) | 44 / 102 us |
 | iSH-AOK 1.3 (557), a fork of iSH, Linux 5.10.0-ish_aok aarch64, CPython 3.14.8 | `wasmtime` | **34/34** (wasmhost 0.1.0b2, `uv tool install wasmhost --prerelease=allow --with wasmtime`; without `wasmtime` no backend starts there and the self-test says so) | 1615 / 5500 us |
@@ -508,7 +511,7 @@ which it is meant to be done.
 - **Newer proposals**: no API for `WebAssembly.Tag` and `WebAssembly.Exception` (the self-test only reports which
   encodings of exceptions an engine takes), SIMD, `memory64`, multi-memory, GC types.
   Whether a module that uses them runs is up to the engine.
-- **WASI** is provided for `wasi_snapshot_preview1` by `wasmhost.wasi1` (see [WASI](#wasi)); not yet: sockets, a read-only mode for a folder, and a safe open through
+- **WASI** is provided for `wasi_snapshot_preview1` by `wasmhost.wasi.preview1` (see [WASI](#wasi)); not yet: sockets, a read-only mode for a folder, and a safe open through
   `openat` (the check of a name and the open are two steps now). `examples/coreutils.py` uses it and `examples/wasmclang.py` uses it for the calls that are not about files; `wasi_sh.py` keeps a host of its own (a file system that is not a folder, pipes).
 
 ## Test

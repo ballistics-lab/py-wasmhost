@@ -65,12 +65,12 @@ the owner does). Newest commit: look at CI first. `Tests` was green on every job
 B-304 (a lock per backend, `await compile/instantiate`, threads only with `threaded=True`), B-507, B-509, fast buffers, Bun in CI, and **phase 4: B-401 (memory ceiling), B-402/B-403
 (timeout), B-404 (fuel)**, closed by the owner. The README has the limits in one section, "Limits for untrusted code". **Verified on the device by the owner** (Pythonista, iPhone 16,
 iOS 26, `jscontext`): self-test 41/41 on 2026-10-07 (with the WASI step; PythonIDE too), 38/38 before the fuel step, buffers intact from 1 byte to 8 MiB, `await compile/instantiate`, multi-value in a batch, `wasi_sh --home`, `bench`.
-**B-501 is done and closed (2026-10-07, with B-501.1 `wasi_unstable`)**: `src/wasmhost/wasi1.py`, all 46 functions of `wasi_snapshot_preview1` and the 45 of `wasi_unstable`, with tests and a self-test step (see B-501 below). **B-502 is done and closed** (in its agreed scope; see its entry).
+**B-501 is done and closed (2026-10-07, with B-501.1 `wasi_unstable`)**: `src/wasmhost/wasi/preview1.py`, all 46 functions of `wasi_snapshot_preview1` and the 45 of `wasi_unstable`, with tests and a self-test step (see B-501 below). **B-502 is done and closed** (in its agreed scope; see its entry).
 **Also run by the owner (wasmhost 0.1.0b2, before the WASI step):** iSH-AOK (aarch64) on `wasmtime` and on `wasm3`, both 34/34; the original iSH (i686) on `wasm3`, 31/34 (a memory declared 1..4 pages is 4 pages
 from the start, so three memory steps fail; cause unknown, the owner suspects iSH's i386 emulator and will look when an issue is filed; see B-505 and the README).
 
 **To do first, if the owner has not said otherwise:**
-1. ~~**B-502**~~ Done and closed 2026-10-07 (`coreutils.py` on `wasi1`, `wasmclang.py` takes the calls that are not about files from it, `wasi_sh.py` keeps its own host by the owner's decision). The rest of phase 5 (B-503 to B-506,
+1. ~~**B-502**~~ Done and closed 2026-10-07 (`coreutils.py` on `wasi.preview1`, `wasmclang.py` takes the calls that are not about files from it, `wasi_sh.py` keeps its own host by the owner's decision). The rest of phase 5 (B-503 to B-506,
    B-508) waits for a command; a pluggable file system (`wasmhost.vfs`) is deferred and has no entry.
 2. ~~A device re-run of `wasmhost self test`~~ **Done 2026-10-07 by the owner** (wheel `0.1.0b3.dev14+gc14888b9c`, commit `c14888b`): 41/41 on Pythonista (iPhone 16, iOS 26, Python 3.10.4) and on PythonIDE (Python 3.14.7), both
    on `jscontext`; the WASI step passes for both snapshots, the timeout and fuel steps say "not available", both encodings of exceptions are "yes". Rows are in README "Where it has been run".
@@ -88,7 +88,7 @@ in the assistant's environment), `coremark.py`; the "Examples" step in CI runs o
 - Run one pre-commit at a time. `git fetch` and `git pull --ff-only` before each commit; look at CI after each push.
 - The WASI specification is **not in `main`** of WebAssembly/WASI: it is the branch `wasi-0.1`, directory `preview1` (`witx/*.witx`, `docs.md`; commit `fae981b` when copied into `tests/data/wasi`). `wasi.dev` is blocked in the
   assistant's environment; reading another repository takes `add_repo` (git only, no Actions logs).
-- `gi-jsc` takes no host functions (`supports("imports")` is false): a test that gives a module imports must skip there, as `tests/test_wasi1_run.py` does (CI went red on it once).
+- `gi-jsc` takes no host functions (`supports("imports")` is false): a test that gives a module imports must skip there, as `tests/test_wasi_preview1_run.py` does (CI went red on it once).
 - `ruff format` in pre-commit keeps reformatting `examples/jitcheck.py` (see above): `git checkout examples/jitcheck.py` before committing, or it rides along by accident.
 - Facts: `jscontext` on iOS has **no JIT**, no wasmtime or wasm3 there, and neither timeout nor fuel; the owner works in Ukrainian, this file stays in English.
 
@@ -461,19 +461,23 @@ official `wasi_snapshot_preview1` (branch `wasi-0.1` of WebAssembly/WASI), not t
 
 - [x] **B-501** (DONE 2026-10-07, closed on the owner's word; with B-501.1, `wasi_unstable`) Provide a reusable Python module `wasmhost.wasi1` with a full WASI1-compatible host API, not just the subset used in one example. The public surface should cover the ~50 WASI1 functions and be usable across backends that support it.
       **Implemented 2026-10-07 in branch `claude/kind-goldberg-3dsi27`, closed by the owner the same day.**
-      - `src/wasmhost/wasi1.py`: all 46 functions of `wasi_snapshot_preview1`, written from the specification (branch `wasi-0.1` of WebAssembly/WASI, `preview1/witx`) and not from `examples/coreutils.py`.
+      - **Renamed 2026-10-07 on the owner's word:** the module was `wasmhost.wasi1`; it is now the package `wasmhost/wasi/` with `preview1.py` (WASI 0.1, `wasi_snapshot_preview1`) and the class `Wasip1`; `wasmhost.wasi` exports
+        the module and the class (`from wasmhost.wasi import Wasip1`): a class has its version in its name, so another version's cannot be taken for it (WASI 0.2 and 0.3 are Component Model, would be modules of their own,
+        and are out of scope). **`wasi_unstable` stays in `preview1`** (owner's decision):
+        `imports()` has both. `pyproject.toml` lists the package (`wasmhost.wasi`) by hand: a new subpackage has to be added there.
+      - `src/wasmhost/wasi/preview1.py`: all 46 functions of `wasi_snapshot_preview1`, written from the specification (branch `wasi-0.1` of WebAssembly/WASI, `preview1/witx`) and not from `examples/coreutils.py`.
         Real folders as preopens, standard streams, arguments, environment, clocks, random. Sockets answer `ENOTSOCK`, signals `ENOSYS`.
-      - **B-501.1, `wasi_unstable` (the first snapshot), added on the owner's word 2026-10-07**: the same `Wasi` offers both modules (`imports()` has both). The four differences from `preview0/witx` (the order of `whence`,
+      - **B-501.1, `wasi_unstable` (the first snapshot), added on the owner's word 2026-10-07**: the same `Wasip1` offers both modules (`imports()` has both). The four differences from `preview0/witx` (the order of `whence`,
         one right less, a 32-bit `nlink` in `filestat`, an `identifier` in a clock subscription) live in `UNSTABLE_TABLES`, `UNSTABLE_STRUCTS` and a `legacy` flag of five functions; no `sock_accept`, 45 functions.
-      - Tests: `tests/test_wasi1_spec.py` and `tests/test_wasi1_unstable_spec.py` compare names, signatures, tables, record sizes and offsets with copies of the witx files (`tests/data/wasi`, with the specification's
-        `LICENSE.md`); `tests/test_wasi1.py` tests each call over a plain bytearray; `tests/test_wasi1_run.py` runs a program of each snapshot on every backend. The self-test has a WASI step (a program of each snapshot).
+      - Tests: `tests/test_wasi_preview1_spec.py` and `tests/test_wasi_preview1_unstable_spec.py` compare names, signatures, tables, record sizes and offsets with copies of the witx files (`tests/data/wasi`, with the specification's
+        `LICENSE.md`); `tests/test_wasi_preview1.py` tests each call over a plain bytearray; `tests/test_wasi_preview1_run.py` runs a program of each snapshot on every backend. The self-test has a WASI step (a program of each snapshot).
       - Not done: a read-only mode (B-504), `openat` (B-503); not run on a device. CI: `Tests` green at `c5aaf86` (all of `wasi_snapshot_preview1`); the run for `9ce13e0`, which added `wasi_unstable`, was still going when this was closed: look at it.
 - [x] **B-502** (DONE 2026-10-07, closed on the owner's word, in the scope below) Update all WASI examples and tests to use `wasmhost.wasi1` instead of carrying a copy of `Wasi` in each example. The example-side API should stay thin: `Wasi(args=…, preopens={"/": dir}, stdin=…, stdout=…)` is a convenience wrapper around the common module, not the implementation itself.
-      **Done in the scope below 2026-10-07, closed by the owner.** `examples/coreutils.py` uses `wasmhost.wasi1` (its own 430-line `Wasi` class is gone; `Wasi()` is now 15 lines that give the library a folder as `/` and `.` and turn the
+      **Done in the scope below 2026-10-07, closed by the owner.** `examples/coreutils.py` uses `wasmhost.wasi.preview1` (its own 430-line `Wasi` class is gone; `Wasi()` is now 15 lines that give the library a folder as `/` and `.` and turn the
       pipe limit into a `BrokenPipeError` of the stdout sink); `tests/test_coreutils_example.py` passes on wasmtime, wasm3, node and bun, and a run by hand of Lua (`wasi_unstable`), `yes | head` and `cat ../x` gives the same as before.
-      **`examples/wasmclang.py` uses `wasi1` for the seven calls that are not about files** (`proc_exit`, `args_*`, `environ_*`, `random_get`, `clock_time_get`; of the first snapshot) and leaves the file calls to `memfs.wasm`, whose
+      **`examples/wasmclang.py` uses `wasi.preview1` for the seven calls that are not about files** (`proc_exit`, `args_*`, `environ_*`, `random_get`, `clock_time_get`; of the first snapshot) and leaves the file calls to `memfs.wasm`, whose
       exports *are* the WASI functions (they work on the memory of the other module); `poll_oneoff` stays ENOSYS. Run for real on wasmtime before and after: the same output (clang C -> wasm, a WASI program with `argc=3`, C++ with
-      `std::vector`/`std::map`); the file is 46 lines shorter. **Owner decision 2026-10-07: `wasi1` matches the official specification and nothing else; what is specific to an example stays in the example.** So `examples/wasi_sh.py`
+      `std::vector`/`std::map`); the file is 46 lines shorter. **Owner decision 2026-10-07: `wasi.preview1` matches the official specification and nothing else; what is specific to an example stays in the example.** So `examples/wasi_sh.py`
       keeps its host (a file system in a Python dict, pipes and `dup` through `env.__host_*`, an in-memory mode), and a pluggable file system (`wasmhost.vfs`, a `MemVfs`) is **deferred**: not planned, no entry yet.
 - [ ] **B-503** A sandbox through `openat` with `dir_fd`, to remove the gap between checking the path and opening
       (right now `resolve()` checks, then `os.open`).

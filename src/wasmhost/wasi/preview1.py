@@ -1,4 +1,4 @@
-"""`wasmhost.wasi1`: a WASI host for `wasi_snapshot_preview1` (WASI 0.1), in plain Python.
+"""`wasmhost.wasi.preview1`: a WASI host for `wasi_snapshot_preview1` (WASI 0.1), in plain Python.
 
 The 46 functions of the specification (the `legacy/preview1` witx files of the WebAssembly/WASI repository, branch
 `wasi-0.1`), over directories of the real file system, with standard streams, arguments, an environment, clocks and
@@ -6,7 +6,7 @@ random bytes. Sockets, threads and signals are not supported: those calls answer
 (`ENOTSOCK`, `ENOSYS`). The first snapshot, `wasi_unstable` (what older toolchains still produce), is offered too,
 from the same object: see UNSTABLE below for the four things in which it differs. Standard library only.
 
-    wasi = Wasi(args=["prog", "-v"], preopens={"/": "some/dir"}, stdout=sys.stdout.buffer.write)
+    wasi = Wasip1(args=["prog", "-v"], preopens={"/": "some/dir"}, stdout=sys.stdout.buffer.write)
     code = wasi.run(module)           # the exit code of `_start`
 
 or in steps, when the instance needs options of its own:
@@ -34,8 +34,8 @@ import time
 from collections.abc import Callable, Iterable, Mapping, Sequence
 from typing import Any, Literal, Protocol, TypeVar
 
-from ._api import Instance, Module
-from ._binary import i32, i64
+from .._api import Instance, Module
+from .._binary import i32, i64
 
 SNAPSHOT = "wasi_snapshot_preview1"
 
@@ -270,7 +270,7 @@ def _sink(target: Callable[[bytes], object] | Any | None, fallback: Any) -> Call
     return target.write
 
 
-class Wasi:
+class Wasip1:
     """The `wasi_snapshot_preview1` calls of one program run.
 
     `args` are the program's arguments, the first one its name; `env` the environment; `preopens` maps the name the
@@ -361,7 +361,7 @@ class Wasi:
                     pass
         self._fds.clear()
 
-    def __enter__(self) -> Wasi:
+    def __enter__(self) -> Wasip1:
         return self
 
     def __exit__(self, *exc: object) -> None:

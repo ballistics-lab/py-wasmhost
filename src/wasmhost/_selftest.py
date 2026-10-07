@@ -30,7 +30,7 @@ from ._binary import FuncType, GlobalType, MemoryType, TableType, i32, i64
 from ._errors import CompileError, LinkError, OutOfFuel, Timeout, Trap
 from ._js import JSBackend
 from ._registry import AUTO_ORDER, BACKENDS
-from .wasi1 import Wasi
+from .wasi.preview1 import Wasip1
 
 __all__ = ("selftest",)
 
@@ -326,19 +326,19 @@ def _host_functions(backend: Backend) -> str:
 
 
 def _wasi(backend: Backend) -> str:
-    """A WASI command through `wasmhost.wasi1`, once from each snapshot (`wasi_snapshot_preview1` and the first,
+    """A WASI command through `wasmhost.wasi.preview1`, once from each snapshot (`wasi_snapshot_preview1` and the first,
     `wasi_unstable`): its arguments, standard output, a file made in a folder of the host, and its exit code, which
     comes out of the program as an exception of the host function and must cross the engine."""
     if not backend.supports("imports"):
         try:
-            Instance(Module(WASI_HELLO, backend=backend), Wasi().imports())
+            Instance(Module(WASI_HELLO, backend=backend), Wasip1().imports())
         except NotImplementedError:
             return "not available on this backend, as documented"
         raise AssertionError("should be NotImplementedError")
     for wasm in (WASI_HELLO, WASI_HELLO_UNSTABLE):
         out: list[bytes] = []
         with tempfile.TemporaryDirectory() as folder:
-            wasi = Wasi(args=["selftest", "x"], preopens={"/": folder}, stdout=out.append)
+            wasi = Wasip1(args=["selftest", "x"], preopens={"/": folder}, stdout=out.append)
             _expect(wasi.run(Module(wasm, backend=backend)), 2)  # proc_exit(argc)
             _expect(b"".join(out), b"hello, wasi\n")
             with open(os.path.join(folder, "note.txt"), "rb") as note:

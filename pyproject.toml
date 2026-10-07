@@ -47,7 +47,7 @@ gi-jsc = ["PyGObject>=3.42; sys_platform == 'linux'"]
 
 [tool.setuptools]
 package-dir = { "" = "src" }
-packages = ["wasmhost"]
+packages = ["wasmhost", "wasmhost.wasi"]
 
 [tool.setuptools.package-data]
 wasmhost = ["py.typed"]

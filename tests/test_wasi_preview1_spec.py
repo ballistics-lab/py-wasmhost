@@ -1,4 +1,4 @@
-"""`wasmhost.wasi1` against the specification: the witx files of WASI 0.1 (`tests/data/wasi`), copied unchanged."""
+"""`wasmhost.wasi.preview1` against the specification: the witx files of WASI 0.1 (`tests/data/wasi`), unchanged."""
 
 from __future__ import annotations
 
@@ -8,7 +8,7 @@ from pathlib import Path
 
 import pytest
 
-from wasmhost import wasi1
+from wasmhost.wasi import preview1
 
 DATA = Path(__file__).parent / "data" / "wasi"
 
@@ -128,38 +128,38 @@ def test_the_witx_files_are_what_the_tests_think() -> None:
 
 def test_every_function_of_the_specification_and_no_other() -> None:
     expected = {signature(f)[0] for f in FUNCS}
-    assert set(wasi1.SIGNATURES) == expected
-    assert set(wasi1.Wasi().imports()[wasi1.SNAPSHOT]) == expected
-    assert wasi1.SNAPSHOT == str(MODULE[1]).lstrip("$")
+    assert set(preview1.SIGNATURES) == expected
+    assert set(preview1.Wasip1().imports()[preview1.SNAPSHOT]) == expected
+    assert preview1.SNAPSHOT == str(MODULE[1]).lstrip("$")
 
 
 @pytest.mark.parametrize("func", FUNCS, ids=lambda f: signature(f)[0])
 def test_signature(func: list[object]) -> None:
     name, (params, results) = signature(func)
-    assert wasi1.SIGNATURES[name] == (tuple(params), tuple(results)), name
+    assert preview1.SIGNATURES[name] == (tuple(params), tuple(results)), name
 
 
-@pytest.mark.parametrize("table", sorted(wasi1.TABLES))
+@pytest.mark.parametrize("table", sorted(preview1.TABLES))
 def test_enumerations_and_flags_are_the_specification_s(table: str) -> None:
-    assert wasi1.TABLES[table] == tuple(tag_names(table))
+    assert preview1.TABLES[table] == tuple(tag_names(table))
 
 
 def test_every_enumeration_and_flags_type_of_the_specification_is_in_the_tables() -> None:
     named = {n for n, node in TYPES.items() if isinstance(node, list) and node[0] in ("enum", "flags")}
-    assert named == set(wasi1.TABLES)
+    assert named == set(preview1.TABLES)
 
 
 def test_values_are_positions_and_bits() -> None:
-    assert wasi1.Errno.success == 0
-    assert wasi1.Errno.noent == 44
-    assert wasi1.Errno.notcapable == 76
-    assert wasi1.Rights.fd_read == 1 << 1
-    assert wasi1.Filetype.regular_file == 4
-    assert wasi1.Filetype.directory == 3
-    assert wasi1.Whence.cur == 1
-    assert wasi1.ALL_RIGHTS == (1 << 30) - 1
+    assert preview1.Errno.success == 0
+    assert preview1.Errno.noent == 44
+    assert preview1.Errno.notcapable == 76
+    assert preview1.Rights.fd_read == 1 << 1
+    assert preview1.Filetype.regular_file == 4
+    assert preview1.Filetype.directory == 3
+    assert preview1.Whence.cur == 1
+    assert preview1.ALL_RIGHTS == (1 << 30) - 1
     with pytest.raises(AttributeError):
-        wasi1.Errno.nonsense  # noqa: B018
+        preview1.Errno.nonsense  # noqa: B018
 
 
 @pytest.mark.parametrize(
@@ -177,7 +177,7 @@ def test_values_are_positions_and_bits() -> None:
 )
 def test_records_have_the_specification_s_size(name: str, record: str) -> None:
     size, _ = size_and_align(f"${record}")
-    assert wasi1.STRUCTS[name].size == size
+    assert preview1.STRUCTS[name].size == size
 
 
 def test_field_offsets() -> None:
@@ -198,9 +198,9 @@ def test_field_offsets() -> None:
     assert offsets("fdstat") == [0, 2, 8, 16]
     assert offsets("dirent") == [0, 8, 16, 20]
     assert offsets("event") == [0, 8, 10, 16]
-    packed = wasi1.STRUCTS["filestat"].pack(1, 2, 3, 4, 5, 6, 7, 8)
+    packed = preview1.STRUCTS["filestat"].pack(1, 2, 3, 4, 5, 6, 7, 8)
     assert [struct.unpack_from("<Q", packed, o)[0] for o in (0, 8, 24, 32, 40, 48, 56)] == [1, 2, 4, 5, 6, 7, 8]
     assert packed[16] == 3
-    fdstat = wasi1.STRUCTS["fdstat"].pack(4, 0x1F, 1 << 2, 1 << 3)
+    fdstat = preview1.STRUCTS["fdstat"].pack(4, 0x1F, 1 << 2, 1 << 3)
     assert (fdstat[0], struct.unpack_from("<H", fdstat, 2)[0]) == (4, 0x1F)
     assert struct.unpack_from("<QQ", fdstat, 8) == (4, 8)

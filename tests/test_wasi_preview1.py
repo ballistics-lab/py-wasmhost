@@ -1,4 +1,4 @@
-"""`wasmhost.wasi1` behaviour: the calls made directly, over a plain bytearray standing in for the program's memory."""
+"""`wasmhost.wasi.preview1` behaviour: the calls made directly, over a bytearray that stands for the memory."""
 
 from __future__ import annotations
 
@@ -10,8 +10,8 @@ from typing import Any
 
 import pytest
 
-from wasmhost import wasi1
-from wasmhost.wasi1 import Errno, Fdflags, Filetype, Lookupflags, Oflags, Rights, Wasi, WasiExit
+from wasmhost.wasi import preview1
+from wasmhost.wasi.preview1 import Errno, Fdflags, Filetype, Lookupflags, Oflags, Rights, WasiExit, Wasip1
 
 SIZE = 1 << 16
 FOLLOW = Lookupflags.symlink_follow
@@ -37,10 +37,10 @@ class Memory:
 
 
 class Host:
-    """A Wasi with a memory, and the helpers a test needs to put things in it and read results out."""
+    """A Wasip1 with a memory, and the helpers a test needs to put things in it and read results out."""
 
-    def __init__(self, snapshot: str = wasi1.SNAPSHOT, **options: Any) -> None:
-        self.wasi = Wasi(**options)
+    def __init__(self, snapshot: str = preview1.SNAPSHOT, **options: Any) -> None:
+        self.wasi = Wasip1(**options)
         self.mem = Memory()
         self.wasi.memory = self.mem
         self.calls = self.wasi.imports()[snapshot]
@@ -52,7 +52,7 @@ class Host:
 
     def ok(self, name: str, *args: int) -> None:
         code = self(name, *args)
-        assert code == 0, f"{name} -> {wasi1.TABLES['errno'][code]}"
+        assert code == 0, f"{name} -> {preview1.TABLES['errno'][code]}"
 
     def put(self, data: bytes) -> int:
         ptr, self.top = self.top, self.top + len(data) + 8
@@ -103,7 +103,7 @@ class Host:
     def stat(self, fd: int) -> tuple[int, ...]:
         out = self.alloc(64)
         self.ok("fd_filestat_get", fd, out)
-        return wasi1.STRUCTS["filestat"].unpack(self.mem.read(out, 64))
+        return preview1.STRUCTS["filestat"].unpack(self.mem.read(out, 64))
 
 
 @pytest.fixture
@@ -261,7 +261,7 @@ def test_several_preopens_in_order(tmp_path: Path) -> None:
 
 def test_a_preopen_must_be_a_directory(tmp_path: Path) -> None:
     with pytest.raises(NotADirectoryError):
-        Wasi(preopens={"/": tmp_path / "missing"})
+        Wasip1(preopens={"/": tmp_path / "missing"})
 
 
 # --- files
@@ -349,12 +349,12 @@ def test_fdstat(host: Host, root: Path) -> None:
     _, fd = host.open("a", rights=Rights.fd_read | Rights.fd_fdstat_set_flags, fdflags=Fdflags.append)
     out = host.alloc(24)
     host.ok("fd_fdstat_get", fd, out)
-    filetype, flags, base, inheriting = wasi1.STRUCTS["fdstat"].unpack(host.mem.read(out, 24))
+    filetype, flags, base, inheriting = preview1.STRUCTS["fdstat"].unpack(host.mem.read(out, 24))
     assert filetype == Filetype.regular_file and flags == Fdflags.append
     assert base & Rights.fd_read and not base & Rights.fd_write  # opened for reading only: no right to write
     host.ok("fd_fdstat_set_flags", fd, Fdflags.sync)
     host.ok("fd_fdstat_get", fd, out)
-    assert wasi1.STRUCTS["fdstat"].unpack(host.mem.read(out, 24))[1] == Fdflags.sync
+    assert preview1.STRUCTS["fdstat"].unpack(host.mem.read(out, 24))[1] == Fdflags.sync
     assert host("fd_fdstat_set_flags", fd, 1 << 5) == Errno.inval
     host.ok("fd_fdstat_get", 1, out)
     assert host.mem.read(out, 1)[0] == Filetype.character_device
@@ -379,7 +379,7 @@ def test_rights_a_directory_hands_down(host: Host, root: Path) -> None:
     out = host.alloc(24)
     host.ok("fd_fdstat_get", fd, out)
     assert (
-        wasi1.STRUCTS["fdstat"].unpack(host.mem.read(out, 24))[2] & Rights.fd_write == 0
+        preview1.STRUCTS["fdstat"].unpack(host.mem.read(out, 24))[2] & Rights.fd_write == 0
     )  # the directory could not hand it down
 
 
@@ -466,7 +466,7 @@ def listing(host: Host, fd: int, size: int = 4096, cookie: int = 0) -> tuple[lis
     host.ok("fd_readdir", fd, buf, size, cookie, used)
     data, entries, pos = host.mem.read(buf, host.u32(used)), [], 0
     while pos + 24 <= len(data):
-        nxt, ino, namlen, kind = wasi1.STRUCTS["dirent"].unpack_from(data, pos)
+        nxt, ino, namlen, kind = preview1.STRUCTS["dirent"].unpack_from(data, pos)
         if pos + 24 + namlen > len(data):
             break
         entries.append((data[pos + 24 : pos + 24 + namlen].decode(), kind, nxt))
@@ -542,7 +542,7 @@ def test_filestat_of_a_path(host: Host, root: Path) -> None:
     out = host.alloc(64)
     ptr, size = host.text("a")
     host.ok("path_filestat_get", 3, FOLLOW, ptr, size, out)
-    assert wasi1.STRUCTS["filestat"].unpack(host.mem.read(out, 64))[4] == 3
+    assert preview1.STRUCTS["filestat"].unpack(host.mem.read(out, 64))[4] == 3
     ptr, size = host.text("zzz")
     assert host("path_filestat_get", 3, FOLLOW, ptr, size, out) == Errno.noent
 
@@ -561,9 +561,9 @@ def test_symlink_readlink_and_link(host: Host, root: Path) -> None:
     assert host.mem.read(buf, host.u32(used)) == b"tar"
     out = host.alloc(64)
     host.ok("path_filestat_get", 3, 0, n, nl, out)  # without follow: the link itself
-    assert wasi1.STRUCTS["filestat"].unpack(host.mem.read(out, 64))[2] == Filetype.symbolic_link
+    assert preview1.STRUCTS["filestat"].unpack(host.mem.read(out, 64))[2] == Filetype.symbolic_link
     host.ok("path_filestat_get", 3, FOLLOW, n, nl, out)
-    assert wasi1.STRUCTS["filestat"].unpack(host.mem.read(out, 64))[2] == Filetype.regular_file
+    assert preview1.STRUCTS["filestat"].unpack(host.mem.read(out, 64))[2] == Filetype.regular_file
     h, hl = host.text("hard")
     host.ok("path_link", 3, FOLLOW, t, tl, 3, h, hl)
     assert (root / "hard").read_text() == "T" and (root / "target").stat().st_nlink == 2
@@ -672,7 +672,7 @@ def sub_fd(userdata: int, kind: int, fd: int) -> bytes:
 def poll(host: Host, *subs: bytes) -> list[tuple[int, ...]]:
     src, out, n = host.put(b"".join(subs)), host.alloc(32 * len(subs)), host.alloc(4)
     host.ok("poll_oneoff", src, out, len(subs), n)
-    return [wasi1.STRUCTS["event"].unpack(host.mem.read(out + 32 * i, 32)) for i in range(host.u32(n))]
+    return [preview1.STRUCTS["event"].unpack(host.mem.read(out + 32 * i, 32)) for i in range(host.u32(n))]
 
 
 def test_poll_a_clock_sleeps(host: Host) -> None:
@@ -737,9 +737,9 @@ def test_arguments_arrive_unsigned(host: Host) -> None:
 
 
 def test_calls_before_the_memory_is_bound_say_so() -> None:
-    wasi = Wasi()
+    wasi = Wasip1()
     with pytest.raises(RuntimeError, match="memory"):
-        wasi.imports()[wasi1.SNAPSHOT]["args_sizes_get"](0, 4)
+        wasi.imports()[preview1.SNAPSHOT]["args_sizes_get"](0, 4)
 
 
 def test_close_closes_the_files(host: Host, root: Path) -> None:
@@ -753,7 +753,7 @@ def test_close_closes_the_files(host: Host, root: Path) -> None:
 
 
 def test_context_manager_closes(root: Path) -> None:
-    with Wasi(preopens={"/": root}) as wasi:
+    with Wasip1(preopens={"/": root}) as wasi:
         assert wasi.imports()
     assert not wasi._fds  # pyright: ignore[reportPrivateUsage]
 
@@ -763,14 +763,14 @@ def test_context_manager_closes(root: Path) -> None:
 
 @pytest.fixture
 def old(root: Path) -> Host:
-    return Host(preopens={"/": root}, snapshot=wasi1.UNSTABLE)
+    return Host(preopens={"/": root}, snapshot=preview1.UNSTABLE)
 
 
 def test_both_snapshots_are_offered(host: Host) -> None:
     modules = host.wasi.imports()
-    assert set(modules) == {wasi1.SNAPSHOT, wasi1.UNSTABLE}
-    assert len(modules[wasi1.SNAPSHOT]) == 46 and len(modules[wasi1.UNSTABLE]) == 45
-    assert "sock_accept" not in modules[wasi1.UNSTABLE]
+    assert set(modules) == {preview1.SNAPSHOT, preview1.UNSTABLE}
+    assert len(modules[preview1.SNAPSHOT]) == 46 and len(modules[preview1.UNSTABLE]) == 45
+    assert "sock_accept" not in modules[preview1.UNSTABLE]
 
 
 def test_the_functions_that_do_not_differ_are_the_same_functions(old: Host, root: Path) -> None:
@@ -830,7 +830,7 @@ def test_filestat_has_a_32_bit_link_count_and_its_own_layout(old: Host, root: Pa
 
 
 def test_rights_stop_before_sock_accept(old: Host, host: Host) -> None:
-    for h, expected in ((old, wasi1.UNSTABLE_ALL_RIGHTS), (host, wasi1.ALL_RIGHTS)):
+    for h, expected in ((old, preview1.UNSTABLE_ALL_RIGHTS), (host, preview1.ALL_RIGHTS)):
         out = h.alloc(24)
         h.ok("fd_fdstat_get", 3, out)
         base, inheriting = struct.unpack_from("<QQ", h.mem.read(out, 24), 8)
@@ -840,7 +840,7 @@ def test_rights_stop_before_sock_accept(old: Host, host: Host) -> None:
 def sub_clock_old(userdata: int, timeout: int, identifier: int = 0xABCD, clock: int = 1) -> bytes:
     """A subscription of the first snapshot: 56 bytes, a clock starts with its identifier."""
     head = struct.pack("<QB7x", userdata, 0)
-    return head + wasi1._SUB_CLOCK_UNSTABLE.pack(identifier, clock, timeout, 0, 0)  # pyright: ignore[reportPrivateUsage]
+    return head + preview1._SUB_CLOCK_UNSTABLE.pack(identifier, clock, timeout, 0, 0)  # pyright: ignore[reportPrivateUsage]
 
 
 def sub_fd_old(userdata: int, kind: int, fd: int) -> bytes:
@@ -850,7 +850,7 @@ def sub_fd_old(userdata: int, kind: int, fd: int) -> bytes:
 def poll_old(host: Host, *subs: bytes) -> list[tuple[int, ...]]:
     src, out, n = host.put(b"".join(subs)), host.alloc(32 * len(subs)), host.alloc(4)
     host.ok("poll_oneoff", src, out, len(subs), n)
-    return [wasi1.STRUCTS["event"].unpack(host.mem.read(out + 32 * i, 32)) for i in range(host.u32(n))]
+    return [preview1.STRUCTS["event"].unpack(host.mem.read(out + 32 * i, 32)) for i in range(host.u32(n))]
 
 
 def test_subscriptions_are_56_bytes_in_the_first_snapshot(old: Host) -> None:
@@ -863,3 +863,11 @@ def test_subscriptions_are_56_bytes_in_the_first_snapshot(old: Host) -> None:
     events = poll_old(old, sub_clock_old(1, 5_000_000_000), sub_fd_old(2, 2, 1))
     assert events == [(2, 0, 2, 0, 0)]
     assert poll_old(old, sub_clock_old(3, 0, clock=9))[0][1] == Errno.inval
+
+
+def test_the_package_exports_the_module_and_the_class() -> None:
+    import wasmhost.wasi as package
+
+    assert package.Wasip1 is Wasip1
+    assert package.preview1.Wasip1 is Wasip1
+    assert set(package.__all__) == {"Wasip1", "preview1"}

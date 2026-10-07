@@ -35,7 +35,7 @@ import time
 import urllib.request
 
 import wasmhost
-from wasmhost import wasi1
+from wasmhost.wasi import preview1
 
 BASE = "https://binji.github.io/wasm-clang/"
 SYSROOT_URL = "https://raw.githubusercontent.com/binji/wasm-clang/master/sysroot.tar"
@@ -244,11 +244,11 @@ class MemFS:
 
     def run(self, module, *argv):
         """Run a WASI program (a module that imports `wasi_unstable`) with ARGV; its exit code."""
-        # The calls that are not about files are `wasmhost.wasi1`'s (the first snapshot, `wasi_unstable`); every file
+        # The calls that are not about files are `wasi.preview1`'s (the first snapshot, `wasi_unstable`); every file
         # call is memfs's own: its exports are the WASI functions, and they work on the memory of the other module.
-        host = wasi1.Wasi(argv)
-        calls = {name: host.imports()[wasi1.UNSTABLE][name] for name in HOST_CALLS}
-        calls["poll_oneoff"] = lambda *_: 52  # ENOSYS: wasi1's would look for memfs's descriptors in its own table
+        host = preview1.Wasip1(argv)
+        calls = {name: host.imports()[preview1.UNSTABLE][name] for name in HOST_CALLS}
+        calls["poll_oneoff"] = lambda *_: 52  # ENOSYS: preview1's would look for memfs's descriptors in its own table
         for imp in wasmhost.Module.imports(module):
             if imp.module == "wasi_unstable" and imp.name not in calls:
                 calls[imp.name] = getattr(self.exports, imp.name)
