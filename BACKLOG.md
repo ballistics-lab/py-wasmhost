@@ -59,10 +59,11 @@ here; `jsc`, `gi-jsc` and `jscontext` only in CI); on Python 3.15.0rc3 the whole
 **Done in this branch (phases 1 to 5, in part).**
 - Phases 1 to 4: B-201 (`Function`, `signature`, `type()`, identity, `elem`, `call_indirect` net), B-202, B-204, B-301 (`Memory.view`), B-302 (`bench`), B-304 (a lock per backend, `await compile/instantiate`, threads only with
   `threaded=True`), B-507, B-509, fast buffers, Bun in CI, phase 4 (B-401 memory ceiling, B-402/B-403 timeout, B-404 fuel), all closed by the owner. The limits are in one README section, "Limits for untrusted code".
-- **Phase 5 (started by the owner's command): B-501 and B-502 are closed.** The package `wasmhost/wasi/` has `preview1.py`: all 46 functions of `wasi_snapshot_preview1` and the 45 of `wasi_unstable` (B-501.1), the class `Wasip1`; the package
+- **Phase 5 (started by the owner's command): B-501, B-502, B-504 and B-505 are closed.** The package `wasmhost/wasi/` has `preview1.py`: all 46 functions of `wasi_snapshot_preview1` and the 45 of `wasi_unstable` (B-501.1), the class `Wasip1`; the package
   exports the module and the class (`from wasmhost.wasi import Wasip1`). Decisions of the owner: `wasi_unstable` stays in `preview1` (`imports()` offers both); `wasi` matches the official specification and nothing else, what is specific
   to an example stays in the example; WASI 0.2 and 0.3 (Component Model) would be modules of their own and are out of scope. Examples: `coreutils.py` runs on it, `wasmclang.py` takes the calls that are not about files from it (the file
-  calls are `memfs.wasm`'s), `wasi_sh.py` keeps its own host; a pluggable file system (`wasmhost.vfs`) is deferred and has no entry. Tests: `tests/test_wasi_preview1*.py` against copies of the witx files in `tests/data/wasi`.
+  calls are `memfs.wasm`'s), `wasi_sh.py` keeps its own host; a pluggable file system (`wasmhost.vfs`) is deferred and has no entry. B-504: `Wasip1(readonly=True or {names})`, made of the rights of the specification
+  (`ENOTCAPABLE`). B-505: README "What has run where" (programs against backends; `wasmclang.py` aborts on Bun 1.4.2, a bug in Bun). Tests: `tests/test_wasi_preview1*.py` against copies of the witx files in `tests/data/wasi`.
 - Python 3.15: the classifier is in `pyproject.toml` and the CI matrix has `3.15` where it had `3.14` (first run green; `3.14t` stays, `3.15t` is not there: `pywasm3` builds only `cp311-*` and `cp314t-*`). `3.15` is unpinned: CI takes
   the release candidate until the stable release (the owner says 2026-10-08).
 - `wasmhost.i32`, `i64`, `f32`, `f64` are `ValueType`, a `str` that equals its name (`wasi` uses them); the values stay `int` and `float`. The idea of `ctypes` types for the values is still only in "Ideas".
@@ -81,8 +82,7 @@ it works on the device with its hybrid host: clang and lld compiled C and C++ in
 2. The CI of the newest commit, and the macOS/PyPy flake (below): it has now come back three times in the eleven runs 124 to 134 on this branch, so "seen once" is out of date; the owner chose to treat it as a flake, but it may be worth the guesses in its entry.
 3. The first CI run after Python 3.15 is released (the matrix is unpinned).
 4. B-405 when upstream merges pywasm3's two PRs (#13, #14); B-406 is closed (option b: leave it, documented).
-5. Then the owner picks: B-203 (`externref`), a binary channel for node/bun (about 50 MB/s through the pipe and JSON now), B-006 (CI for examples), or the rest of phase 5 (B-503 `openat` sandbox, B-505 tests on all
-   backends, B-506/B-508 the command line to run a module).
+5. Then the owner picks: B-203 (`externref`), a binary channel for node/bun (about 50 MB/s through the pipe and JSON now), B-006 (CI for examples), or the rest of phase 5 (B-503 `openat` sandbox, B-506/B-508 the command line to run a module).
 
 **Deferred by owner decision:** B-303 (until it is really needed), B-304a (examples on asyncio), the rest of phase 5 (it waits for a command), `wasmhost.vfs`, Deno (B-701b: a bug in Deno itself). **Waiting for the owner:** the branch name and
 tidying (B-003), `coreutils.wasm` stays in git (B-004), `tiny-bclibc-wasm` (B-803). **Not covered by tests:** `examples/wasmclang.py` (run by hand on wasmtime and node on 2026-10-07: the same output before and after the change), `jslinux.py`
@@ -105,7 +105,7 @@ tidying (B-003), `coreutils.wasm` stays in git (B-004), `tiny-bclibc-wasm` (B-80
 
 Owner decision: everything is done in the current branch (the owner opens the PR and tidies the branch). Each step comes with tests, a step in the
 self-test and a green pre-commit, and is a separate commit. Done so far, in order: B-201 (steps 1-4), B-304, B-204, B-507, B-509, B-202, B-301, B-302,
-then phase 4 (B-401 to B-404), then B-501 and B-502 (done 2026-10-07). The detail of each is in its own entry below. Open: B-203, B-303, B-304a, B-006, phase 5 from B-503, and phase 6.
+then phase 4 (B-401 to B-404), then B-501, B-502, B-504 and B-505 (done 2026-10-07). The detail of each is in its own entry below. Open: B-203, B-303, B-304a, B-006, phase 5 (B-503, B-506, B-508) and phase 6.
 
 ## Accepted API decisions
 
@@ -497,11 +497,15 @@ official `wasi_snapshot_preview1` (branch `wasi-0.1` of WebAssembly/WASI), not t
       in it; a call that needs one answers `ENOTCAPABLE`, and a file opened with every right asked for is opened for reading only. Tests in `tests/test_wasi_preview1.py` (the rights, every refused call, a file opened from it,
       named preopens, both snapshots) and `tests/test_wasi_preview1_run.py` (a program on every backend); the self-test's WASI step runs the program on a read-only folder too. **A bug found on the way and fixed:** a combined right
       (`fd_pread`, `fd_pwrite`: `fd_read|fd_seek`, `fd_write|fd_seek`) passed the check if *any* of the bits was there; now all are needed, and the type of the descriptor is looked at before the right.
-- [ ] **B-505** Tests on all backends. **Correction (2026-10-07): `wasm3` is confirmed to run Rust/WASI1 programs; the older note that it does not take Rust builds was wrong and unchecked.**
+- [x] **B-505** (DONE 2026-10-07, closed on the owner's word to close what is done, in the scope below) Tests on all backends. **Correction (2026-10-07): `wasm3` is confirmed to run Rust/WASI1 programs; the older note that it does not take Rust builds was wrong and unchecked.**
       Checked: a `std` program built with `rustc 1.97.0` for `wasm32-wasip1` (HashMap, `format!`, `u128`, arguments; 2.1 MB, uses `memory.copy` / `memory.fill`) and a `no_std` `wasm32-unknown-unknown` library
       run on `wasm3` with the same output as on `wasmtime`; and `tests/test_coreutils_example.py` (3 tests) passes on `wasm3` with its skip taken off (the skip is now removed). What `wasm3` does not take is
       still unmeasured as a list: Pyodide's `pyodide.asm.wasm` (not WASI-only: 280 imported globals, which our `wasm3` backend can't give (`supports("import.global")` is false), and `externref` in 149 function types) does not link.
-      So `supports` needs no "Rust" entry; the remaining work is the collection of backend capability checks and the table of what each backend can run (see the WASI notes above).
+      So `supports` needs no "Rust" entry; the remaining work was the table of what each backend can run (see the WASI notes above).
+      **Done in that scope (2026-10-07):** the suite runs on every backend in CI (that part was there), the capability table was there, and README "Backends" now has "What has run where": the programs (the self-test's WASI programs,
+      `coreutils`, `wasi_sh`, `wasmclang`, `pyodide`, `coremark`, `jslinux`) against the seven backends, filled from runs here, CI logs and the owner's device runs, with `?` where nothing was run. Found by it: `wasmclang.py` works on
+      `wasm3` (14 s, faster than on `wasmtime`, 21 s) and on `node`, and **does not on Bun 1.4.2**, which aborts (`panic: abort() called`, "a bug in Bun"), the same with the file as it was before this session. The `?` cells (`jsc`
+      for `wasmclang`, `pyodide`, `coremark`; `jslinux` everywhere but the device) are not tests we lack but runs nobody made; filling them needs a machine with `jsc`.
       Seen 2026-10-07 on the original iSH (i686, CPython 3.11.12, `wasm3` only; reported by the owner, not reproduced here): a memory declared 1..4 pages is 4 pages from the start, so 3 self-test
       steps fail (31/34): the module's own `memory.grow`, `Instance(max_memory=)`, `type()` of a memory. Cause not known and not investigated: the owner suspects iSH's i386 emulator, not 32-bit as such; he will look when an issue is filed. (pywasm3's publish.yml builds i686 under QEMU and runs its own tests on wasm3, but they only use memories without a declared maximum, so they do not settle it); open
       for the owner: make those steps tolerant of it, fix it in the backend, or document it (README "Backends" says what was seen).
@@ -604,7 +608,8 @@ shared memory, memory64 (and GC), each with `supports(...)`.
 - `examples/wasm/lua.wasm` was built without `longjmp`: any script error (syntax, `error()`, `pcall`) kills the
   interpreter. The cure is a different build of Lua.
 - `coreutils.wasm` runs on `wasm3` too (checked 2026-10-07: `tests/test_coreutils_example.py` passes there; an older note and test skip said it didn't).
-- Whether JavaScriptCore on your iOS accepts the remaining features of `coreutils.wasm` has not been verified on a device.
+- `coreutils.py` works on a device (the owner, Pythonista, `jscontext`, 2026-10-07); the remaining features of `coreutils.wasm` are accepted there.
+- `examples/wasmclang.py` does not run on Bun 1.4.2: Bun aborts ("this indicates a bug in Bun") while it compiles the WASI program, and did so before this session too. It runs on `wasmtime`, `wasm3`, `node` and, on the device, `jscontext`.
 - `coreutils.wasm` weighs 10.8 MB (see B-004).
 
 ## Known flaky CI failures (not understood, not fixed; the owner chose to treat it as a flake, 2026-10-07)

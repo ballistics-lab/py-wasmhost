@@ -337,6 +337,27 @@ on iOS; the cost of a call from Python is the same either way (the bridge domina
 `vm.runInContext`, which is what a module that throws an exception of a tag the caller does not catch does there. Node
 and Bun are the same V8 and JavaScriptCore without this. It is an upstream bug; see `BACKLOG.md` (B-701b).
 
+### What has run where
+
+`yes` means it has run: on the assistant's computer, in CI, or by the owner on a device. `no` means it fails. `n/a` means it cannot: `wasmtime`
+and `wasm3` are not JavaScript engines, so the Pyodide example, which is JavaScript glue, does not apply to them, and `gi-jsc` takes no host
+functions, so nothing that imports anything runs on it. `?` is not run or not looked at.
+
+| Program                                                | `wasmtime` | `wasm3`    | `node` | `bun`                  | `jsc`    | `jscontext`                      | `gi-jsc` |
+| ------------------------------------------------------ | ---------- | ---------- | ------ | ---------------------- | -------- | -------------------------------- | -------- |
+| the WASI programs of the self-test (both snapshots)    | yes        | yes        | yes    | yes                    | yes (CI) | yes (CI, device)                 | n/a      |
+| `coreutils.py` (uutils coreutils in Rust, and Lua)     | yes        | yes        | yes    | yes                    | yes (CI) | yes (CI, device)                 | n/a      |
+| `wasi_sh.py` (BusyBox ash)                             | yes        | yes        | yes    | yes                    | yes (CI) | yes (CI, device)                 | n/a      |
+| `wasmclang.py` (clang and lld, themselves wasm)        | yes (21 s) | yes (14 s) | yes    | **no**: Bun aborts     | ?        | yes (device, 22 s)               | n/a      |
+| `pyodide.py`                                           | n/a        | n/a        | yes    | yes                    | ?        | yes (CI, device, ready in 1.9 s) | n/a      |
+| `coremark.py` (score)                                  | 25405      | 3645       | 30411  | 29731                  | ?        | 1951 (iPhone 16)                 | n/a      |
+| `jslinux.py`                                           | ?          | ?          | ?      | ?                      | ?        | yes (device)                     | n/a      |
+
+The first four CoreMark scores are from one x86-64 computer and the `jscontext` one from a phone without JIT, so they say an order of magnitude and
+not more. `wasmclang.py` on Bun stops with `panic: abort() called` and Bun's own "this indicates a bug in Bun" (Bun 1.4.2, in the second build, the
+WASI program); the file as it was before 2026-10-07 does the same. Pyodide's own `pyodide.asm.wasm` does not link on `wasm3` in any case: it imports
+280 globals, which our `wasm3` backend can't give, and uses `externref`. `jslinux.py` needs a server that the assistant's environment cannot reach.
+
 ## Limits for untrusted code
 
 Three limits, each an extension outside the JavaScript API except the first road of the memory ceiling.
