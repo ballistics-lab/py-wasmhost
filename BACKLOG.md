@@ -70,7 +70,7 @@ here; `jsc`, `gi-jsc` and `jscontext` only in CI); on Python 3.15.0rc3 the whole
 
 **Run on devices by the owner.** Pythonista (iPhone 16, iOS 26, Python 3.10.4) and PythonIDE (Python 3.14.7), `jscontext`: **41/41** with the WASI step (wheel `0.1.0b3.dev14+gc14888b9c`, before the rename), earlier 38/38, buffers intact from 1 byte to
 8 MiB, `await compile/instantiate`, `wasi_sh --home`, `bench`. iSH-AOK (aarch64, wasmhost 0.1.0b2): `wasmtime` and `wasm3`, both 34/34. The original iSH (i686, `wasm3` only): 31/34, a memory declared 1..4 pages is 4 pages from the start so three memory
-steps fail; cause unknown, the owner suspects iSH's i386 emulator and will look when an issue is filed (B-505, README "Backends"). The rows are in README "Where it has been run".
+steps fail, and `examples/coremark.py` on `wasm3` stops there with `data segment out of bounds` (2026-10-08); cause unknown, the owner suspects iSH's i386 emulator and will look when an issue is filed (B-505, README "Backends"). The rows are in README "Where it has been run".
 **After the rename the self-test on the device is 41/41 again (Pythonista, the wheel `0.1.0b3.dev20+gb9498e8f6`; the output does not print the version).**
 **Examples on the device (Pythonista, `jscontext`, the repo at `62f5f39`, wasmhost `0.1.0b3.dev23+g62f5f397d`, 2026-10-07):** `coreutils.py` works (it runs on `wasmhost.wasi.preview1` now), `coremark.py` works (score 1951.5, last pass
 15.4 s), `imports.py` works (host functions: nested calls, `i64`, several results, an exception out of a host function), `basic.py` works, `jitcheck.py` says 167 M iter/s, "interpreter likely (no JIT)" (as documented for iOS),
