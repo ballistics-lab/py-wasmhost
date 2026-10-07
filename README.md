@@ -271,6 +271,11 @@ Not every backend can do everything; `backend.supports(...)` says:
 | `node` | yes | yes | yes | yes | yes | no |
 | `bun` | yes | yes | yes | yes | yes | no |
 
+**No JIT on iOS.** In Pythonista (and any app that is not Safari) JavaScriptCore runs WebAssembly without its JIT, so `jscontext` there is
+an interpreter: `python -m wasmhost bench` shows a loop several times slower than `jsc` on a desktop and close to `jsc --no-jit`.
+For plain computation an interpreter such as `wasm3` would be faster there, but `wasm3` is a C extension that can not be installed
+on iOS; the cost of a call from Python is the same either way (the bridge dominates).
+
 **Deno is not supported.** Run on its pipe protocol like Node, it passes all of the self-test but the exception-handling step: Deno
 (2.9.6 and 2.9.7 tried) panics ("Deno has panicked", `capacity overflow`) when a `WebAssembly.Exception` leaves
 `vm.runInContext`, which is what a module that throws an exception of a tag the caller does not catch does there. Node
