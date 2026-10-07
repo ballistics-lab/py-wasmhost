@@ -407,6 +407,13 @@ Out of scope: sockets, threads, interactive stdin, WASI preview2.
 - [ ] **B-602** SIMD (`v128`) and shared memory/threads: the JS engines have it, wasm3 does not.
 - [ ] **B-603** `memory64` and multi-memory (Safari does not support multi-memory).
 - [ ] **B-604** GC types.
+- [ ] **B-605** Custom page sizes (the `custom-page-sizes` proposal: bit 3 of a memory's limits flags, a page of 2^k bytes instead of 64 KiB).
+      No engine takes such a module here (checked 2026-10-07 with a module whose memory has the flag): `wasmtime` and `wasm3` refuse it,
+      `node` ("invalid memory limits flags 0x8") and `bun` ("resizable limits flag are not valid") do not parse it, so it fails as a `CompileError`
+      before any of our code matters. Today `_binary.parse` reads the flag and skips the page size (so a `MemoryType` would be counted in the wrong
+      unit), and `limit_memory` (B-401) refuses such a memory with a `ValueError`. To support it: read the log2 of the page size into `MemoryType`,
+      and let `limit_memory` turn the ceiling from bytes into the module's pages (`max_memory * 65536 >> k`); about ten lines, but it can't
+      be tested until an engine runs such a module. Start only when one does (wasmtime-py turns the proposal on, JSC or V8 accepts it) or a real module needs it.
 
 Each item goes through `supports(...)`; start only when a real module appears that needs it.
 Self-test: the step "exception handling" already knows the encoding; add a check of `Tag`/`Exception` and a step each for SIMD,
