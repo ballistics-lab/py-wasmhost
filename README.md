@@ -349,8 +349,8 @@ Python's `faulthandler` (on with `python -X faulthandler`, and in pytest) replac
 What the JavaScript API has, or a module can need, and wasmhost does not have yet. `BACKLOG.md` has the order in
 which it is meant to be done.
 
-- **Tables and references.** the signature of a table entry is not told by a JavaScript engine (set it by hand; wasmtime finds it); no `externref` (tables, globals or
-  values); no start value for `Table(...)`; no `v128`.
+- **Tables and references.** The signature of a table entry is not told by a JavaScript engine (set it by hand,
+  or let the module's `elem` segment tell it; wasmtime finds it); no `externref` (tables, globals or values); no `v128`.
 - **Memory is copied** on `read` and `write`. `Memory.view(offset, length)` gives the engine's own memory as a `memoryview`, with no copy, on `wasmtime` and `wasm3`
   (not on a JavaScript engine, whose memory lives in another place); it is released when the module may have run (a call, a batch, a `grow`), so it is
   for use at once. On a JavaScript engine the cost of moving a buffer is in the encoding, not the copy: see `wasmhost bench`.
@@ -358,8 +358,8 @@ which it is meant to be done.
 - **Threads.** A module built with `-pthread` (the WebAssembly threads proposal: a `shared` memory that the module
   imports, atomic instructions, threads made by the host as several instances of the module on one memory) does not
   run: `Memory(..., shared=True)` raises `NotImplementedError`, so it can not be given as an import. Build without
-  threads (`-pthread` off, for wasm-ld `--no-threads`). A wasm instance runs in one thread, and a backend is
-  not safe to call from two threads at once (there is no lock yet: BACKLOG B-304 adds one).
+  threads (`-pthread` off, for wasm-ld `--no-threads`). A wasm instance runs in one thread, and a backend takes one
+  call at a time (a lock of its own, see "Async and threads").
 - **Newer proposals**: no API for `WebAssembly.Tag` and `WebAssembly.Exception` (the self-test only reports which
   encodings of exceptions an engine takes), SIMD, `memory64`, multi-memory, GC types.
   Whether a module that uses them runs is up to the engine.
