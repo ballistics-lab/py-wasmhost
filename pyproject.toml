@@ -38,6 +38,11 @@ wasmhost = "wasmhost._cli:main"
 
 [project.optional-dependencies]
 wasmtime = ["wasmtime>=49.0.0"]
+# The `gi-jsc` backend (WebKitGTK's JavaScriptCore through PyGObject, Linux only). PyGObject is built from source, so the
+# system needs its development files first (see "Backends" in the README): PyGObject 3.52+ wants girepository-2.0
+# (GLib 2.80+, Ubuntu 24.04 and later: `libgirepository-2.0-dev`), 3.50 and earlier girepository-1.0 (`libgirepository1.0-dev`;
+# on such a system ask for `pygobject<3.52`). The typelib is `gir1.2-javascriptcoregtk-4.1`.
+gi-jsc = ["PyGObject>=3.42; sys_platform == 'linux'"]
 
 [tool.setuptools]
 package-dir = { "" = "src" }

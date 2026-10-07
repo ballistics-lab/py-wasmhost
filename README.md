@@ -252,7 +252,7 @@ fallback if the C API ever fails. The self-test reports which was used (`N bytes
 | `wasm3`     | CPython 3.11+ with [pywasm3](https://github.com/wasm3/pywasm3) | `import wasm3`; install it from git: `uv add "pywasm3 @ git+https://github.com/wasm3/pywasm3"` (its PyPI release predates the API used here)                                                                                                                        | no                                 |
 | `jscontext` | iOS (Pythonista, PythonIDE), and a Mac with rubicon-objc       | Apple's `JSContext` through an Objective-C bridge: Pythonista's `objc_util` (both iOS apps have it), or [`rubicon-objc`](https://github.com/beeware/rubicon-objc) (`pip install rubicon-objc`; tested in CI on macOS, not on a device). `backend.bridge` says which | no                                 |
 | `jsc`       | Linux, macOS                                                   | JavaScriptCore's C API through `ctypes`, no PyGObject: `apt install libjavascriptcoregtk-4.1-0` (macOS uses the system framework)                                                                                                                                   | no                                 |
-| `gi-jsc`    | Linux                                                          | the same engine through PyGObject (`apt install gir1.2-javascriptcoregtk-4.1 python3-gi`)                                                                                                                                                                           | no                                 |
+| `gi-jsc`    | Linux                                                          | the same engine through PyGObject (`apt install gir1.2-javascriptcoregtk-4.1 python3-gi`, or `pip install wasmhost[gi-jsc]`: see below)                                                                                                                                                                           | no                                 |
 | `node`      | anywhere with Node.js                                          | `node` on `PATH`                                                                                                                                                                                                                                                    | yes                                |
 | `bun`       | anywhere with [Bun](https://bun.sh)                            | `bun` on `PATH`. It is JavaScriptCore (as in Safari and on iOS) in a runtime of its own, and runs the very script `node` does                                                                                                                                       | no (its wasm loop is not stopped)  |
 
@@ -273,6 +273,24 @@ Not every backend can do everything; `backend.supports(...)` says:
 | `gi-jsc`    | yes                                                            | yes            | no                                                        | yes                                             | yes                                | no           | no                                 |
 | `node`      | yes                                                            | yes            | yes                                                       | yes                                             | yes                                | no           | yes                                |
 | `bun`       | yes                                                            | yes            | yes                                                       | yes                                             | yes                                | no           | no (its wasm loop is not stopped)  |
+
+**PyGObject for `gi-jsc`.** The simplest way is the system's own `python3-gi` (with `gir1.2-javascriptcoregtk-4.1`) and the system's Python, as
+CI does. To have it in a venv instead, `pip install "wasmhost[gi-jsc]"` (or `uv sync --extra gi-jsc`) builds PyGObject from source, so the system needs
+its development files first, and which ones depends on the PyGObject that gets built: **3.52 and later need `girepository-2.0`** (GLib 2.80+: Ubuntu 24.04
+and later), **3.50 and earlier need `girepository-1.0`**:
+
+```bash
+# Ubuntu 24.04 and later (PyGObject 3.52+, the default)
+sudo apt install libgirepository-2.0-dev gir1.2-javascriptcoregtk-4.1 libcairo2-dev pkg-config python3-dev build-essential
+
+# an older Ubuntu (22.04): the older development package, and keep PyGObject below 3.52
+sudo apt install libgirepository1.0-dev gir1.2-javascriptcoregtk-4.1 libcairo2-dev pkg-config python3-dev build-essential
+pip install "wasmhost[gi-jsc]" "pygobject<3.52"
+```
+
+The build stops with `Dependency 'girepository-2.0' is required but not found` when only the older package is there (seen on Ubuntu 26.04, where
+`libgirepository1.0-dev` alone was not enough for PyGObject 3.58). The backend asks for the `4.1` typelib of JavaScriptCore, so on a system that only
+has `4.0` it does not start: use `jsc`, which needs no PyGObject. The Ubuntu 22.04 line was not tried here.
 
 **No JIT on iOS.** In Pythonista (and any app that is not Safari) JavaScriptCore runs WebAssembly without its JIT, so `jscontext` there is
 an interpreter: `python -m wasmhost bench` shows a loop several times slower than `jsc` on a desktop and close to `jsc --no-jit`.
@@ -321,6 +339,7 @@ out of memory (MB/s) and the engine itself (a recursive
 | PythonIDE, Python 3.14.7, `ios-13.0-arm64-iphoneos`                       | `jscontext` (`objc_util`) | **25/25**, bytes `via C API`, host functions (wasmhost 0.0.2b1)                                                                           | 39 / 77 us            |
 | Linux, CPython 3.14t                                                      | `jsc`                     | 35/35                                                                                                                                     | 32 / 102 us           |
 | Linux, CPython 3.14t                                                      | `gi-jsc`                  | 27/27 (host functions: not available, as documented)                                                                                      | 35 / 62 us            |
+| Ubuntu 26.04, CPython 3.10.20, PyGObject 3.58.0 (`pip`, built from source) | `gi-jsc`                  | **38/38** (host functions: not available, as documented)                                                                                  | 32 / 74 us            |
 | Linux, CPython 3.14t                                                      | `node`                    | 35/35                                                                                                                                     | 82 / 340 us           |
 | Linux, CPython 3.11, Bun 1.4.2                                            | `bun`                     | 35/35                                                                                                                                     | 133 / 287 us          |
 | Linux, CPython 3.14t                                                      | `wasmtime`                | 29/29                                                                                                                                     | 66 / 212 us           |
@@ -387,7 +406,7 @@ uv run pytest                            # every backend that starts here
 uv run pytest --wasm-backend node        # one backend: it must start, or the run stops with an error
 uv run pytest --wasm-backend bun         # needs `bun` on PATH
 uv run pytest --wasm-backend wasmtime    # or wasm3, or jsc (needs the JavaScriptCore library)
-uv run pytest --wasm-backend gi-jsc      # needs PyGObject: run it with a system-site-packages venv (see the CI job)
+uv run pytest --wasm-backend gi-jsc      # needs PyGObject: `uv sync --extra gi-jsc` after the packages above, or a system-site-packages venv (the CI job)
 uv run pyright && uv run ruff check
 ```
 
