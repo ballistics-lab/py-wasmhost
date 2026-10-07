@@ -246,15 +246,15 @@ fallback if the C API ever fails. The self-test reports which was used (`N bytes
 
 ## Backends
 
-| Backend | Where | How it is detected |
-|---|---|---|
-| `wasmtime` | anywhere with the `wasmtime` package | `import wasmtime` (`pip install wasmtime`) |
-| `wasm3` | CPython 3.11+ with [pywasm3](https://github.com/wasm3/pywasm3) | `import wasm3`; install it from git: `uv add "pywasm3 @ git+https://github.com/wasm3/pywasm3"` (its PyPI release predates the API used here) |
-| `jscontext` | iOS (Pythonista, PythonIDE), and a Mac with rubicon-objc | Apple's `JSContext` through an Objective-C bridge: Pythonista's `objc_util` (both iOS apps have it), or [`rubicon-objc`](https://github.com/beeware/rubicon-objc) (`pip install rubicon-objc`; tested in CI on macOS, not on a device). `backend.bridge` says which |
-| `jsc` | Linux, macOS | JavaScriptCore's C API through `ctypes`, no PyGObject: `apt install libjavascriptcoregtk-4.1-0` (macOS uses the system framework) |
-| `gi-jsc` | Linux | the same engine through PyGObject (`apt install gir1.2-javascriptcoregtk-4.1 python3-gi`) |
-| `node` | anywhere with Node.js | `node` on `PATH` |
-| `bun` | anywhere with [Bun](https://bun.sh) | `bun` on `PATH`. It is JavaScriptCore (as in Safari and on iOS) in a runtime of its own, and runs the very script `node` does |
+| Backend     | Where                                                          | How it is detected                                                                                                                                                                                                                                                  |
+| ----------- | -------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `wasmtime`  | anywhere with the `wasmtime` package                           | `import wasmtime` (`pip install wasmtime`)                                                                                                                                                                                                                          |
+| `wasm3`     | CPython 3.11+ with [pywasm3](https://github.com/wasm3/pywasm3) | `import wasm3`; install it from git: `uv add "pywasm3 @ git+https://github.com/wasm3/pywasm3"` (its PyPI release predates the API used here)                                                                                                                        |
+| `jscontext` | iOS (Pythonista, PythonIDE), and a Mac with rubicon-objc       | Apple's `JSContext` through an Objective-C bridge: Pythonista's `objc_util` (both iOS apps have it), or [`rubicon-objc`](https://github.com/beeware/rubicon-objc) (`pip install rubicon-objc`; tested in CI on macOS, not on a device). `backend.bridge` says which |
+| `jsc`       | Linux, macOS                                                   | JavaScriptCore's C API through `ctypes`, no PyGObject: `apt install libjavascriptcoregtk-4.1-0` (macOS uses the system framework)                                                                                                                                   |
+| `gi-jsc`    | Linux                                                          | the same engine through PyGObject (`apt install gir1.2-javascriptcoregtk-4.1 python3-gi`)                                                                                                                                                                           |
+| `node`      | anywhere with Node.js                                          | `node` on `PATH`                                                                                                                                                                                                                                                    |
+| `bun`       | anywhere with [Bun](https://bun.sh)                            | `bun` on `PATH`. It is JavaScriptCore (as in Safari and on iOS) in a runtime of its own, and runs the very script `node` does                                                                                                                                       |
 
 With nothing configured, the first backend that starts wins, in the order shown: the native runtimes when they are installed, then the JavaScript engines. (On Pythonista nothing above `jscontext` can be installed, so it is the pick there; on a Mac that has rubicon-objc, `wasmtime` still comes first.) Each backend's constructor is its
 own probe: it fails when its runtime is missing. Choose one with `WASMHOST_BACKEND=<name>`,
@@ -264,15 +264,15 @@ Python side that provides imports; what runs the module is the backend.)
 
 Not every backend can do everything; `backend.supports(...)` says:
 
-| | `memory.grow` from Python | `table.length` | host functions (`imports`) | Global, Memory, Table on their own (`import.*`) | table get/set/grow (`table.funcs`) | `isolated` |
-|---|---|---|---|---|---|---|
-| `wasmtime` | yes | yes | yes | yes | yes | yes |
-| `wasm3` | no (`NotImplementedError`; a module's own `memory.grow` works) | no | yes | no | no | yes (always) |
-| `jscontext` | yes | yes | yes, through JavaScriptCore's C API (under either bridge) | yes | yes | no |
-| `jsc` | yes | yes | yes | yes | yes | no |
-| `gi-jsc` | yes | yes | no | yes | yes | no |
-| `node` | yes | yes | yes | yes | yes | no |
-| `bun` | yes | yes | yes | yes | yes | no |
+|             | `memory.grow` from Python                                      | `table.length` | host functions (`imports`)                                | Global, Memory, Table on their own (`import.*`) | table get/set/grow (`table.funcs`) | `isolated`   |
+| ----------- | -------------------------------------------------------------- | -------------- | --------------------------------------------------------- | ----------------------------------------------- | ---------------------------------- | ------------ |
+| `wasmtime`  | yes                                                            | yes            | yes                                                       | yes                                             | yes                                | yes          |
+| `wasm3`     | no (`NotImplementedError`; a module's own `memory.grow` works) | no             | yes                                                       | no                                              | no                                 | yes (always) |
+| `jscontext` | yes                                                            | yes            | yes, through JavaScriptCore's C API (under either bridge) | yes                                             | yes                                | no           |
+| `jsc`       | yes                                                            | yes            | yes                                                       | yes                                             | yes                                | no           |
+| `gi-jsc`    | yes                                                            | yes            | no                                                        | yes                                             | yes                                | no           |
+| `node`      | yes                                                            | yes            | yes                                                       | yes                                             | yes                                | no           |
+| `bun`       | yes                                                            | yes            | yes                                                       | yes                                             | yes                                | no           |
 
 **No JIT on iOS.** In Pythonista (and any app that is not Safari) JavaScriptCore runs WebAssembly without its JIT, so `jscontext` there is
 an interpreter: `python -m wasmhost bench` shows a loop several times slower than `jsc` on a desktop and close to `jsc --no-jit`.
@@ -291,7 +291,7 @@ The package carries a self-test, since nothing else can be run in Pythonista/Pyt
 ```python
 import wasmhost
 
-wasmhost.selftest()  # or, from a shell: python -m wasmhost selftest [--backend NAME] [--all]
+wasmhost.selftest()  # or, from a shell: python -m wasmhost self test [--backend NAME] [--all]
 ```
 
 It prints one line per check, then `N/M passed`: the Objective-C bridge in use (and, if the C API is not used, why:
@@ -301,8 +301,8 @@ isolated instance, which encodings of WebAssembly exceptions the engine takes (`
 (try/catch): no`: a module built with C++ exceptions, such as bclibc's `bclibc_wasm.wasm` from wasi-sdk, needs the final one),
 and the cost of a call. A check the backend can't do says so (`not available on this backend, as
 documented`) and counts as passed. If something fails, send the whole output. On a computer,
-`python -m wasmhost selftest --all` runs it on every backend that starts. Installed with pip, the same commands are
-there as `wasmhost selftest` and `wasmhost bench`.
+`python -m wasmhost self test --all` runs it on every backend that starts. Installed with pip, the same commands are
+there as `wasmhost self test` and `wasmhost bench`.
 
 `python -m wasmhost bench [--backend NAME] [--no-jit]` times a call, a batch of three and the engine itself (a recursive
 `fib`, a loop) on each backend that starts, to choose one. `--no-jit` takes the JIT off JavaScriptCore
@@ -310,19 +310,19 @@ there as `wasmhost selftest` and `wasmhost bench`.
 
 ### Where it has been run
 
-| Where | Backend | Result | A call / a batch of 3 |
-|---|---|---|---|
-| Pythonista 3 (StaSh 0.7.5), Python 3.10.4, iPhone 16 (iPhone17,3) | `jscontext` (`objc_util`) | **25/25**, bytes `via C API`, host functions (wasmhost 0.0.2b1) | 55 / 102 us |
-| Pythonista 3, Python 3.10.4, iPhone 16 (iPhone17,3), iOS 26 (Darwin 25.6) | `jscontext` (`objc_util`) | **28/28**, bytes `via C API`, host functions, both encodings of WebAssembly exceptions (`try_table` and `try`/`catch`) (wasmhost 0.0.3b2) | 40 / 85 us |
-| Pythonista 3, Python 3.10.4, iPhone 16 (iPhone17,3), iOS 26 (Darwin 25.6) | `jscontext` (`objc_util`) | **35/35**, bytes `via C API`, both encodings of exceptions, functions and signatures, async, threads (wasmhost 0.0.4.dev64) | 68 / 156 us |
-| PythonIDE, Python 3.14.7, `ios-13.0-arm64-iphoneos` | `jscontext` (`objc_util`) | **25/25**, bytes `via C API`, host functions (wasmhost 0.0.2b1) | 39 / 77 us |
-| Linux, CPython 3.14t | `jsc` | 35/35 | 32 / 102 us |
-| Linux, CPython 3.14t | `gi-jsc` | 27/27 (host functions: not available, as documented) | 35 / 62 us |
-| Linux, CPython 3.14t | `node` | 35/35 | 82 / 340 us |
-| Linux, CPython 3.11, Bun 1.4.2 | `bun` | 35/35 | 133 / 287 us |
-| Linux, CPython 3.14t | `wasmtime` | 29/29 | 66 / 212 us |
-| Linux, CPython 3.14t | `wasm3` | 29/29 | 3 / 63 us |
-| Linux, CPython 3.10 and PyPy 3.10 | `node` | 25/25 (an earlier version; and the test suite on 3.10) | |
+| Where                                                                     | Backend                   | Result                                                                                                                                    | A call / a batch of 3 |
+| ------------------------------------------------------------------------- | ------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------- | --------------------- |
+| Pythonista 3 (StaSh 0.7.5), Python 3.10.4, iPhone 16 (iPhone17,3)         | `jscontext` (`objc_util`) | **25/25**, bytes `via C API`, host functions (wasmhost 0.0.2b1)                                                                           | 55 / 102 us           |
+| Pythonista 3, Python 3.10.4, iPhone 16 (iPhone17,3), iOS 26 (Darwin 25.6) | `jscontext` (`objc_util`) | **28/28**, bytes `via C API`, host functions, both encodings of WebAssembly exceptions (`try_table` and `try`/`catch`) (wasmhost 0.0.3b2) | 40 / 85 us            |
+| Pythonista 3, Python 3.10.4, iPhone 16 (iPhone17,3), iOS 26 (Darwin 25.6) | `jscontext` (`objc_util`) | **35/35**, bytes `via C API`, both encodings of exceptions, functions and signatures, async, threads (wasmhost 0.0.4.dev64)               | 68 / 156 us           |
+| PythonIDE, Python 3.14.7, `ios-13.0-arm64-iphoneos`                       | `jscontext` (`objc_util`) | **25/25**, bytes `via C API`, host functions (wasmhost 0.0.2b1)                                                                           | 39 / 77 us            |
+| Linux, CPython 3.14t                                                      | `jsc`                     | 35/35                                                                                                                                     | 32 / 102 us           |
+| Linux, CPython 3.14t                                                      | `gi-jsc`                  | 27/27 (host functions: not available, as documented)                                                                                      | 35 / 62 us            |
+| Linux, CPython 3.14t                                                      | `node`                    | 35/35                                                                                                                                     | 82 / 340 us           |
+| Linux, CPython 3.11, Bun 1.4.2                                            | `bun`                     | 35/35                                                                                                                                     | 133 / 287 us          |
+| Linux, CPython 3.14t                                                      | `wasmtime`                | 29/29                                                                                                                                     | 66 / 212 us           |
+| Linux, CPython 3.14t                                                      | `wasm3`                   | 29/29                                                                                                                                     | 3 / 63 us             |
+| Linux, CPython 3.10 and PyPy 3.10                                         | `node`                    | 25/25 (an earlier version; and the test suite on 3.10)                                                                                    |                       |
 
 The counts of the Linux rows are for the current version (the first two phone rows are for `0.0.2b1`: the self-test has
 grown since); the times are one run of the self-test each, so read them as an order of magnitude. A host function costs about

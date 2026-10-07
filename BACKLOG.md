@@ -11,7 +11,7 @@
 
 Рантайми вже перевіряє CI: весь набір `pytest` проганяється окремо на кожному бекенді (`wasmtime`, `node`, `wasm3`,
 `jsc` і `jscontext` на macOS, WebKitGTK `jsc` і `gi-jsc` з JIT і без JIT, як на iOS), плюс крок «Examples».
-Цього не замінює селф-тест (`python -m wasmhost selftest`, `wasmhost.selftest()`): він запускається **на пристрої** (iPhone,
+Цього не замінює селф-тест (`python -m wasmhost self test`, `wasmhost.selftest()`): він запускається **на пристрої** (iPhone,
 Pythonista), де CI не буває. Він має відображати те, що бібліотека вміє зараз, тож його оновлюють **у тому ж PR**, що
 й саму функцію:
 
@@ -98,7 +98,7 @@ Pythonista), де CI не буває. Він має відображати те,
       і як окремі об'єкти, і як значення в імпорт-об'єкті — PR #5.
 - [x] Приклад `examples/coremark.py` на всіх бекендах — PR #6.
 - [x] Селф-тест перевіряє, які кодування WebAssembly-винятків бере рушій — PR #7; прогін на iPhone 16 — PR #8.
-- [x] Командний рядок: `python -m wasmhost selftest [--backend NAME] [--all]` (аліас `self-test`) як підкоманда,
+- [x] Командний рядок: `python -m wasmhost self test [--backend NAME] [--all]` як підкоманда,
       перший позиційний аргумент вільний під модуль; без команди друкується довідка (код 2). Модуль `_cli.py`.
 - [x] Селф-тест на пристрої звірено з `main` (кроки для `Memory`, `Table`, `customSections`) — див. B-005.
 - [~] Приклади на гілці `examples/zigcc` (не в `main`): `wasmclang.py` (clang/lld у wasm, C і C++),
@@ -337,10 +337,10 @@ Pythonista), де CI не буває. Він має відображати те,
 - [ ] **B-506** Команда запуску модуля за зразком `wasmtime myapp.wasm -- arg1 arg2 --verbose`. Граматика:
       `wasmhost [ОПЦІЇ ХОСТА] myapp.wasm [-- АРГУМЕНТИ ПРОГРАМИ]`: опції до модуля належать хосту (`--backend`,
       `--dir ХОСТ::ГІСТЬ`, `--env K=V`), усе після модуля (і після `--`) без розбору йде програмі через
-      `args_get`. Спершу перевіряються назви команд (`selftest`), усе інше трактується як файл модуля; файл із
-      назвою команди запускається як `./selftest`. Підкоманда `selftest` лишається як є. Залежить від B-502.
+      `args_get`. Спершу перевіряються назви команд (`self`/`test`), усе інше трактується як файл модуля; файл із
+      назвою команди запускається як `./self`. Підкоманда `self test` є канонічною формою. Залежить від B-502.
 - [x] **B-507** (ЗРОБЛЕНО: `[project.scripts]`, `tests/test_cli_entry.py`; розширимо, коли з'явиться запуск модуля, B-506) Точка входу `wasmhost`: `[project.scripts] wasmhost = "wasmhost._cli:main"` в `pyproject.toml`, щоб
-      писати `wasmhost myapp.wasm` і `wasmhost selftest`, а не `python -m wasmhost`. Зараз такої команди нема.
+      писати `wasmhost myapp.wasm` і `wasmhost self test`, а не `python -m wasmhost`. Зараз такої команди нема.
       Перевірити `uv lock --check` і колеса.
 - [ ] **B-508** Запуск модуля без WASI (як наші `fib` і `sum`): в нього нема `_start` і аргументів, тому окрема
       підкоманда з викликом експортованої функції, наприклад `wasmhost call myapp.wasm add 2 3` (типи з

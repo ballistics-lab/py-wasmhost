@@ -16,5 +16,5 @@ def test_the_entry_point_names_the_cli(capsys: pytest.CaptureFixture[str], sessi
     found = re.search(r"^\[project\.scripts\]\s+wasmhost\s*=\s*\"([\w.]+):(\w+)\"", text, re.MULTILINE)
     assert found is not None, "no [project.scripts] wasmhost entry in pyproject.toml"
     main = getattr(importlib.import_module(found.group(1)), found.group(2))
-    assert main(["selftest", "--backend", session]) == 0  # what the installed `wasmhost selftest` does
+    assert main(["self", "test", "--backend", session]) == 0  # canonical CLI form
     assert "passed" in capsys.readouterr().out
