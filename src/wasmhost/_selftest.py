@@ -81,6 +81,13 @@ MEMORY_USER = bytes.fromhex(
     "6f616400000573746f726500010a1302070020002d00000b0900200020013a00000b"
 )
 
+# A module that imports the memory env.memory (min 1 page): grow(pages) -> i32 is memory.grow (the old size, or -1 past
+# the memory's maximum) and size() -> i32 is memory.size.
+GROWS_MEMORY = bytes.fromhex(
+    "0061736d01000000010a0260017f017f6000017f020f0103656e76066d656d6f72790200010303020001070f020467726f"
+    "7700000473697a6500010a0d020600200040000b04003f000b"
+)
+
 # A module with a table of two funcref entries that it exports as "table", and add(a, b), mul(a, b) and
 # call(a, b, index) = table[index](a, b) (call_indirect).
 TABLE_OWN = bytes.fromhex(
@@ -211,6 +218,7 @@ def _selftest_backend(backend: Backend, out: Callable[[str], object]) -> _Report
     step("host functions (Python called from the module)", lambda: _host_functions(backend))
     step("globals: made on their own, imported, shared", lambda: _globals_on_their_own(backend))
     step("memory: made on its own, imported, shared", lambda: _memory_on_its_own(backend))
+    step("memory: the maximum of an imported memory stops the module's grow", lambda: _memory_ceiling(backend))
     step("table: made on its own, imported, shared", lambda: _table_on_its_own(backend))
     step("functions: one object per function, signature, a table entry", lambda: _functions(backend))
     step("async compile and instantiate, tasks at once", lambda: _async(backend))
@@ -360,6 +368,18 @@ def _memory_on_its_own(backend: Backend) -> str:
         else:
             raise AssertionError(f"{wrong!r} was taken for the memory of the module")
     return "shared by two instances and the host; the limits and a wrong import are checked"
+
+
+def _memory_ceiling(backend: Backend) -> str:
+    if not backend.supports("import.memory"):
+        return "not available on this backend, as documented"
+    mem = Memory(1, 3, backend=backend)
+    ex = Instance(Module(GROWS_MEMORY, backend=backend), {"env": {"memory": mem}}).exports
+    _expect((ex.grow(2), ex.size()), (1, 3))  # up to the maximum
+    _expect((ex.grow(1), ex.grow(65536), ex.size(), len(mem)), (-1, -1, 3, 3 * 65536))  # past it: -1, nothing changes
+    mem.write(3 * 65536 - 1, b"\x07")
+    _expect(mem.read(3 * 65536 - 1, 1), b"\x07")
+    return "grow past the maximum answers -1; the memory and the instance are fine"
 
 
 def _table_on_its_own(backend: Backend) -> str:

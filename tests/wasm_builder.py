@@ -161,6 +161,18 @@ def imports_memory() -> bytes:
     return module(types, [(0, b"\x41\x00")], [("zero", 0, 0)], imports=imports)
 
 
+def grows_memory() -> bytes:
+    """Imports the memory env.memory (min 1 page); exports grow(pages) -> i32 (memory.grow: the old size in pages, or -1
+    when the memory would pass its maximum) and size() -> i32 (memory.size)."""
+    types = [functype([I32], [I32]), functype([], [I32])]
+    imports = [name("env") + name("memory") + b"\x02" + b"\x00\x01"]
+    funcs: list[Func] = [
+        (0, b"\x20\x00\x40\x00"),  # grow: local.get 0; memory.grow
+        (1, b"\x3f\x00"),  # size: memory.size
+    ]
+    return module(types, funcs, [("grow", 0, 0), ("size", 0, 1)], imports=imports)
+
+
 def spinner() -> bytes:
     """spin() loops forever; quick() -> i32 returns 7; busy(n) -> i32 counts up to n in a loop and returns n."""
     types = [functype([], []), functype([], [I32]), functype([I32], [I32])]
