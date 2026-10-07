@@ -360,8 +360,10 @@ WASI program); the file as it was before 2026-10-07 does the same. Pyodide's own
 
 CoreMark built natively (C, `-O2`, not through wasmhost), as a baseline for the devices where iSH emulates the processor: **3169** (GCC 15.2.0, 60000
 iterations, 18.9 s, "Correct operation validated") on iSH-AOK 1.3 (557), Linux 5.10.0-ish_aok aarch64; **1590** (GCC 12.2.1, 20000 iterations, 12.6 s,
-also validated) on the original iSH, Linux 4.20.69-ish i686. No `wasmhost` score is measured on either yet, so none is put in the table above; the
-two numbers are not comparable with the table's either (another machine, another build of the benchmark).
+also validated) on the original iSH, Linux 4.20.69-ish i686. Through wasmhost (`examples/coremark.py`, the wasm3 project's build of CoreMark) on iSH-AOK: `wasmtime` **2571.2** (the last pass 15.6 s) and `wasm3`
+**207.2** (14.5 s; a `pywasm3` wheel built for musllinux aarch64), that is about 81 % and 6.5 % of the native 3169. The last pass is calibrated by each
+runtime to take over 10 s, so its time says nothing about speed: the scores do. None is measured on the original iSH. These numbers are not comparable with
+the table's above either (another machine, another build of the benchmark).
 
 ## Limits for untrusted code
 
