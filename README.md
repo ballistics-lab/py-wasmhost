@@ -350,7 +350,7 @@ functions, so nothing that imports anything runs on it. `?` is not run or not lo
 | `wasi_sh.py` (BusyBox ash)                             | yes        | yes        | yes    | yes                    | yes (CI) | yes (CI, device)                 | n/a      |
 | `wasmclang.py` (clang and lld, themselves wasm)        | yes (21 s) | yes (14 s) | yes    | **no**: Bun aborts     | ?        | yes (device, 22 s)               | n/a      |
 | `pyodide.py`                                           | n/a        | n/a        | yes    | yes                    | ?        | yes (CI, device, ready in 1.9 s) | n/a      |
-| `coremark.py` (score)                                  | 25405      | 3645       | 30411  | 29731                  | ?        | 1951 (iPhone 16)                 | n/a      |
+| `coremark.py` (score)                                  | 25405      | 3645       | 30411  | 29731                  | ?        | 1951 (iPhone 16), 1892 (PythonIDE) | n/a      |
 | `jslinux.py`                                           | ?          | ?          | ?      | ?                      | ?        | yes (device)                     | n/a      |
 
 The first four CoreMark scores are from one x86-64 computer and the `jscontext` one from a phone without JIT, so they say an order of magnitude and
