@@ -107,7 +107,8 @@ The ordinary wheel: it is pure Python (`py3-none-any`). In StaSh (Pythonista) or
 iSH is a Linux shell for iOS (an emulated Linux with ordinary CPython); iSH-AOK is a fork of it. Neither has `objc_util`,
 JavaScriptCore or Node, so without an engine the self-test ends with `no backend could start` and says what to install.
 
-- **iSH-AOK** (`Linux 5.10.0-ish_aok`, `aarch64`): `wasmtime` installs there and works.
+- **iSH-AOK** (`Linux 5.10.0-ish_aok`, `aarch64`): `wasmtime` installs there and works, and so does `wasm3` (`WASMHOST_BACKEND=wasm3`),
+  both 34/34.
 
   ```shell
   uv tool install wasmhost --prerelease=allow --with wasmtime
@@ -115,8 +116,9 @@ JavaScriptCore or Node, so without an engine the self-test ends with `no backend
   ```
 
   (`--prerelease=allow`: the current version, 0.1.0b2, is a beta.)
-- **The original iSH** (`Linux 4.20.69-ish`, `i686`, so 32-bit): the owner ran it with `wasm3` only. It passes 31 of 34
-  steps; the three that fail all come from one thing, see "A 32-bit `wasm3`" in [Backends](#backends).
+- **The original iSH** (`Linux 4.20.69-ish`, `i686`): the owner ran it with `wasm3` only. It passes 31 of 34
+  steps; the three that fail all come from one thing, see "On the original iSH, `wasm3` starts a memory at its maximum" in
+  [Backends](#backends).
 
 Both were run by the owner, not by the assistant: see [Where it has been run](#where-it-has-been-run).
 
@@ -298,12 +300,11 @@ and the same whether the module has a memory or not). An `Instance` is in a refe
 one is freed only when Python's cyclic collector gets to it: in a loop that makes many of them, on a build whose collector runs rarely
 (the free-threaded `3.14t` did, in CI), call `gc.collect()` now and then, or keep them few. The other backends have no such limit.
 
-**A 32-bit `wasm3` starts a memory at its maximum.** On the original iSH (`i686`, CPython 3.11.12) a module whose memory is declared
-as 1 page, at most 4, is 4 pages long from the start: `len(memory)` is 262144, `type()` says `minimum=4`, and the module's own
-`memory.grow(1)` answers -1 (it is already at its maximum). The same module has 1 page on 64-bit. Three steps of the
-self-test fail for this reason (`module's own memory.grow`, `Instance(max_memory=)` and `type()` of a memory); the other 31 pass.
-That is what was observed; the cause (wasm3 or pywasm3 reserving the whole maximum where the address space is small) was not
-checked, nor was the test suite run on a 32-bit system.
+**On the original iSH, `wasm3` starts a memory at its maximum.** On the original iSH (`i686`, CPython 3.11.12) a module whose memory
+is declared as 1 page, at most 4, is 4 pages long from the start: `len(memory)` is 262144, `type()` says `minimum=4`, and the
+module's own `memory.grow(1)` answers -1 (it is already at its maximum). The same module has 1 page on 64-bit (Linux x86-64, and
+`wasm3` on iSH-AOK, `aarch64`: 34/34 there). Three steps of the self-test fail for this reason (`module's own memory.grow`,
+`Instance(max_memory=)` and `type()` of a memory); the other 31 pass. That is what was observed. The cause is not known and has not been looked into: the owner suspects iSH's emulation of i386 rather than 32-bit as such. It is the only platform so far where not every test passes.
 
 **PyGObject for `gi-jsc`.** The simplest way is the system's own `python3-gi` (with `gir1.2-javascriptcoregtk-4.1`) and the system's Python, as
 CI does. To have it in a venv instead, `pip install "wasmhost[gi-jsc]"` (or `uv sync --extra gi-jsc`) builds PyGObject from source, so the system needs
@@ -448,7 +449,8 @@ out of memory (MB/s) and the engine itself (a recursive
 | Pythonista 3, Python 3.10.4, iPhone 16 (iPhone17,3), iOS 26 (Darwin 25.6) | `jscontext` (`objc_util`) | **38/38**, a memory held by the maximum of an imported `Memory` and by `Instance(max_memory=)` (wasmhost 0.1.0b2.dev3)                       | 36 / 83 us            |
 | PythonIDE, Python 3.14.7, `ios-13.0-arm64-iphoneos`                       | `jscontext` (`objc_util`) | **25/25**, bytes `via C API`, host functions (wasmhost 0.0.2b1)                                                                           | 39 / 77 us            |
 | iSH-AOK 1.3 (557), a fork of iSH, Linux 5.10.0-ish_aok aarch64, CPython 3.14.8 | `wasmtime` | **34/34** (wasmhost 0.1.0b2, `uv tool install wasmhost --prerelease=allow --with wasmtime`; without `wasmtime` no backend starts there and the self-test says so) | 1615 / 5500 us |
-| iSH (the original), Linux 4.20.69-ish i686, CPython 3.11.12 | `wasm3` | 31/34, failed: the module's own `memory.grow`, `Instance(max_memory=)`, `type()` of a memory (a 32-bit `wasm3` starts a memory at its maximum, see Backends); wasmhost 0.1.0b2 | 571 / 3157 us |
+| iSH-AOK 1.3 (557), Linux 5.10.0-ish_aok aarch64, CPython 3.14.8 | `wasm3` (`WASMHOST_BACKEND=wasm3`) | **34/34**, wasmhost 0.1.0b2 (the memory steps pass: the 64-bit `wasm3` starts a memory at its initial size) | 213 / 1191 us |
+| iSH (the original), Linux 4.20.69-ish i686, CPython 3.11.12 | `wasm3` | 31/34, failed: the module's own `memory.grow`, `Instance(max_memory=)`, `type()` of a memory (`wasm3` starts a memory at its maximum there, see Backends); wasmhost 0.1.0b2 | 571 / 3157 us |
 | Linux, CPython 3.14t                                                      | `jsc`                     | 35/35                                                                                                                                     | 32 / 102 us           |
 | Linux, CPython 3.14t                                                      | `gi-jsc`                  | 27/27 (host functions: not available, as documented)                                                                                      | 35 / 62 us            |
 | Ubuntu 26.04, CPython 3.10.20, PyGObject 3.58.0 (`pip`, built from source) | `gi-jsc`                  | **38/38** (host functions: not available, as documented)                                                                                  | 32 / 74 us            |

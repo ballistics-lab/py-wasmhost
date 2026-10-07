@@ -460,8 +460,8 @@ files in a real folder, stdio, arguments, a clock, `sleep`), tests on wasmtime a
       run on `wasm3` with the same output as on `wasmtime`; and `tests/test_coreutils_example.py` (3 tests) passes on `wasm3` with its skip taken off (the skip is now removed). What `wasm3` does not take is
       still unmeasured as a list: Pyodide's `pyodide.asm.wasm` (not WASI-only: 280 imported globals, which our `wasm3` backend can't give (`supports("import.global")` is false), and `externref` in 149 function types) does not link.
       So `supports` needs no "Rust" entry; the remaining work is the collection of backend capability checks and the table of what each backend can run (see the WASI notes above).
-      Seen 2026-10-07 on the original iSH (i686, 32-bit, CPython 3.11.12, `wasm3` only; reported by the owner, not reproduced here): a memory declared 1..4 pages is 4 pages from the start, so 3 self-test
-      steps fail (31/34): the module's own `memory.grow`, `Instance(max_memory=)`, `type()` of a memory. Cause not checked (wasm3 or pywasm3 allocating the maximum up front where the address space is small); open
+      Seen 2026-10-07 on the original iSH (i686, CPython 3.11.12, `wasm3` only; reported by the owner, not reproduced here): a memory declared 1..4 pages is 4 pages from the start, so 3 self-test
+      steps fail (31/34): the module's own `memory.grow`, `Instance(max_memory=)`, `type()` of a memory. Cause not known and not investigated: the owner suspects iSH's i386 emulator, not 32-bit as such; he will look when an issue is filed. (pywasm3's publish.yml builds i686 under QEMU and runs its own tests on wasm3, but they only use memories without a declared maximum, so they do not settle it); open
       for the owner: make those steps tolerant of it, fix it in the backend, or document it (README "Backends" says what was seen).
 - [ ] **B-506** A command to run a module along the lines of `wasmtime myapp.wasm -- arg1 arg2 --verbose`. The grammar:
       `wasmhost [ОПЦІЇ ХОСТА] myapp.wasm [-- АРГУМЕНТИ ПРОГРАМИ]`: the options before the module belong to the host (`--backend`,
