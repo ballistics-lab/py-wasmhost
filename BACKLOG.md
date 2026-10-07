@@ -465,6 +465,24 @@ shared memory, memory64 (and GC), each with `supports(...)`.
 - Whether JavaScriptCore on your iOS accepts the remaining features of `coreutils.wasm` has not been verified on a device.
 - `coreutils.wasm` weighs 10.8 MB (see B-004).
 
+## Known flaky CI failures (not understood, not fixed; the owner chose to treat it as a flake, 2026-10-07)
+
+- **A segmentation fault on `macos-latest / pypy3.11`, in the step `pytest --wasm-backend wasmtime`.** Run 37613538125
+  (`main`, `7f3c548`, only `publish.yml` changed since a green run). The process died in
+  `tests/test_jscontext.py::test_the_api_through_it[rubicon]`, in a ctypes call `JSValueToStringCopy` (`_capi.py`, `_text`, called from
+  `evaluate`), and CI stopped there. The same commit on another run (37613713803, branch `v0.1.0b1`) was green, and in the
+  failed job the `jsc` step, which runs the same tests, passed (188 passed). Seen once.
+  - It is PyPy: the traceback shows `.venv/lib/pypy3.11` and `pypy-3.11.16-macos-aarch64`, so it is not a venv
+    that fell back to CPython.
+  - Guesses (neither checked on macOS): (1) a JavaScriptCore value held only as a Python int between `JSEvaluateScript` and
+    `JSValueProtect` (see the comment in `CApi.evaluate`: PyPy moves and drops objects on its own schedule), the window could be
+    narrowed by protecting before `JSStringRelease(script)`; (2) in this step a wasmtime engine already lives in the process, and
+    wasmtime installs process-wide signal handlers (see `tests/conftest.py`), which may disturb JavaScriptCore.
+  - Not reproduced on Linux (PyPy 3.10.16, x86-64, WebKitGTK JavaScriptCore 2.52.6): 40 runs of `test_jscontext.py`
+    and 2 whole-suite runs under `--wasm-backend wasmtime` all passed. That says only that it does not show there; macOS, arm64
+    and PyPy 3.11 were not tried.
+  - If it comes back: re-run the job once; a second failure is a real one. Then try the guesses above on a macOS runner.
+
 ## General definition of done
 
 Code, tests in `tests/` on all backends that can do it (the rest are skipped with a reason), an **updated
