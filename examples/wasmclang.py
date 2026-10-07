@@ -240,7 +240,7 @@ class MemFS:
                 if member.isdir():
                     self.add_directory(member.name)
                 elif (data := tar.extractfile(member)) is not None:  # a regular file
-                    self.add_file(member.name, data.read())
+                    self.add_file(member.name, data.read(member.size))  # Pythonista's file object needs the size
 
     def run(self, module, *argv):
         """Run a WASI program (a module that imports `wasi_unstable`) with ARGV; its exit code."""

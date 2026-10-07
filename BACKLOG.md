@@ -93,6 +93,7 @@ tidying (B-003), `coreutils.wasm` stays in git (B-004), `tiny-bclibc-wasm` (B-80
   assistant's environment; reading another repository takes `add_repo` (git only, no Actions logs).
 - `gi-jsc` takes no host functions (`supports("imports")` is false): a test that gives a module imports must skip there, as `tests/test_wasi_preview1_run.py` does (CI went red on it once).
 - On Windows `time.monotonic` ticks every 15.6 ms: a timing test uses `time.perf_counter` (a 30 ms sleep read as 16 ms on `windows-latest / 3.10`).
+- In Pythonista `tarfile.extractfile()` gives a `MyFileObject` whose `read()` needs the `size` (the standard one does not): pass `member.size` (`examples/wasmclang.py` failed on the device with `read() missing 1 required positional argument: 'size'`).
 - A mutation check that edits a file and puts it back within the same second, with the same size, can leave a stale `.pyc`: delete `__pycache__` before believing a result.
 - Facts: `jscontext` on iOS has **no JIT**, no wasmtime or wasm3 there, and neither timeout nor fuel; the owner works in Ukrainian, this file stays in English; a status mark (`[x]`) is set only on the owner's word.
 
