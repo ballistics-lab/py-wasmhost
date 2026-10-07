@@ -56,7 +56,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     def run_self_usage(_args: argparse.Namespace) -> int:
         self_command.print_usage(sys.stderr)  # no subcommand: the same as no command at all
-        parser.exit(2)
+        sys.exit(2)
 
     self_command.set_defaults(run=run_self_usage)
 
