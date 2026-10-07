@@ -52,6 +52,15 @@ def test_the_command_is_a_subcommand(capsys: pytest.CaptureFixture[str], session
     assert "passed" in capsys.readouterr().out
 
 
+def test_version_and_help_print_and_succeed(capsys: pytest.CaptureFixture[str]) -> None:
+    assert _cli.main(["version"]) == 0
+    assert capsys.readouterr().out.strip() == _cli._VERSION  # pyright: ignore[reportPrivateUsage]
+    assert _cli.main(["help"]) == 0
+    assert "usage: python -m wasmhost" in capsys.readouterr().out
+    assert _cli.main(["self"]) == 0  # no subcommand: its usage
+    assert "usage: python -m wasmhost self" in capsys.readouterr().out
+
+
 def test_without_a_command_there_is_only_help(capsys: pytest.CaptureFixture[str]) -> None:
     assert _cli.main([]) == 2
     err = capsys.readouterr().err

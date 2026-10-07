@@ -12,7 +12,7 @@ from __future__ import annotations
 import argparse
 import sys
 from collections.abc import Sequence
-from importlib.metadata import version
+from importlib.metadata import PackageNotFoundError, version
 from typing import Any, Protocol
 
 from . import _bench
@@ -20,7 +20,15 @@ from ._selftest import DESCRIPTION as SELFTEST_DESCRIPTION
 from ._selftest import add_arguments as add_selftest_arguments
 from ._selftest import run as run_selftest
 
-_VERSION = version("wasmhost")
+
+def _installed_version() -> str:
+    try:
+        return version("wasmhost")
+    except PackageNotFoundError:  # run from a source tree that was never installed
+        return "unknown"
+
+
+_VERSION = _installed_version()
 SELF_DESCRIPTION = "manage the wasmhost executable"
 
 
@@ -82,4 +90,8 @@ def main(argv: Sequence[str] | None = None) -> int:
     if command is None:  # no command
         parser.print_help(sys.stderr)
         return 2
-    return command(args)
+    result = command(args)
+    if isinstance(result, str):  # `version`, `help`, `self`: a text to show, then success
+        print(result)
+        return 0
+    return result
