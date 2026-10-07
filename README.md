@@ -161,6 +161,9 @@ table.get(0).type()  # FuncType((i32, i32), (i32,)); wasmtime finds it, a JavaSc
 # there a function an `elem` segment put in the table is known, any other: a `ValueError` and `table.get(0).signature = FuncType((i32, i32), (i32,))` (a call looks for it, too);
 # a wrong signature given by hand is a `TypeError` when called (the engine checks the type), never a wrong result
 table.grow(2)  # the length before
+wasmhost.Table(
+    "funcref", 2, 4, provider.exports.add
+)  # every entry starts as `add`; table.grow(1, f) adds entries of `f`
 ```
 
 An import that is not the right object, is too small for the module or comes from another backend is a `LinkError`.

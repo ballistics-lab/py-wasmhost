@@ -384,6 +384,11 @@ def _table_on_its_own(backend: Backend) -> str:
         raise AssertionError("a null entry was called")
     _expect((table.grow(1), len(table)), (2, 3))
     _expect((provider.table.grow(3), len(provider.table)), (2, 5))  # a table the module exports grows too
+    filled = Table("funcref", 2, 4, provider.add, backend=backend)  # every entry starts as `add`, as in JavaScript
+    _expect((filled.get(0) is provider.add, filled.get(1) is provider.add), (True, True))
+    _expect(
+        (filled.grow(1, provider.mul), filled.get(2) is provider.mul, filled.get(0) is provider.add), (2, True, True)
+    )
     try:
         Table("externref", 1, backend=backend)
     except NotImplementedError:

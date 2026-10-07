@@ -153,3 +153,35 @@ def test_a_backend_without_them_says_so(session: str) -> None:
         wasmhost.Memory(1)
     with pytest.raises(NotImplementedError):
         wasmhost.Table("funcref", 1)
+
+
+def test_a_table_starts_with_an_initial_function(tables: wasmhost.Backend) -> None:
+    provider = wasmhost.Instance(wasmhost.Module(wb.tables(imported=False)))
+    add = provider.exports.add
+    table = wasmhost.Table("funcref", 3, 6, add)
+    assert [table.get(i) is add for i in range(3)] == [True, True, True]
+    user = wasmhost.Instance(wasmhost.Module(wb.tables(imported=True)), {"env": {"table": table}})
+    assert user.exports.call(2, 3, 1) == 5  # call_indirect into an entry that was filled at the start
+    mul = provider.exports.mul
+    assert table.grow(2, mul) == 3 and len(table) == 5
+    assert [table.get(i) is mul for i in range(3, 5)] == [True, True]
+    assert table.get(2) is add  # what was there stays
+    assert table.grow(1) == 5 and table.get(5) is None  # no value: empty, as before
+
+
+def test_the_initial_value_of_a_table_is_checked(tables: wasmhost.Backend) -> None:
+    with pytest.raises(TypeError):
+        wasmhost.Table("funcref", 1, None, 5)  # type: ignore[arg-type]
+    table = wasmhost.Table("funcref", 1)
+    with pytest.raises(TypeError):
+        table.grow(1, "f")  # type: ignore[arg-type]
+    assert len(table) == 1  # nothing was grown by the refused call
+
+
+def test_the_javascript_form_of_the_initial_value(tables: wasmhost.Backend) -> None:
+    """`new WebAssembly.Table({element: "anyfunc", initial: 2}, value)`: the value follows the descriptor."""
+    provider = wasmhost.Instance(wasmhost.Module(wb.tables(imported=False)))
+    add = provider.exports.add
+    table = wasmhost.Table({"element": "anyfunc", "initial": 2, "maximum": 3}, add)
+    assert (len(table), table.get(0) is add, table.get(1) is add) == (2, True, True)
+    assert wasmhost.Table(wasmhost.TableType("funcref", 1, None), add).get(0) is add  # a TableType too

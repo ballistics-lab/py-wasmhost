@@ -613,16 +613,21 @@ class Table:
     or, as in JavaScript, `Table({"element": "anyfunc", "initial": 2, "maximum": 4})` (a `TableType` will do too),
     which can be given to instances as an import (and shared by them). `get(i)` is a `Function` (or None for an empty
     entry), the same one every time, as the function it is: the very object the module exports, if it does; `set(i, f)`
-    takes a `Function` or None. Only `"funcref"` tables are supported."""
+    takes a `Function` or None. `Table({"element": "anyfunc", "initial": 2}, f)`, as in JavaScript (or
+    `Table("funcref", 2, None, f)`), starts with every entry `f`, and `grow(n, f)` adds `n` entries of `f`. Only
+    `"funcref"` tables are supported."""
 
     def __init__(
         self,
         element: str | Mapping[str, Any] | TableType = "funcref",
         initial: int = 0,
         maximum: int | None = None,
+        init: Function | None = None,
         *,
         backend: Backend | str | None = None,
     ) -> None:
+        if not isinstance(element, str) and isinstance(initial, Function):
+            init, initial = initial, 0  # as in JavaScript: new WebAssembly.Table(descriptor, value)
         if isinstance(element, Mapping):
             kind = element.get("element", "funcref")
         elif isinstance(element, TableType):
@@ -642,6 +647,8 @@ class Table:
         self._handle = target.new_table(size, limit)
         self._maximum: int | None = limit
         self.name: str | None = None
+        if init is not None:  # `new WebAssembly.Table(descriptor, value)`: every entry starts as this function
+            self._fill(0, size, init)
 
     @classmethod
     def _wrap(cls, backend: Backend, handle: Any, name: str | None = None, type_: TableType | None = None) -> Table:
@@ -668,10 +675,27 @@ class Table:
     def __len__(self) -> int:
         return self._backend.table_length(self._handle)
 
-    def grow(self, delta: int) -> int:
-        """Add `delta` empty entries; the length before."""
+    def _fill(self, start: int, stop: int, value: Function) -> None:
         self._need()
-        return self._backend.table_grow(self._handle, int(delta))
+        given: Any = value
+        if not isinstance(given, Function):
+            raise TypeError("the initial value of a table is a Function or None")
+        if value._backend is not self._backend:
+            raise ValueError("a function of another backend")
+        for i in range(start, stop):
+            self._backend.table_set(self._handle, i, value._h)
+
+    def grow(self, delta: int, init: Function | None = None) -> int:
+        """Add `delta` entries, empty or (as `table.grow(delta, value)` in JavaScript) all `init`; the length before."""
+        self._need()
+        if init is not None:
+            given: Any = init
+            if not isinstance(given, Function):
+                raise TypeError("the value of the new entries is a Function or None")
+        before = self._backend.table_grow(self._handle, int(delta))
+        if init is not None:
+            self._fill(before, before + int(delta), init)
+        return before
 
     def get(self, index: int) -> Function | None:
         self._need()
