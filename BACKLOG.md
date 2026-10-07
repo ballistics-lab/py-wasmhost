@@ -27,29 +27,51 @@ the feature itself:
 - The tests in CI check the library, the self-test checks it on the device: one does not replace the other.
 - A removed feature means a removed step.
 
-## Current state (2026-10-06, branch `examples/zigcc`)
+## Working rules (the owner's conventions; read before starting)
 
-**Done in the branch and verified** (pre-commit is green; the full `pytest` passed on wasmtime, jsc, node, bun, wasm3;
-the self-test has 29 steps on wasmtime/wasm3 and 35 on the JS engines): B-201 (steps 1-4: `Function`, `signature`, `type()`,
-identity, `elem`, the safety net through `call_indirect`), B-204, B-304 (a lock per backend, `await compile/instantiate`,
-threads only with `threaded=True`), B-302a (`wasmhost bench`), B-507 (the `wasmhost` command), B-509 (`wasi_sh.py`,
-`--home`), Bun as a backend in CI, a test for `pyodide.py`. **Verified by the owner on the device (Pythonista, iPhone 16, iOS 26, `jscontext`):**
-self-test 35/35, `await compile/instantiate`, multi-value in a batch, `wasi_sh --home`, `bench`.
+- **The owner opens the PR and names/tidies the branch.** The assistant does not create a PR, rename the branch or squash history. Work goes
+  into the branch the owner names; after a merge, a new change starts from a fresh `main` in a new branch.
+- **Statuses in this file change only on the owner's word.** `[x]`, "DONE" and similar marks are not set on the assistant's own impression
+  (B-302a was once closed wrongly and reopened). A decision of the owner is written with its date.
+- **The API stays as close to the JavaScript WebAssembly API as possible** (JavaScriptCore is the reference engine). The library is an alpha, so
+  breaking old code for a cleaner API is allowed; when a new form is added, the old plain `int`/`float` form keeps working. Over-engineering is
+  rejected (e.g. wrapper value types).
+- **No races, and no threads by default.** One backend takes one call at a time (a reentrant lock per backend). Worker threads only on request
+  (`threaded=True`), because the library must work also where Python threads do not.
+- **Pythonista is the main target:** Python 3.10, the standard library only, `jscontext` (no JIT for wasm). The owner checks on the device; give him a
+  wheel (`uv build --wheel`) and a script, not a request to "try it". Everything platform-specific is checked in CI (Windows, macOS, PyPy too).
+- **A feature comes with tests, a self-test step and the README/BACKLOG** (see the rule at the top). Run `PATH=/usr/local/bin:$PATH uv tool run
+  pre-commit run --all-files` (one run at a time: two in parallel corrupt each other) and look at its result **before** committing; do not chain
+  `&& git commit` after a `| tail`.
+- **Every commit:** `git fetch`, `git pull --ff-only` first (the owner pushes to the same branch), then commit, push, and **look at CI** (Tests and
+  Pre-commit, all platforms) instead of trusting the local run. A red CI is fixed at once, not left.
+- **Tell the owner in Ukrainian in the chat, keep this file in English.** When he is confused, explain "as to a child" before continuing. Say honestly what
+  was not verified (a device, Windows) and what was a guess.
+- **Sub-agents:** a worktree starts from `main`, which has no `BACKLOG.md` and none of this branch; give an agent a copy of the files it needs (or a
+  commit to fast-forward to), and ask it to verify its own work with a script. Check an agent's result yourself before bringing it into the branch.
 
-**Deferred by owner decision:** B-304a (examples on asyncio; the question of the shape of the `pyodide.py` API is not yet settled:
-add `async` methods alongside (the proposal) or convert it fully), WASI in the library itself (phase 5), Deno (B-701b: a bug
-in Deno itself).
+## Current state (2026-10-07, branch `examples/zigcc`)
 
-**Waiting for the owner before the PR:** the branch name and tidying (B-003), the release (B-801); `coreutils.wasm` stays in git (B-004, owner decision),
-`tiny-bclibc-wasm` (B-803). CI on the latest commits (they contain only tests and documentation) is worth a look before the PR.
+**Done in the branch and verified** (pre-commit is green; the full `pytest` passes on wasmtime, jsc, node, bun, wasm3; CI is green on all platforms;
+the self-test has 30 steps on wasmtime/wasm3 and 36 on the JS engines): B-201 (steps 1-4: `Function`, `signature`, `type()`, identity, `elem`, the
+safety net through `call_indirect`), B-202 (the initial value of a table), B-204 (multi-value in a batch), B-301 (`Memory.view`), B-302 (`bench`
+with buffer transfer), B-304 (a lock per backend, `await compile/instantiate`, threads only with `threaded=True`), B-507 (the `wasmhost` command),
+B-509 (`wasi_sh.py`, `--home`), fast buffers (a typed array through the C API on jsc/jscontext, base64 on node/bun), Bun as a backend in CI, tests for
+`pyodide.py` and `wasi_sh.py`. **Verified by the owner on the device (Pythonista, iPhone 16, iOS 26, `jscontext`):** self-test 36/36, buffers intact
+from 1 byte to 8 MiB at 5400/12700 MB/s (1 MiB write/read), `await compile/instantiate`, multi-value in a batch, `wasi_sh --home`, `bench`.
 
-**Not covered by tests:** `examples/wasmclang.py`, `jslinux.py` (unavailable here: `bellard.org` is blocked), `coremark.py`;
-the "Examples" step in CI runs only `basic.py` and `imports.py` (B-006).
+**Deferred by owner decision:** B-304a (examples on asyncio; the shape of the `pyodide.py` API is not settled: add `async` methods alongside (the
+proposal) or convert it fully), WASI in the library itself (phase 5), Deno (B-701b: a bug in Deno itself).
 
-**Next candidates:** B-202/B-203 (the initial value of a table, `externref`), B-302 (`examples/coremark.py`, measuring
-buffers), phase 4 (limits for untrusted code), B-301 (memory without copying). A hypothesis to check (B-302a): in
-`jscontext` on iOS there is **no JIT** (a fact confirmed by the owner; it matches the measurements), so for pure computation `wasm3`
-there would be faster than JavaScriptCore, but `pywasm3` cannot be installed on iOS (a C extension).
+**Waiting for the owner before the PR:** the branch name and tidying (B-003), the release (B-801); `coreutils.wasm` stays in git (B-004, owner
+decision, the history has two copies, about 21 MB: a squash would leave one); `tiny-bclibc-wasm` (B-803).
+
+**Not covered by tests:** `examples/wasmclang.py`, `jslinux.py` (unavailable in the assistant's environment: `bellard.org` is blocked), `coremark.py`;
+the "Examples" step in CI runs only `basic.py` and `imports.py` (B-006). B-302a is only partly done (see its entry).
+
+**Next candidates:** B-203 (`externref`), a binary channel for node/bun (about 50 MB/s through the pipe and JSON now), phase 4 (limits for untrusted
+code). Fact (confirmed by the owner, matches the measurements): `jscontext` on iOS has **no JIT**, so for pure computation `wasm3` would be faster than
+JavaScriptCore there, but `pywasm3` cannot be installed on iOS (a C extension).
 
 ## Order of work
 
