@@ -75,3 +75,21 @@ def test_without_a_view_the_backend_says_so(session: str) -> None:
     inst = wasmhost.Instance(wasmhost.Module(wb.arith()))
     with pytest.raises(NotImplementedError):
         inst.exports.memory.view()
+
+
+def test_large_buffers_go_in_and_out_whole(session: str) -> None:
+    """Whatever way the engine moves bytes (hex, a typed array through the C API, ...), they arrive as they were."""
+    memory = wasmhost.Memory(20) if wasmhost.get_backend().supports("import.memory") else None
+    if memory is None:
+        inst = wasmhost.Instance(wasmhost.Module(wb.arith()))
+        memory = inst.exports.memory
+    data = bytes(range(256)) * min(1000, (len(memory) - 400) // 256)  # every value, more than the C API threshold
+    memory.write(300, data)
+    assert memory.read(300, len(data)) == data
+    assert memory.read(299, 3) == b"\x00\x00\x01"  # the neighbours were not touched
+    for size in (255, 256, 257, 4096):  # round the threshold where the way of moving them changes
+        chunk = bytes((i * 7) % 256 for i in range(size))
+        memory.write(10, chunk)
+        assert memory.read(10, size) == chunk
+    with pytest.raises(IndexError):
+        memory.read(len(memory) - 10, 300)

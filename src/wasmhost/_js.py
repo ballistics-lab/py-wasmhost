@@ -16,6 +16,7 @@ lazily), so it runs on PyPy and on Pythonista's interpreter.
 from __future__ import annotations
 
 import atexit
+import base64
 import importlib
 import json
 import re
@@ -153,6 +154,23 @@ globalThis.__wh = (function () {
             u.set(b, ptr);
             return '';
         },
+        readB64: function (o, ptr, n) {  // only where __Buffer is given (node, bun)
+            return __Buffer.from(objs[o].buffer, ptr, n).toString('base64');
+        },
+        writeB64: function (o, ptr, text) {
+            var b = __Buffer.from(text, 'base64'), u = new Uint8Array(objs[o].buffer);
+            if (ptr < 0 || ptr + b.length > u.length) throw new RangeError('memory access out of bounds');
+            u.set(b, ptr);
+            return '';
+        },
+        writeIn: function (o, ptr, n) {  // bytes that Python left in globalThis.__wasmhost_in, through the C API
+            var b = globalThis.__wasmhost_in, u = new Uint8Array(objs[o].buffer);
+            delete globalThis.__wasmhost_in;
+            if (!b || b.length !== n) throw new Error('the bytes did not arrive whole');
+            if (ptr < 0 || ptr + n > u.length) throw new RangeError('memory access out of bounds');
+            u.set(b, ptr);
+            return '';
+        },
         fromHex: fromHex,
         toHex: toHex,
         tablelen: function (o) { return String(objs[o].length); },
@@ -223,11 +241,15 @@ def _expr(operand: Operand) -> str:
     return f"({_expr(operand[1])}{tag}{_expr(operand[2])})"
 
 
+BIG = 256  # below this many bytes hex is as quick as a typed array through the C API (and needs no extra step)
+
+
 class JSBackend(Backend):
     """A JavaScript engine. Subclasses implement `evaluate`."""
 
     # One store per engine, as in the JavaScript API: whatever is made in it can be imported by any instance.
     features = Backend.features | {"import.global", "import.memory", "import.table", "table.funcs"}
+    _base64 = False  # memory moves as base64 made by a Buffer (node and bun), else as hex or as a typed array (C API)
 
     def __init__(self) -> None:
         self._ready = False
@@ -410,9 +432,29 @@ class JSBackend(Backend):
         return int(self._o("grow", memory, int(pages)))
 
     def memory_read(self, memory: int, offset: int, length: int) -> bytes:
-        return bytes.fromhex(self._o("read", memory, int(offset), int(length))) if length else b""
+        if not length:
+            return b""
+        if self._base64:
+            return base64.b64decode(self._o("readB64", memory, int(offset), int(length)))
+        if self._capi is not None and length >= BIG:  # a typed array through the C API: no text in between
+            try:
+                return self._capi.get_bytes(f"new Uint8Array(__wh.o({memory}).buffer, {int(offset)}, {int(length)})")
+            except Exception:  # noqa: BLE001 -- hex works, and the C API stays for what it is needed for
+                pass
+        return bytes.fromhex(self._o("read", memory, int(offset), int(length)))
 
     def memory_write(self, memory: int, offset: int, data: bytes) -> None:
+        if self._base64:
+            self._o("writeB64", memory, int(offset), json.dumps(base64.b64encode(data).decode()))
+            return
+        if self._capi is not None and len(data) >= BIG:
+            try:
+                self._capi.set_global_bytes("__wasmhost_in", data)
+            except Exception:  # noqa: BLE001
+                pass
+            else:
+                self._o("writeIn", memory, int(offset), len(data))
+                return
         self._o("write", memory, int(offset), json.dumps(data.hex()))
 
     def global_get(self, glob: int, kind: str) -> int | float:
@@ -580,7 +622,8 @@ class GIJavaScriptCoreBackend(JSBackend):
 # with fs.writeSync, so a reply can't be queued behind a wait.
 _NODE_LOOP = r"""
 const fs = require('fs'), vm = require('vm'), { StringDecoder } = require('string_decoder');
-const ctx = vm.createContext({});
+// __Buffer: base64 of memory is far quicker than hex built in JavaScript
+const ctx = vm.createContext({ __Buffer: Buffer });
 const pause = new Int32Array(new SharedArrayBuffer(4));
 const sleep = ms => Atomics.wait(pause, 0, 0, ms);
 
@@ -637,6 +680,7 @@ class NodeBackend(JSBackend):
     """A long-lived `node` process evaluating scripts in a `vm` context (see the protocol above)."""
 
     name = "node"
+    _base64 = True
     program = "node"  # what is looked for on PATH
     features = JSBackend.features | {"imports", "threads"}  # a process: any thread may talk to it, one at a time
 
