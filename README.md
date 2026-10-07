@@ -114,11 +114,9 @@ JavaScriptCore or Node, so without an engine the self-test ends with `no backend
   both 34/34.
 
   ```shell
-  uv tool install wasmhost --prerelease=allow --with wasmtime
+  uv tool install wasmhost --with wasmtime
   wasmhost self test
   ```
-
-  (`--prerelease=allow`: the current version, 0.1.0b2, is a beta.)
 - **The original iSH** (`Linux 4.20.69-ish`, `i686`): the owner ran it with `wasm3` only. It passes 31 of 34
   steps; the three that fail all come from one thing, see "On the original iSH, `wasm3` starts a memory at its maximum" in
   [Backends](#backends).
