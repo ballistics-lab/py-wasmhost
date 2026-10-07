@@ -81,7 +81,7 @@ it works on the device with its hybrid host: clang and lld compiled C and C++ in
 2. The CI of the newest commit, and the macOS/PyPy flake (below): it has now come back three times in the eleven runs 124 to 134 on this branch, so "seen once" is out of date; the owner chose to treat it as a flake, but it may be worth the guesses in its entry.
 3. The first CI run after Python 3.15 is released (the matrix is unpinned).
 4. B-405 when upstream merges pywasm3's two PRs (#13, #14); B-406 is closed (option b: leave it, documented).
-5. Then the owner picks: B-203 (`externref`), a binary channel for node/bun (about 50 MB/s through the pipe and JSON now), B-006 (CI for examples), or the rest of phase 5 (B-503 `openat` sandbox, B-504 preopens and read-only, B-505 tests on all
+5. Then the owner picks: B-203 (`externref`), a binary channel for node/bun (about 50 MB/s through the pipe and JSON now), B-006 (CI for examples), or the rest of phase 5 (B-503 `openat` sandbox, B-505 tests on all
    backends, B-506/B-508 the command line to run a module).
 
 **Deferred by owner decision:** B-303 (until it is really needed), B-304a (examples on asyncio), the rest of phase 5 (it waits for a command), `wasmhost.vfs`, Deno (B-701b: a bug in Deno itself). **Waiting for the owner:** the branch name and
@@ -480,7 +480,7 @@ official `wasi_snapshot_preview1` (branch `wasi-0.1` of WebAssembly/WASI), not t
         one right less, a 32-bit `nlink` in `filestat`, an `identifier` in a clock subscription) live in `UNSTABLE_TABLES`, `UNSTABLE_STRUCTS` and a `legacy` flag of five functions; no `sock_accept`, 45 functions.
       - Tests: `tests/test_wasi_preview1_spec.py` and `tests/test_wasi_preview1_unstable_spec.py` compare names, signatures, tables, record sizes and offsets with copies of the witx files (`tests/data/wasi`, with the specification's
         `LICENSE.md`); `tests/test_wasi_preview1.py` tests each call over a plain bytearray; `tests/test_wasi_preview1_run.py` runs a program of each snapshot on every backend. The self-test has a WASI step (a program of each snapshot).
-      - Not done: a read-only mode (B-504), `openat` (B-503); not run on a device. CI: `Tests` green at `c5aaf86` (all of `wasi_snapshot_preview1`); the run for `9ce13e0`, which added `wasi_unstable`, was still going when this was closed: look at it.
+      - Not done here: `openat` (B-503; the read-only mode is B-504, done); not run on a device. CI: `Tests` green at `c5aaf86` (all of `wasi_snapshot_preview1`); the run for `9ce13e0`, which added `wasi_unstable`, was still going when this was closed: look at it.
 - [x] **B-502** (DONE 2026-10-07, closed on the owner's word, in the scope below) Update all WASI examples and tests to use `wasmhost.wasi1` instead of carrying a copy of `Wasi` in each example. The example-side API should stay thin: `Wasi(args=…, preopens={"/": dir}, stdin=…, stdout=…)` is a convenience wrapper around the common module, not the implementation itself.
       **Done in the scope below 2026-10-07, closed by the owner.** `examples/coreutils.py` uses `wasmhost.wasi.preview1` (its own 430-line `Wasi` class is gone; `wasi_host()` is now 15 lines that give the library a folder as `/` and `.` and turn the
       pipe limit into a `BrokenPipeError` of the stdout sink); `tests/test_coreutils_example.py` passes on wasmtime, wasm3, node and bun, and a run by hand of Lua (`wasi_unstable`), `yes | head` and `cat ../x` gives the same as before.
@@ -490,7 +490,13 @@ official `wasi_snapshot_preview1` (branch `wasi-0.1` of WebAssembly/WASI), not t
       keeps its host (a file system in a Python dict, pipes and `dup` through `env.__host_*`, an in-memory mode), and a pluggable file system (`wasmhost.vfs`, a `MemVfs`) is **deferred**: not planned, no entry yet.
 - [ ] **B-503** A sandbox through `openat` with `dir_fd`, to remove the gap between checking the path and opening
       (right now `_resolve()` in `wasmhost/wasi/preview1.py` checks, then `os.open`; the README says so).
-- [ ] **B-504** Several preopen folders and a "read-only" mode. *(Several preopens are already there: `Wasip1(preopens={name: folder, ...})`, B-501; the read-only mode is not done.)*
+- [x] **B-504** (DONE 2026-10-07, closed on the owner's word to close what is done) Several preopen folders and a "read-only" mode.
+      Several preopens were there from B-501 (`Wasip1(preopens={name: folder, ...})`). **The read-only mode:** `Wasip1(..., readonly=True)` for all of them or `readonly={"name", ...}` for some (a keyword at the end, so no
+      positional call moves; an unknown name is a `ValueError`). It is done with the rights of the specification and not with a check of its own: the rights that change something (`_MUTATING_RIGHTS`: `fd_write`, `fd_datasync`,
+      `fd_allocate`, `fd_filestat_set_*`, `path_create_*`, `path_link_*`, `path_rename_*`, `path_symlink`, `path_remove_directory`, `path_unlink_file`, `path_filestat_set_*`) are taken away from the folder and so from everything opened
+      in it; a call that needs one answers `ENOTCAPABLE`, and a file opened with every right asked for is opened for reading only. Tests in `tests/test_wasi_preview1.py` (the rights, every refused call, a file opened from it,
+      named preopens, both snapshots) and `tests/test_wasi_preview1_run.py` (a program on every backend); the self-test's WASI step runs the program on a read-only folder too. **A bug found on the way and fixed:** a combined right
+      (`fd_pread`, `fd_pwrite`: `fd_read|fd_seek`, `fd_write|fd_seek`) passed the check if *any* of the bits was there; now all are needed, and the type of the descriptor is looked at before the right.
 - [ ] **B-505** Tests on all backends. **Correction (2026-10-07): `wasm3` is confirmed to run Rust/WASI1 programs; the older note that it does not take Rust builds was wrong and unchecked.**
       Checked: a `std` program built with `rustc 1.97.0` for `wasm32-wasip1` (HashMap, `format!`, `u128`, arguments; 2.1 MB, uses `memory.copy` / `memory.fill`) and a `no_std` `wasm32-unknown-unknown` library
       run on `wasm3` with the same output as on `wasmtime`; and `tests/test_coreutils_example.py` (3 tests) passes on `wasm3` with its skip taken off (the skip is now removed). What `wasm3` does not take is

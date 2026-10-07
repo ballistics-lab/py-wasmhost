@@ -871,3 +871,117 @@ def test_the_package_exports_the_module_and_the_class() -> None:
     assert package.Wasip1 is Wasip1
     assert package.preview1.Wasip1 is Wasip1
     assert set(package.__all__) == {"Wasip1", "preview1"}
+
+
+# --- read-only preopens
+
+
+@pytest.fixture
+def ro(root: Path) -> Host:
+    return Host(preopens={"/": root}, readonly=True)
+
+
+def test_a_read_only_preopen_still_reads(ro: Host, root: Path) -> None:
+    (root / "a").write_text("hello")
+    (root / "d").mkdir()
+    code, fd = ro.open("a")  # the program asks for every right: it gets the reading ones
+    assert code == 0 and ro.read_fd(fd, 5) == b"hello"
+    assert ro.stat(fd)[4] == 5
+    entries, _ = listing(ro, 3)
+    assert [name for name, _, _ in entries] == [".", "..", "a", "d"]
+    assert ro.open("d", Oflags.directory)[0] == 0
+    ptr, size = ro.text("a")
+    ro.ok("path_filestat_get", 3, FOLLOW, ptr, size, ro.alloc(64))
+
+
+def test_a_read_only_preopen_has_no_right_that_changes_something(ro: Host) -> None:
+    out = ro.alloc(24)
+    ro.ok("fd_fdstat_get", 3, out)
+    base, inheriting = struct.unpack_from("<QQ", ro.mem.read(out, 24), 8)
+    assert base == inheriting
+    for name in (
+        "fd_read",
+        "fd_seek",
+        "fd_readdir",
+        "path_open",
+        "path_filestat_get",
+        "path_readlink",
+        "fd_filestat_get",
+    ):
+        assert base & getattr(Rights, name), name
+    changing = (
+        "fd_write",
+        "fd_datasync",
+        "fd_allocate",
+        "fd_filestat_set_size",
+        "fd_filestat_set_times",
+        "path_create_directory",
+        "path_create_file",
+        "path_link_source",
+        "path_link_target",
+        "path_rename_source",
+        "path_rename_target",
+        "path_filestat_set_size",
+        "path_filestat_set_times",
+        "path_symlink",
+        "path_remove_directory",
+        "path_unlink_file",
+    )
+    for name in changing:
+        assert not base & getattr(Rights, name), name
+
+
+def test_every_call_that_changes_something_is_refused(ro: Host, root: Path) -> None:
+    (root / "a").write_text("keep")
+    (root / "d").mkdir()
+    refused = Errno.notcapable
+    assert ro.open("new", Oflags.creat)[0] == refused
+    assert ro.open("a", Oflags.trunc)[0] == refused
+    assert ro.path("path_create_directory", "e") == refused
+    assert ro.path("path_remove_directory", "d") == refused
+    assert ro.path("path_unlink_file", "a") == refused
+    old, olen = ro.text("a")
+    new, nlen = ro.text("b")
+    assert ro("path_rename", 3, old, olen, 3, new, nlen) == refused
+    assert ro("path_symlink", old, olen, 3, new, nlen) == refused
+    assert ro("path_link", 3, FOLLOW, old, olen, 3, new, nlen) == refused
+    assert ro("path_filestat_set_times", 3, FOLLOW, old, olen, 1, 2, 1 | 4) == refused
+    assert sorted(p.name for p in root.iterdir()) == ["a", "d"] and (root / "a").read_text() == "keep"
+
+
+def test_a_file_opened_from_a_read_only_preopen_cannot_be_written(ro: Host, root: Path) -> None:
+    (root / "a").write_text("keep")
+    _, fd = ro.open("a")  # every right asked for: the file is opened for reading only
+    buf = ro.put(b"X")
+    iovs, count = ro.iov((buf, 1))
+    assert ro("fd_write", fd, iovs, count, ro.alloc(4)) == Errno.notcapable
+    assert ro("fd_pwrite", fd, iovs, count, 0, ro.alloc(4)) == Errno.notcapable
+    assert ro("fd_filestat_set_size", fd, 0) == Errno.notcapable
+    assert ro("fd_allocate", fd, 0, 10) == Errno.notcapable
+    assert ro("fd_filestat_set_times", fd, 1, 2, 1 | 4) == Errno.notcapable
+    assert ro("fd_fdstat_set_rights", fd, ALL & ((1 << 30) - 1), 0) == Errno.notcapable  # rights are never gained back
+    assert (root / "a").read_text() == "keep"
+
+
+def test_only_the_named_preopens_are_read_only(tmp_path: Path) -> None:
+    (tmp_path / "rw").mkdir()
+    (tmp_path / "ro").mkdir()
+    host = Host(preopens={"/": tmp_path / "rw", "data": tmp_path / "ro"}, readonly={"data"})
+    assert host.open("a", Oflags.creat, dirfd=3)[0] == 0
+    assert host.open("a", Oflags.creat, dirfd=4)[0] == Errno.notcapable
+    assert (tmp_path / "rw" / "a").exists() and not (tmp_path / "ro" / "a").exists()
+
+
+def test_readonly_is_checked_and_defaults_to_nothing(tmp_path: Path) -> None:
+    with pytest.raises(ValueError, match="nope"):
+        Wasip1(preopens={"/": tmp_path}, readonly={"nope"})
+    assert Host(preopens={"/": tmp_path}, readonly="/").open("a", Oflags.creat)[0] == Errno.notcapable  # a bare name
+    assert Host(preopens={"/": tmp_path}, readonly=False).open("a", Oflags.creat)[0] == 0
+    assert Host(preopens={"/": tmp_path}).open("b", Oflags.creat)[0] == 0
+    assert Host(preopens={"/": tmp_path}, readonly=[]).open("c", Oflags.creat)[0] == 0
+
+
+def test_the_first_snapshot_has_read_only_preopens_too(root: Path) -> None:
+    old = Host(preopens={"/": root}, readonly=True, snapshot=preview1.UNSTABLE)
+    assert old.open("a", Oflags.creat)[0] == Errno.notcapable
+    assert old.path("path_create_directory", "d") == Errno.notcapable

@@ -63,6 +63,17 @@ def test_a_program_of_the_first_snapshot(session: str, tmp_path: Path) -> None:
     assert (tmp_path / "note.txt").read_bytes() == TEXT
 
 
+@pytest.mark.parametrize("snapshot", [preview1.SNAPSHOT, preview1.UNSTABLE])
+def test_a_read_only_folder_is_not_written_by_a_program(session: str, tmp_path: Path, snapshot: str) -> None:
+    """The program asks to make `note.txt` and write to it; the calls are refused and it goes on (it ignores errors)."""
+    need_imports()
+    out: list[bytes] = []
+    wasi = preview1.Wasip1(args=["prog"], preopens={"/": tmp_path}, stdout=out.append, readonly=True)
+    assert wasi.run(Module(wb.wasi_hello(snapshot), backend=session)) == 1
+    assert b"".join(out) == TEXT  # standard output is not a folder
+    assert list(tmp_path.iterdir()) == []
+
+
 def test_a_module_that_is_not_a_program(session: str) -> None:
     wasi = preview1.Wasip1()
     with pytest.raises(TypeError, match="_start"):

@@ -31,7 +31,7 @@ import stat
 import struct
 import sys
 import time
-from collections.abc import Callable, Iterable, Mapping, Sequence
+from collections.abc import Callable, Collection, Iterable, Mapping, Sequence
 from typing import Any, Literal, Protocol, TypeVar
 
 from .._api import Instance, Module
@@ -175,6 +175,23 @@ _STDOUT_RIGHTS = (
     Rights.fd_write | Rights.fd_filestat_get | Rights.poll_fd_readwrite | Rights.fd_fdstat_set_flags | Rights.fd_sync
 )
 _WRITE_RIGHTS = Rights.fd_write | Rights.fd_datasync | Rights.fd_allocate | Rights.fd_filestat_set_size
+# Every right that changes something in a folder or in a file: a read-only preopen is one without them, and so is
+# whatever is opened from it (a directory hands down no more than it has).
+_MUTATING_RIGHTS = (
+    _WRITE_RIGHTS
+    | Rights.fd_filestat_set_times
+    | Rights.path_create_directory
+    | Rights.path_create_file
+    | Rights.path_link_source
+    | Rights.path_link_target
+    | Rights.path_rename_source
+    | Rights.path_rename_target
+    | Rights.path_filestat_set_size
+    | Rights.path_filestat_set_times
+    | Rights.path_symlink
+    | Rights.path_remove_directory
+    | Rights.path_unlink_file
+)
 _O_BINARY = getattr(os, "O_BINARY", 0)
 _O_NOFOLLOW = getattr(os, "O_NOFOLLOW", 0)
 
@@ -275,8 +292,10 @@ class Wasip1:
 
     `args` are the program's arguments, the first one its name; `env` the environment; `preopens` maps the name the
     program sees to a directory of the host (`{"/": "some/dir", "data": "/mnt/data"}`), each one preopened as the
-    next file descriptor from 3. `stdin` is bytes or an object with `read(n)` (default: empty); `stdout` and
-    `stderr` are callables that take bytes, or objects with `write(bytes)` (default: the interpreter's text streams).
+    next file descriptor from 3; `readonly` is True for all of them, or the names of the ones that nothing can be
+    written to or changed in (the rights that change something are taken away: a call that does answers
+    `ENOTCAPABLE`). `stdin` is bytes or an object with `read(n)` (default: empty); `stdout` and `stderr` are callables
+    that take bytes, or objects with `write(bytes)` (default: the interpreter's text streams).
     """
 
     def __init__(
@@ -287,6 +306,8 @@ class Wasip1:
         stdin: bytes | bytearray | Any | None = None,
         stdout: Callable[[bytes], object] | Any | None = None,
         stderr: Callable[[bytes], object] | Any | None = None,
+        *,
+        readonly: bool | Collection[str] = False,
     ) -> None:
         self.args = [str(a) for a in args]
         self.env = [f"{k}={v}" for k, v in (env or {}).items()]
@@ -298,11 +319,19 @@ class Wasip1:
             1: _Entry("stdout", _STDOUT_RIGHTS),
             2: _Entry("stderr", _STDOUT_RIGHTS),
         }
+        names: set[str] = set()
+        if isinstance(readonly, str):
+            names = {readonly}
+        elif not isinstance(readonly, bool):
+            names = {str(name) for name in readonly}
+        if unknown := names - set(preopens or {}):
+            raise ValueError(f"readonly: no preopen of that name: {sorted(unknown)}")
         for name, host in (preopens or {}).items():
             real = os.path.realpath(host)
             if not os.path.isdir(real):
                 raise NotADirectoryError(f"preopen {name!r}: {os.fspath(host)!r} is not a directory")
-            entry = _Entry("dir", ALL_RIGHTS, ALL_RIGHTS, host_path=real)
+            allowed = ALL_RIGHTS & ~_MUTATING_RIGHTS if readonly is True or name in names else ALL_RIGHTS
+            entry = _Entry("dir", allowed, allowed, host_path=real)
             entry.preopen = str(name).encode("utf-8")
             self._fds[self._free_fd()] = entry
         self.memory: _Memory | None = None
@@ -439,7 +468,7 @@ class Wasip1:
         entry = self._fds.get(fd)
         if entry is None:
             raise _Fail(Errno.badf)
-        if right and not entry.rights & right:
+        if right and entry.rights & right != right:  # all the rights asked for, not any of them
             raise _Fail(Errno.notcapable)
         return entry
 
@@ -612,9 +641,10 @@ class Wasip1:
 
     @_call(i32, i32, i32, i64, i32)
     def fd_pread(self, fd: int, iovs: int, count: int, offset: int, nread: int) -> None:
-        entry = self._file(fd, Rights.fd_read | Rights.fd_seek)
+        entry = self._file(fd)
         if entry.kind != "file":
-            raise _Fail(Errno.spipe)
+            raise _Fail(Errno.spipe)  # what it is comes before what it may do
+        self._entry(fd, Rights.fd_read | Rights.fd_seek)
         self._put(nread, "<I", self._gather(entry, self._iovs(iovs, count), offset))
 
     def _gather(self, entry: _Entry, iovs: list[tuple[int, int]], offset: int | None) -> int:
@@ -668,9 +698,10 @@ class Wasip1:
 
     @_call(i32, i32, i32, i64, i32)
     def fd_pwrite(self, fd: int, iovs: int, count: int, offset: int, nwritten: int) -> None:
-        entry = self._file(fd, Rights.fd_write | Rights.fd_seek)
+        entry = self._file(fd)
         if entry.kind != "file":
             raise _Fail(Errno.spipe)
+        self._entry(fd, Rights.fd_write | Rights.fd_seek)
         self._put(nwritten, "<I", self._scatter(entry, self._iovs(iovs, count), offset))
 
     def _scatter(self, entry: _Entry, iovs: list[tuple[int, int]], offset: int | None) -> int:

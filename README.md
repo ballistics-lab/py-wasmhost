@@ -414,6 +414,9 @@ code = wasi.run(Module(open("prog.wasm", "rb").read()))  # the exit code: what `
 - **Folders.** `preopens` maps the name the program sees to a folder of the host; several can be given, and a name that leaves its
   folder (`..`, an absolute name, a link that points out) is refused with `ENOTCAPABLE`. The check and the open are two steps, so
   another process changing the folder in between can still get past it.
+- **Read-only.** `readonly=True` makes every preopen read-only, `readonly={"data"}` only the ones of those names. The rights that change
+  something are taken away from the folder (and so from what is opened in it), so a call that would write, make, remove, rename or
+  link answers `ENOTCAPABLE`, and a file opened with every right asked for is opened for reading only.
 - **Streams.** `stdin` is bytes or an object with `read(n)` (default: empty, there is no interactive input); `stdout` and `stderr`
   are callables that take bytes, or objects with `write` (default: the interpreter's own streams).
 - **Running.** `wasi.run(module)` instantiates, starts and closes. To give options to the instance, or to make it yourself, use
@@ -512,7 +515,7 @@ which it is meant to be done.
 - **Newer proposals**: no API for `WebAssembly.Tag` and `WebAssembly.Exception` (the self-test only reports which
   encodings of exceptions an engine takes), SIMD, `memory64`, multi-memory, GC types.
   Whether a module that uses them runs is up to the engine.
-- **WASI** is provided for `wasi_snapshot_preview1` by `wasmhost.wasi.preview1` (see [WASI](#wasi)); not yet: sockets, a read-only mode for a folder, and a safe open through
+- **WASI** is provided for `wasi_snapshot_preview1` by `wasmhost.wasi.preview1` (see [WASI](#wasi)); not yet: sockets, and a safe open through
   `openat` (the check of a name and the open are two steps now). `examples/coreutils.py` uses it and `examples/wasmclang.py` uses it for the calls that are not about files; `wasi_sh.py` keeps a host of its own (a file system that is not a folder, pipes).
 
 ## Test

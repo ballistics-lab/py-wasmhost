@@ -328,7 +328,8 @@ def _host_functions(backend: Backend) -> str:
 def _wasi(backend: Backend) -> str:
     """A WASI command through `wasmhost.wasi.preview1`, once from each snapshot (`wasi_snapshot_preview1` and the first,
     `wasi_unstable`): its arguments, standard output, a file made in a folder of the host, and its exit code, which
-    comes out of the program as an exception of the host function and must cross the engine."""
+    comes out of the program as an exception of the host function and must cross the engine. Then once more with the
+    folder read-only: the file is refused and the folder stays empty."""
     if not backend.supports("imports"):
         try:
             Instance(Module(WASI_HELLO, backend=backend), Wasip1().imports())
@@ -343,7 +344,15 @@ def _wasi(backend: Backend) -> str:
             _expect(b"".join(out), b"hello, wasi\n")
             with open(os.path.join(folder, "note.txt"), "rb") as note:
                 _expect(note.read(), b"hello, wasi\n")
-    return "arguments, stdout, a file in a temporary folder, the exit code; both snapshots"
+    out = []
+    with tempfile.TemporaryDirectory() as folder:  # the same program on a folder that nothing can be written to
+        host = Wasip1(args=["selftest", "x"], preopens={"/": folder}, stdout=out.append, readonly=True)
+        _expect(host.run(Module(WASI_HELLO, backend=backend)), 2)
+        _expect(b"".join(out), b"hello, wasi\n")
+        _expect(os.listdir(folder), [])  # note.txt was refused
+    return (
+        "arguments, stdout, a file in a temporary folder, the exit code; both snapshots; a read-only folder stays empty"
+    )
 
 
 def _imports(calls: list[str]) -> dict[str, dict[str, Any]]:
