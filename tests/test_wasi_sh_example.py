@@ -194,14 +194,14 @@ def test_a_real_directory_is_the_root(session: str, tmp_path: Path) -> None:
 
 def test_a_real_directory_cannot_be_left(session: str, tmp_path: Path) -> None:
     outside = tmp_path / "outside.txt"
-    outside.write_text("secret\n")
+    outside.write_bytes(b"secret\n")
     (tmp_path / "outdir").mkdir()
-    (tmp_path / "outdir" / "inner").write_text("secret\n")
+    (tmp_path / "outdir" / "inner").write_bytes(b"secret\n")
     root = tmp_path / "root"
     root.mkdir()
     os.symlink(outside, root / "link")
     os.symlink(tmp_path / "outdir", root / "dirlink")
-    (root / "inside.txt").write_text("fine\n")
+    (root / "inside.txt").write_bytes(b"fine\n")
     os.symlink("inside.txt", root / "okay")  # a link that stays inside may be followed
     shell = real_shell(root)
     for line in (
@@ -228,7 +228,7 @@ def test_a_real_directory_cannot_be_left(session: str, tmp_path: Path) -> None:
 
 
 def test_a_read_only_root_changes_nothing(session: str, tmp_path: Path) -> None:
-    (tmp_path / "f.txt").write_text("keep\n")
+    (tmp_path / "f.txt").write_bytes(b"keep\n")
     shell = real_shell(tmp_path, readonly=True)
     code, out, err = run(shell, "cat f.txt; echo x > f.txt; echo y > new; rm f.txt; mkdir d; mv f.txt g")
     assert out == "keep\n"
