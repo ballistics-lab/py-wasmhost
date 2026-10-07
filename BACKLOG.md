@@ -66,9 +66,9 @@ iOS 26, `jscontext`): self-test 38/38 (before the fuel step), buffers intact fro
 1. A device re-run of `wasmhost self test` (a fresh wheel: `git fetch --tags`, then `uv build --wheel`; the version comes from git tags): 40/40 expected on `jscontext`, where the
    timeout and fuel steps say "not supported" instead of failing. Add a row to README "Where it has been run" when the owner reports it.
 2. B-405 when upstream merges pywasm3's two PRs (#13, #14); B-406 is closed (option b: leave it, documented).
-3. Then the owner picks: B-203 (`externref`), a binary channel for node/bun (about 50 MB/s through the pipe and JSON now), B-303 (batch `read/write`), B-006 (CI for examples).
+3. Then the owner picks: B-203 (`externref`), a binary channel for node/bun (about 50 MB/s through the pipe and JSON now), B-006 (CI for examples).
 
-**Deferred by owner decision:** B-304a (examples on asyncio), WASI in the library (phase 5), Deno (B-701b: a bug in Deno itself). **Waiting for the owner:** the branch name and tidying
+**Deferred by owner decision:** B-303 (until it is really needed), B-304a (examples on asyncio), WASI in the library (phase 5), Deno (B-701b: a bug in Deno itself). **Waiting for the owner:** the branch name and tidying
 (B-003), the release (B-801), `coreutils.wasm` stays in git (B-004), `tiny-bclibc-wasm` (B-803). **Not covered by tests:** `examples/wasmclang.py`, `jslinux.py` (`bellard.org` is blocked
 in the assistant's environment), `coremark.py`; the "Examples" step in CI runs only `basic.py` and `imports.py` (B-006).
 
@@ -317,7 +317,17 @@ Done when: `instance.exports.table.get(0)(1, 2)` works where the engine allows i
       check them need large downloads (Pyodide, the JSLinux image) and a terminal; breaking working examples
       without a check on the device is risky. A proposal: first `tests` with a minimal run of each (skipped without a
       network), then convert one by one, with the owner checking on Pythonista.
-- [ ] **B-303** Batch `read/write` for many regions in one call (fewer engine↔Python transitions).
+- [ ] **B-303** (assessed 2026-10-07; **deferred by the owner until it is really needed**; status unchanged) Batch `read/write` for many regions in one call (fewer engine↔Python transitions).
+      **Assessment (nothing built):** size **S**, about 3-5 hours. The item as first written is **mostly done already**: `Batch.write(memory, offset, data)` and `Batch.read(memory, offset, length)`
+      (`_api.py`) take an offset and a length that may be `Ref`s, and on a JavaScript engine a whole batch is one trip (`run_batch`), so many regions in one trip works today with `b.write(...)` /
+      `b.read(...)` in a loop. What is missing is only a convenience outside `Batch`: `Memory.read` / `Memory.write` take one region, one trip each. A possible shape: `memory.readv([(offset, length), ...])`
+      -> `list[bytes]` and `memory.writev([(offset, data), ...])`, built from the same `ReadStep` / `WriteStep`, with no new step type and no change in `_native.py` / `_js.py`; about 25 lines in `_api.py`,
+      tests on every backend, and a self-test step (the rule at the top).
+      **Risks:** (1) `Memory` does not know its `Instance` (it can be made on its own), and a `Batch` needs one, so `readv` / `writev` on `Memory` would call `backend.run_batch` directly, or live on `Instance` /
+      `Batch` only: the one real design question. (2) A batch stops at the first failing step: for `writev` that leaves the earlier writes done; either accept and document it, or check every bound first.
+      (3) The gain is small: native backends pay microseconds per trip; it is real on node/bun and a little on jsc; on `jscontext` a call is 36 us, so Pythonista gains little. (4) It adds surface that the JavaScript API
+      does not have, against the rule that the API stays close to it, and a second road to what `Batch` already does. **Suggestion made to the owner:** perhaps close it with the note "`Batch` covers it"; the owner chose to
+      keep it open and wait for a real need.
 - [x] **B-304** (DONE 2026-10-06; owner decision: **threads only on demand, none by default**, because it has to work also where Python threads do not work: `await compile(...)`/`await instantiate(...)` by default run in place with a tick of the loop before and after, and `threaded=True` hands the work to a worker on wasmtime/node/bun (`supports("threads")`); jsc/gi-jsc/jscontext/wasm3 always in place. `Backend._lock`: a reentrant lock on every public method of the backend, separate for each backend instance, so two backends do not wait for each other, and a host function can call the same backend again; `instantiate_sync` is the former synchronous `instantiate`; tests `tests/test_async.py`, `tests/test_threads.py`, a step in the self-test. Not done: examples on asyncio (B-304a); that a host function with `threaded=True` runs in the worker is only described) Asynchronous `compile`/`instantiate`, as in JS, where `WebAssembly.compile/instantiate` return a promise.
       The original proposal (kept for the record): `async def compile(...)` and `async def instantiate(...)` on `asyncio`, while the synchronous
       `Module(...)`/`Instance(...)` stay (these are JS constructors) and also `instantiate_sync` for the current
