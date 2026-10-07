@@ -53,7 +53,7 @@ the feature itself:
 ## Current state (2026-10-07, written as a handoff to the next session)
 
 **Where things are.** Branch `claude/kind-goldberg-3dsi27`, the one to work in (it started from `main` at `599e2e8`: PR #10 "Limits for untrusted code" and the tag `v0.1.0b2`). Never create a PR or rename the branch: the owner does.
-Look at CI of the newest commit first (`git log`). `Tests` at `5e265fb` (run 133, the rename to `wasmhost.wasi.preview1`) was green on every job; at `c06ac9e` (run 132) and `6f782dc` (run 131) it was red only on `macos-latest / pypy3.11`, the known flake below. `Pre-commit` has been green in CI since `d823812` (it was red on every push because `ruff format` kept changing `examples/jitcheck.py`; fixed). Locally `pre-commit` runs pyright, ruff and the whole `pytest` (wasmtime, wasm3, node, bun
+Look at CI of the newest commit first (`git log`). `Tests` at `000d75e` (run 134, after the rename to `wasmhost.wasi.preview1`) was green on every job, and so was `Pre-commit` (run 185); at `c06ac9e` (run 132) and `6f782dc` (run 131) `Tests` was red only on `macos-latest / pypy3.11`, the known flake below. `Pre-commit` has been green in CI since `d823812` (it was red on every push because `ruff format` kept changing `examples/jitcheck.py`; fixed). Locally `pre-commit` runs pyright, ruff and the whole `pytest` (wasmtime, wasm3, node, bun
 here; `jsc`, `gi-jsc` and `jscontext` only in CI); on Python 3.15.0rc3 the whole suite passes too (906 passed, 166 skipped). The self-test has 35 steps on wasmtime and wasm3 and 41 on the JS engines.
 
 **Done in this branch (phases 1 to 5, in part).**
@@ -74,7 +74,7 @@ steps fail; cause unknown, the owner suspects iSH's i386 emulator and will look 
 **To do first, if the owner has not said otherwise:**
 1. A wheel for the device after the rename (`git fetch --tags`, then `uv build --wheel`; the version comes from git tags) and a re-run of `wasmhost self test`: 41/41 expected on `jscontext` (timeout and fuel say "not available"). Add rows to README when
    the owner reports. Check the wheel has `wasmhost/wasi/preview1.py`: `pyproject.toml` lists the packages by hand (`wasmhost`, `wasmhost.wasi`), a new subpackage has to be added there.
-2. The CI of the newest commit, and the macOS/PyPy flake (below): it has now come back three times in the ten runs 124 to 133 on this branch, so "seen once" is out of date; the owner chose to treat it as a flake, but it may be worth the guesses in its entry.
+2. The CI of the newest commit, and the macOS/PyPy flake (below): it has now come back three times in the eleven runs 124 to 134 on this branch, so "seen once" is out of date; the owner chose to treat it as a flake, but it may be worth the guesses in its entry.
 3. The first CI run after Python 3.15 is released (the matrix is unpinned).
 4. B-405 when upstream merges pywasm3's two PRs (#13, #14); B-406 is closed (option b: leave it, documented).
 5. Then the owner picks: B-203 (`externref`), a binary channel for node/bun (about 50 MB/s through the pipe and JSON now), B-006 (CI for examples), or the rest of phase 5 (B-503 `openat` sandbox, B-504 preopens and read-only, B-505 tests on all
@@ -484,8 +484,8 @@ official `wasi_snapshot_preview1` (branch `wasi-0.1` of WebAssembly/WASI), not t
       `std::vector`/`std::map`); the file is 46 lines shorter. **Owner decision 2026-10-07: `wasi.preview1` matches the official specification and nothing else; what is specific to an example stays in the example.** So `examples/wasi_sh.py`
       keeps its host (a file system in a Python dict, pipes and `dup` through `env.__host_*`, an in-memory mode), and a pluggable file system (`wasmhost.vfs`, a `MemVfs`) is **deferred**: not planned, no entry yet.
 - [ ] **B-503** A sandbox through `openat` with `dir_fd`, to remove the gap between checking the path and opening
-      (right now `resolve()` checks, then `os.open`).
-- [ ] **B-504** Several preopen folders and a "read-only" mode.
+      (right now `_resolve()` in `wasmhost/wasi/preview1.py` checks, then `os.open`; the README says so).
+- [ ] **B-504** Several preopen folders and a "read-only" mode. *(Several preopens are already there: `Wasip1(preopens={name: folder, ...})`, B-501; the read-only mode is not done.)*
 - [ ] **B-505** Tests on all backends. **Correction (2026-10-07): `wasm3` is confirmed to run Rust/WASI1 programs; the older note that it does not take Rust builds was wrong and unchecked.**
       Checked: a `std` program built with `rustc 1.97.0` for `wasm32-wasip1` (HashMap, `format!`, `u128`, arguments; 2.1 MB, uses `memory.copy` / `memory.fill`) and a `no_std` `wasm32-unknown-unknown` library
       run on `wasm3` with the same output as on `wasmtime`; and `tests/test_coreutils_example.py` (3 tests) passes on `wasm3` with its skip taken off (the skip is now removed). What `wasm3` does not take is
@@ -498,7 +498,7 @@ official `wasi_snapshot_preview1` (branch `wasi-0.1` of WebAssembly/WASI), not t
       `wasmhost [ОПЦІЇ ХОСТА] myapp.wasm [-- АРГУМЕНТИ ПРОГРАМИ]`: the options before the module belong to the host (`--backend`,
       `--dir ХОСТ::ГІСТЬ`, `--env K=V`), everything after the module (and after `--`) goes unparsed to the program through
       `args_get`. The command names (`self`/`test`) are checked first, everything else is treated as a module file; a file with
-      the name of a command is run as `./self`. The subcommand `self test` is the canonical form. Depends on B-502.
+      the name of a command is run as `./self`. The subcommand `self test` is the canonical form. Depends on B-502 (done: `wasmhost.wasi.preview1.Wasip1`).
 - [x] **B-507** (DONE: `[project.scripts]`, `tests/test_cli_entry.py`; we will extend it when running a module appears, B-506) The entry point `wasmhost`: `[project.scripts] wasmhost = "wasmhost._cli:main"` in `pyproject.toml`, so that one can
       write `wasmhost myapp.wasm` and `wasmhost self test`, and not `python -m wasmhost`. Right now there is no such command.
       Check `uv lock --check` and the wheels.
@@ -613,9 +613,9 @@ shared memory, memory64 (and GC), each with `supports(...)`.
     and 2 whole-suite runs under `--wasm-backend wasmtime` all passed. That says only that it does not show there; macOS, arm64
     and PyPy 3.11 were not tried.
   - If it comes back: re-run the job once; a second failure is a real one. Then try the guesses above on a macOS runner.
-  - **It came back (2026-10-07, branch `claude/kind-goldberg-3dsi27`): three times in the ten runs 124 to 133.** Run 124 (`b774846`): the steps `wasmtime` and `jsc` failed; the segfault shown is in the `jsc` step, in `tests/test_coreutils_example.py::
+  - **It came back (2026-10-07, branch `claude/kind-goldberg-3dsi27`): three times in the eleven runs 124 to 134.** Run 124 (`b774846`): the steps `wasmtime` and `jsc` failed; the segfault shown is in the `jsc` step, in `tests/test_coreutils_example.py::
     test_lua_runs_as_a_program_of_the_shell[jsc]`, in the ctypes call `JSValueToStringCopy` (`_capi.py`, `_text`, called from `evaluate`, here from a host function: `fd_write`). Run 131 (`6f782dc`) and run 132 (`c06ac9e`): the same job
-    failed; for 132 the failing step is `pytest --wasm-backend wasmtime` (what the log's tail shows is the last step, which passed with 419 passed). The same job was green in the other runs (125, 127, 130 and 133 among them). None of the three commits touched the code on that
+    failed; for 132 the failing step is `pytest --wasm-backend wasmtime` (what the log's tail shows is the last step, which passed with 419 passed). The same job was green in the other runs (125, 127, 130, 133 and 134 among them). None of the three commits touched the code on that
     path. So "seen once" is out of date. The step output of the failed `wasmtime` step was not read (the tool gives only the tail of a log): reading it is the first thing to do.
 
 ## General definition of done
