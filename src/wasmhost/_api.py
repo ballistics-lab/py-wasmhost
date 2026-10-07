@@ -44,7 +44,7 @@ from ._binary import (
     limit_memory,
     parse,
 )
-from ._errors import CompileError, LinkError, Trap, WasmError
+from ._errors import CompileError, LinkError, Timeout, Trap, WasmError
 from ._registry import BACKENDS, default_backend
 from ._trampoline import call_checked
 
@@ -60,6 +60,7 @@ __all__ = (
     "Module",
     "Ref",
     "Table",
+    "Timeout",
     "Trap",
     "WasmError",
     "close",
@@ -816,21 +817,24 @@ class Module:
             raise CompileError(str(exc)) from None
         self._backend = _backend(backend)
         self._handle = self._backend.compile(data)
-        self._wasm = data  # for `Instance(max_memory=...)`, which compiles a copy with the memory held to a ceiling
-        self._limited: dict[int, tuple[Any, ModuleInfo]] = {}  # ceiling in pages -> (compiled copy, its description)
+        self._wasm = data  # for `Instance(max_memory=...)` and `timeout=`, which compile a copy of their own
+        self._variants: dict[tuple[int | None, bool], tuple[Any, ModuleInfo]] = {}  # (ceiling, timed) -> (copy, info)
 
-    def _held_to(self, pages: int) -> tuple[Any, ModuleInfo]:
-        """The module as it is with every memory it defines held to `pages` (see `limit_memory`): compiled once per
-        ceiling and kept, so the next instance with the same ceiling costs no compile. A module that defines no memory
-        of its own (or one already within the ceiling) is the module itself."""
-        found = self._limited.get(pages)
+    def _variant(self, pages: int | None, timed: bool) -> tuple[Any, ModuleInfo]:
+        """The module as an instance with `max_memory=pages` and/or a `timeout` needs it: every memory it defines held
+        to `pages` (see `limit_memory`), and compiled for stopping where the backend needs that. Compiled once per
+        combination and kept, so the next instance costs no compile; one that needs no change is the module itself."""
+        key = (pages, timed)
+        found = self._variants.get(key)
         if found is None:
-            limited = limit_memory(self._wasm, pages)  # a ValueError: a memory that starts over the ceiling
-            if limited == self._wasm:
-                found = (self._handle, self._info)
-            else:
-                found = (self._backend.compile(limited), parse(limited))  # so that type() says the maximum that holds
-            self._limited[pages] = found
+            data, handle, info = self._wasm, self._handle, self._info
+            if pages is not None:
+                data = limit_memory(self._wasm, pages)  # a ValueError: a memory that starts over the ceiling
+                if data != self._wasm:
+                    handle, info = self._backend.compile(data), parse(data)  # type() then says the maximum that holds
+            if timed and (compiled := self._backend.compile_timed(data)) is not None:
+                handle = compiled
+            found = self._variants[key] = (handle, info)
         return found
 
     @staticmethod
@@ -919,7 +923,17 @@ class Instance:
     above it is a ValueError. It works by writing the maximum into the module, so it is the same on every engine; the
     module with a given ceiling is compiled once and kept, so only the first instance with it pays for a compile. A
     memory the module imports is the host's: its own maximum is the ceiling there, and one with no maximum, or a
-    larger one, is a LinkError."""
+    larger one, is a LinkError.
+
+    `timeout=seconds` (not in the JavaScript API; `backend.supports("timeout")`: wasmtime and Node, a
+    NotImplementedError elsewhere) stops any call into the instance that runs longer, with a `Timeout` (a `Trap`): an
+    infinite loop in untrusted code ends, and the instance can be called again. The time is the wall clock, host
+    functions included; it is per call, and a batch is one call; the start function is under it too. On wasmtime the
+    instance is made for an engine that counts epochs (a tight loop runs about three times slower there) and lives in
+    a store of its own, like an isolated one, so it can't share a Memory, Table or Global made outside it. On Node a
+    function or table of the instance is timed, but a `Timeout` in a batch drops the results of the steps before it.
+    The JavaScriptCore engines and Bun can't stop a wasm loop (a script's time limit does not reach it), and wasm3
+    has no way to either."""
 
     def __init__(
         self,
@@ -928,12 +942,20 @@ class Instance:
         *,
         isolated: bool = False,
         max_memory: int | None = None,
+        timeout: float | None = None,
     ) -> None:
         given = cast("object", max_memory)  # a caller without type checks may pass anything
         if given is not None and (isinstance(given, bool) or not isinstance(given, int) or given < 0):
             raise TypeError("max_memory is a number of 64 KiB pages, an int that is not negative")
+        seconds = cast("object", timeout)
+        if seconds is not None and (
+            isinstance(seconds, bool) or not isinstance(seconds, (int, float)) or not 0 < seconds < float("inf")
+        ):
+            raise TypeError("timeout is a number of seconds, more than 0")
         hosts = _resolve_imports(module, imports, max_memory)
         backend = module._backend
+        if timeout is not None and not backend.supports("timeout"):
+            raise NotImplementedError(f"the {backend.name} backend can't stop a call that runs too long")
         if any(isinstance(h, HostFunction) for h in hosts) and not backend.supports("imports"):
             raise NotImplementedError(f"the {backend.name} backend can't take imports (host functions)")
         for h in hosts:
@@ -944,9 +966,9 @@ class Instance:
         self._backend = backend
         _release_views(backend)  # a start function may run
         handle, info = module._handle, module._info
-        if max_memory is not None:
-            handle, info = module._held_to(max_memory)
-        self._handle = backend.instantiate(handle, hosts, isolated=isolated)
+        if max_memory is not None or timeout is not None:
+            handle, info = module._variant(max_memory, timeout is not None)
+        self._handle = backend.instantiate(handle, hosts, isolated=isolated, timeout=timeout)
         items: dict[str, Export | _LazyFunction] = {}
         for e in info.exports:
             if e.kind == "function" and isinstance(e.type, FuncType):
@@ -1020,6 +1042,7 @@ def instantiate_sync(
     *,
     backend: Backend | str | None = None,
     max_memory: int | None = None,
+    timeout: float | None = None,
 ) -> Instance: ...
 @overload
 def instantiate_sync(
@@ -1028,6 +1051,7 @@ def instantiate_sync(
     *,
     backend: Backend | str | None = None,
     max_memory: int | None = None,
+    timeout: float | None = None,
 ) -> Instantiated: ...
 def instantiate_sync(
     wasm: bytes | bytearray | memoryview | Module,
@@ -1035,13 +1059,14 @@ def instantiate_sync(
     *,
     backend: Backend | str | None = None,
     max_memory: int | None = None,
+    timeout: float | None = None,
 ) -> Instantiated | Instance:
     """`WebAssembly.instantiate` without the promise: from bytes, a `Module` and an `Instance` (an `Instantiated`);
-    from a `Module`, just the `Instance`. `max_memory` is the one of `Instance`."""
+    from a `Module`, just the `Instance`. `max_memory` and `timeout` are the ones of `Instance`."""
     if isinstance(wasm, Module):
-        return Instance(wasm, imports, max_memory=max_memory)
+        return Instance(wasm, imports, max_memory=max_memory, timeout=timeout)
     module = Module(wasm, backend=backend)
-    return Instantiated(module, Instance(module, imports, max_memory=max_memory))
+    return Instantiated(module, Instance(module, imports, max_memory=max_memory, timeout=timeout))
 
 
 async def _offload(backend: Backend | str | None, work: Callable[[Backend], Any], threaded: bool) -> Any:
@@ -1076,6 +1101,7 @@ async def instantiate(
     backend: Backend | str | None = None,
     threaded: bool = False,
     max_memory: int | None = None,
+    timeout: float | None = None,
 ) -> Instance: ...
 @overload
 async def instantiate(
@@ -1085,6 +1111,7 @@ async def instantiate(
     backend: Backend | str | None = None,
     threaded: bool = False,
     max_memory: int | None = None,
+    timeout: float | None = None,
 ) -> Instantiated: ...
 async def instantiate(
     wasm: bytes | bytearray | memoryview | Module,
@@ -1093,6 +1120,7 @@ async def instantiate(
     backend: Backend | str | None = None,
     threaded: bool = False,
     max_memory: int | None = None,
+    timeout: float | None = None,
 ) -> Instantiated | Instance:
     """`WebAssembly.instantiate(bytes | module, imports)`, awaited: from bytes an `Instantiated` (`module`,
     `instance`), from a `Module` just the `Instance`.
@@ -1104,7 +1132,9 @@ async def instantiate(
     return cast(
         "Instantiated | Instance",
         await _offload(
-            backend, lambda chosen: instantiate_sync(wasm, imports, backend=chosen, max_memory=max_memory), threaded
+            backend,
+            lambda chosen: instantiate_sync(wasm, imports, backend=chosen, max_memory=max_memory, timeout=timeout),
+            threaded,
         ),
     )
 

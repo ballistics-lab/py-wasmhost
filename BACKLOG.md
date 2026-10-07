@@ -356,15 +356,30 @@ Done when: transferring a buffer of megabytes is not copied on wasmtime and wasm
       imports, max_memory=pages)`, also in `instantiate` and `instantiate_sync` (the owner chose `Instance`, not `Module`, and asked for a
       cache). `_binary.limit_memory` writes the ceiling into the memory section (no maximum gets it, a larger one is lowered, a smaller one stays;
       a module that starts above it is a `ValueError`; a custom page size is refused), so it is the same on every engine, `wasm3` included.
-      `Module` keeps its bytes and `Module._held_to(pages)` compiles the changed copy once per ceiling (a module that needs no change is the module
+      `Module` keeps its bytes and `Module._variant(pages, timed)` (it was `_held_to`) compiles the changed copy once per ceiling (a module that needs no change is the module
       itself, nothing is compiled); `type()` of an exported memory says the maximum that holds. A memory the module imports is checked against the
       ceiling: no maximum, or a larger one, is a `LinkError`. Tests: `tests/test_max_memory.py`.
       Limits of this: only memories; no time or fuel (B-402); a bigger-than-needed ceiling costs nothing, but a module compiled with a custom page
       size is not supported. **Verified by the owner on the device (Pythonista, iPhone 16, iOS 26, `jscontext`, 2026-10-07): self-test 38/38**, both steps
       run (not "not available"), a call 36 us, a batch of 3 83 us. CI was green on all platforms (run 37616628414).
-- [ ] **B-402** A timeout or execution fuel: `fuel`/`epoch` on wasmtime, a `gas` analogue on wasm3, interruption on Node
-      (a separate process). `supports("timeout")` will be `False` on JSC: it is honest to write this in the README.
-- [ ] **B-403** Tests "a module with an infinite loop" on every backend that can do this.
+- [ ] **B-402** (IMPLEMENTED 2026-10-07 on the owner's word to start, waiting for the owner's word to close; self-test step "timeout: Instance(timeout=) stops an endless loop, where the engine can", `tests/test_timeout.py`)
+      A timeout: `Instance(module, imports, timeout=seconds)`, also `instantiate` and `instantiate_sync`; a call that runs longer ends with `wasmhost.Timeout`
+      (a `Trap`), and the instance can be called again. Wall-clock time, per call (a batch is one call), the start function included.
+      Measured before building (2026-10-07, Linux): **wasmtime** epochs stop a loop (0.30 s for 0.3 s asked) but a tight loop runs about 3 times slower (0.032 -> 0.105 s for
+      1e8 iterations), so the epoch engine is a second `Engine`, made only for instances that ask (`Backend.compile_timed`, `Module._variant`: the module is
+      compiled for it once and kept), and such an instance lives in a store of its own (it can't share a `Memory`, `Table` or `Global` made outside it); a daemon watchdog thread
+      (`_Watchdog`) per backend, made when first needed, calls `increment_epoch`. **node**: `vm.runInContext(src, ctx, {timeout})` stops a wasm loop (0.33 s),
+      the context is fine afterwards; the timeout goes with the request, and is kept for an instance, its exported functions and tables (and what is taken from them),
+      so a function that is not one of those is not timed; a `Timeout` in a batch drops the results of the steps before it (the termination can't be caught in the script).
+      **Not possible, and `supports("timeout")` is false:** **bun** (its `vm` timeout does not stop a wasm loop: the process hangs, had to be killed); **JavaScriptCore**
+      (`jscontext`, `jsc`, `gi-jsc`: `JSContextGroupSetExecutionTimeLimit` is exported and stops a JavaScript loop in 0.30 s, but a wasm loop runs on: probed with
+      `libjavascriptcoregtk` 2.52.6 on Linux; not probed on a device, but the owner's view that JSC has no interruption holds), so **on iOS there is no time limit**; **wasm3** (no gas or
+      interruption in pywasm3). A backend without it raises `NotImplementedError` from `Instance(timeout=)`, and the self-test step does not run the loop there.
+      Open: no fuel (a count of instructions, deterministic, no thread: wasmtime has `consume_fuel`, same cost issue as epochs); not verified on macOS/Windows or a device (CI will say).
+      Found on the way: a trap in the start function leaked out of wasmtime as its own `Trap` (fixed: `Trap` is not a `WasmtimeError`); `wasm3` does not run the start function when the
+      instance is made, but at the first call.
+- [ ] **B-403** (IMPLEMENTED 2026-10-07, same state: `tests/test_timeout.py`, 36 tests) Tests "a module with an infinite loop" on every backend that can do this:
+      `wasmtime` and `node` stop it; the others are skipped with the reason, and `test_a_backend_that_cannot_says_so` checks that they refuse honestly.
 
 Risks: JSC has no interruption, so on iOS this is not guaranteed; a separate note is needed about what the sandbox does not
 promise.

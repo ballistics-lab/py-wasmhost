@@ -25,7 +25,7 @@ from ._api import compile as compile_async
 from ._api import instantiate as instantiate_async
 from ._backend import Backend
 from ._binary import FuncType, GlobalType, MemoryType, TableType, i32, i64
-from ._errors import CompileError, LinkError, Trap
+from ._errors import CompileError, LinkError, Timeout, Trap
 from ._js import JSBackend
 from ._registry import AUTO_ORDER, BACKENDS
 
@@ -93,6 +93,12 @@ GROWS_MEMORY = bytes.fromhex(
 OWNS_MEMORY = bytes.fromhex(
     "0061736d01000000010a0260017f017f6000017f030302000105030100010718030467726f7700000473697a650001066d"
     "656d6f727902000a0d020600200040000b04003f000b"
+)
+
+# A module with spin() that loops forever, quick() -> i32 that returns 7, and busy(n) -> i32 that counts to n.
+SPINNER = bytes.fromhex(
+    "0061736d01000000010d036000006000017f60017f017f030403000102071703047370696e000005717569636b00010462"
+    "75737900020a2603070003400c000b0b040041070b1701017f0340200141016a210120012000490d000b20010b"
 )
 
 # A module with a table of two funcref entries that it exports as "table", and add(a, b), mul(a, b) and
@@ -227,6 +233,7 @@ def _selftest_backend(backend: Backend, out: Callable[[str], object]) -> _Report
     step("memory: made on its own, imported, shared", lambda: _memory_on_its_own(backend))
     step("memory: the maximum of an imported memory stops the module's grow", lambda: _memory_ceiling(backend))
     step("memory: Instance(max_memory=) is a ceiling for a memory the module makes", lambda: _max_memory(backend))
+    step("timeout: Instance(timeout=) stops an endless loop, where the engine can", lambda: _timeout(backend))
     step("table: made on its own, imported, shared", lambda: _table_on_its_own(backend))
     step("functions: one object per function, signature, a table entry", lambda: _functions(backend))
     step("async compile and instantiate, tasks at once", lambda: _async(backend))
@@ -404,6 +411,26 @@ def _max_memory(backend: Backend) -> str:
     else:
         raise AssertionError("a module that starts over the ceiling was taken")
     return "grow past max_memory answers -1; type() says the maximum that holds; the module is unchanged"
+
+
+def _timeout(backend: Backend) -> str:
+    module = Module(SPINNER, backend=backend)
+    if not backend.supports("timeout"):  # never run the loop here: nothing would stop it
+        try:
+            Instance(module, timeout=1)
+        except NotImplementedError:
+            return "not available on this backend, as documented"
+        raise AssertionError("an instance with a timeout was made where nothing can stop a call")
+    ex = Instance(module, timeout=0.2).exports
+    _expect(ex.quick(), 7)
+    try:
+        ex.spin()
+    except Timeout:
+        pass
+    else:
+        raise AssertionError("an endless loop came back")
+    _expect((ex.quick(), ex.busy(1000)), (7, 1000))  # the instance is fine, and callable again
+    return "an endless loop ended with a Timeout; the instance is fine"
 
 
 def _table_on_its_own(backend: Backend) -> str:

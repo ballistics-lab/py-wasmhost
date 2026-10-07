@@ -9,13 +9,24 @@ Both are optional: constructing a backend imports its package, so "available" me
 
 from __future__ import annotations
 
+import contextlib
 import importlib
-from collections.abc import Callable, Sequence
+import threading
+import time
+import weakref
+from collections.abc import Callable, Generator, Sequence
 from typing import Any, NamedTuple, cast
 
-from ._backend import Backend, HostFunction, HostObject, check_results
+from ._backend import (
+    Backend,
+    BatchResult,
+    HostFunction,
+    HostObject,
+    Step,
+    check_results,
+)
 from ._binary import FuncType, f32, f64, i32, i64
-from ._errors import CompileError, LinkError, Trap
+from ._errors import CompileError, LinkError, Timeout, Trap
 
 __all__ = ("Wasm3Backend", "WasmtimeBackend")
 
@@ -102,7 +113,12 @@ class Wasm3Backend(Backend):
         return data  # a wasm3 module belongs to one runtime, so each instance parses it again
 
     def instantiate(
-        self, module: bytes, imports: Sequence[HostFunction | HostObject] = (), *, isolated: bool = False
+        self,
+        module: bytes,
+        imports: Sequence[HostFunction | HostObject] = (),
+        *,
+        isolated: bool = False,
+        timeout: float | None = None,
     ) -> _Wasm3Instance:
         # `isolated` is what a wasm3 instance is anyway: it has its own runtime and shares nothing.
         runtime = self._env.new_runtime(self._stack)
@@ -192,6 +208,52 @@ class _WasmtimeInstance:
         self.exports = exports
 
 
+class _Watchdog:
+    """One daemon thread that, when a deadline passes, ends the epoch of an engine, which makes the running wasm trap
+    (`TrapCode.INTERRUPT`) at its next check. A thread is only made when an instance asks for a `timeout`."""
+
+    def __init__(self, engine: Any) -> None:
+        self._engine = engine
+        self._cond = threading.Condition()
+        self._deadline: float | None = None
+        self._token = 0
+        self._stopped = False
+        self._thread: threading.Thread | None = None
+
+    def _run(self) -> None:
+        with self._cond:
+            while not self._stopped:
+                if self._deadline is None:
+                    self._cond.wait()
+                    continue
+                left = self._deadline - time.monotonic()
+                if left > 0:
+                    self._cond.wait(left)
+                    continue
+                self._deadline = None
+                self._engine.increment_epoch()  # under the lock: a `disarm` after this knows it has happened
+
+    def arm(self, seconds: float) -> int:
+        with self._cond:
+            if self._thread is None:
+                self._thread = threading.Thread(target=self._run, name="wasmhost-watchdog", daemon=True)
+                self._thread.start()
+            self._token += 1
+            self._deadline = time.monotonic() + seconds
+            self._cond.notify()
+            return self._token
+
+    def disarm(self, token: int) -> None:
+        with self._cond:
+            if self._token == token:
+                self._deadline = None
+
+    def stop(self) -> None:
+        with self._cond:
+            self._stopped = True
+            self._cond.notify()
+
+
 class WasmtimeBackend(Backend):
     """The `wasmtime` package."""
 
@@ -209,6 +271,7 @@ class WasmtimeBackend(Backend):
             "import.memory",
             "import.table",
             "isolated",
+            "timeout",  # a second engine that counts epochs, for the instances that ask (it costs speed)
         }
     )
 
@@ -216,6 +279,47 @@ class WasmtimeBackend(Backend):
         self._wt: Any = importlib.import_module("wasmtime")  # ImportError here means "backend not available"
         self._engine: Any = self._wt.Engine()
         self._store: Any = None
+        self._timed_engine: Any = None
+        self._watchdog: _Watchdog | None = None
+        self._timeouts: weakref.WeakKeyDictionary[Any, float] = weakref.WeakKeyDictionary()  # store -> seconds
+        self._armed = 0  # how deep in calls that a deadline is set for (a host function may call the module again)
+
+    def close(self) -> None:
+        if self._watchdog is not None:
+            self._watchdog.stop()
+
+    def _timed(self) -> tuple[Any, _Watchdog]:
+        """The engine for instances with a `timeout` (epochs are counted in the code it makes: a tight loop runs about
+        three times slower, so the ordinary engine doesn't), and its watchdog; made when first needed."""
+        if self._timed_engine is None:
+            config = self._wt.Config()
+            config.epoch_interruption = True
+            self._timed_engine = self._wt.Engine(config)
+            self._watchdog = _Watchdog(self._timed_engine)
+        return self._timed_engine, cast("_Watchdog", self._watchdog)
+
+    @contextlib.contextmanager
+    def _guard(self, store: Any) -> Generator[None]:
+        """Around anything that runs wasm in `store`: if its instance has a `timeout`, a deadline for it (the outermost
+        call sets it; a call from a host function inside is under the same one)."""
+        seconds = self._timeouts.get(store)
+        if seconds is None or self._armed:
+            yield
+            return
+        _, watchdog = self._timed()
+        self._armed += 1
+        store.set_epoch_deadline(1)  # one tick from now: the watchdog's `increment_epoch` is that tick
+        token = watchdog.arm(seconds)
+        try:
+            yield
+        finally:
+            watchdog.disarm(token)
+            self._armed -= 1
+
+    def _trap(self, exc: Any, store: Any) -> Trap:
+        if getattr(exc, "trap_code", None) == self._wt.TrapCode.INTERRUPT and store in self._timeouts:
+            return Timeout(f"the call ran longer than {self._timeouts[store]:g} s")
+        return Trap(str(exc))
 
     def validate(self, data: bytes) -> bool:
         try:
@@ -230,6 +334,12 @@ class WasmtimeBackend(Backend):
         except self._wt.WasmtimeError as exc:
             raise CompileError(str(exc)) from None
 
+    def compile_timed(self, data: bytes) -> Any:
+        try:
+            return self._wt.Module(self._timed()[0], data)
+        except self._wt.WasmtimeError as exc:
+            raise CompileError(str(exc)) from None
+
     @property
     def store(self) -> Any:
         """The one store everything shares (as in the JavaScript API), made when first needed."""
@@ -238,22 +348,34 @@ class WasmtimeBackend(Backend):
         return self._store
 
     def instantiate(
-        self, module: Any, imports: Sequence[HostFunction | HostObject] = (), *, isolated: bool = False
+        self,
+        module: Any,
+        imports: Sequence[HostFunction | HostObject] = (),
+        *,
+        isolated: bool = False,
+        timeout: float | None = None,
     ) -> _WasmtimeInstance:
-        store = self._wt.Store(self._engine) if isolated else self.store
+        if timeout is not None:  # a store of its own, on the engine that counts epochs (its module is of that engine)
+            store = self._wt.Store(self._timed()[0])
+            self._timeouts[store] = timeout
+        else:
+            store = self._wt.Store(self._engine) if isolated else self.store
         externs: list[Any] = []
         for host in imports:
             if isinstance(host, HostObject):
                 if host.handle.store is not store:
                     raise ValueError(
-                        f"{host.module}.{host.name} belongs to another store: an isolated instance can't share "
-                        "objects, and nothing can be shared with one"
+                        f"{host.module}.{host.name} belongs to another store: an isolated or timed instance can't "
+                        "share objects, and nothing can be shared with one"
                     )
                 externs.append(host.handle.obj)
             else:
                 externs.append(self._host_func(store, host))
         try:
-            instance = self._wt.Instance(store, module, externs)
+            with self._guard(store):  # a start function runs now
+                instance = self._wt.Instance(store, module, externs)
+        except self._wt.Trap as exc:  # the start function trapped (or ran out of time)
+            raise self._trap(exc, store) from None
         except self._wt.WasmtimeError as exc:  # the imports don't fit the module
             raise LinkError(str(exc)) from None
         return _WasmtimeInstance(store, instance.exports(store))
@@ -284,9 +406,10 @@ class WasmtimeBackend(Backend):
 
     def call_ref(self, func: _WasmtimeObject, args: Sequence[int | float], ftype: FuncType) -> list[int | float]:
         try:
-            result = func.obj(func.store, *args)
+            with self._guard(func.store):
+                result = func.obj(func.store, *args)
         except self._wt.Trap as exc:
-            raise Trap(str(exc)) from None
+            raise self._trap(exc, func.store) from None
         if result is None:
             return []
         return list(cast("Sequence[int | float]", result)) if isinstance(result, list) else [result]
@@ -341,12 +464,17 @@ class WasmtimeBackend(Backend):
         self, instance: _WasmtimeInstance, name: str, args: Sequence[int | float], ftype: FuncType
     ) -> list[int | float]:
         try:
-            result = instance.exports[name](instance.store, *args)
+            with self._guard(instance.store):
+                result = instance.exports[name](instance.store, *args)
         except self._wt.Trap as exc:
-            raise Trap(str(exc)) from None
+            raise self._trap(exc, instance.store) from None
         if result is None:
             return []
         return list(cast("Sequence[int | float]", result)) if isinstance(result, list) else [result]
+
+    def run_batch(self, instance: _WasmtimeInstance, steps: Sequence[Step]) -> BatchResult:
+        with self._guard(instance.store):  # the whole batch is one call to the timeout
+            return super().run_batch(instance, steps)
 
     def export_memory(self, instance: _WasmtimeInstance, name: str) -> _WasmtimeObject:
         return _WasmtimeObject(instance.store, instance.exports[name])

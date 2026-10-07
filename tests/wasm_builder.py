@@ -53,6 +53,7 @@ def module(
     globals_: list[bytes] | None = None,
     imports: list[bytes] | None = None,
     memory_limits: bytes | None = None,
+    start: int | None = None,
 ) -> bytes:
     out = b"\0asm\x01\x00\x00\x00" + section(1, vec(types))
     if imports:
@@ -65,6 +66,8 @@ def module(
     if globals_:
         out += section(6, vec(globals_))
     out += section(7, vec([name(n) + bytes([kind]) + uleb(i) for n, kind, i in exports]))
+    if start is not None:
+        out += section(8, uleb(start))  # the function that runs when the instance is made
     out += section(10, vec([body(f[1], f[2]) if len(f) == 3 else body(f[1]) for f in funcs]))
     return out
 
@@ -199,6 +202,20 @@ def spinner() -> bytes:
         ),
     ]
     return module(types, funcs, [("spin", 0, 0), ("quick", 0, 1), ("busy", 0, 2)])
+
+
+def spins_at_start() -> bytes:
+    """A module whose start function loops forever, so making an instance never ends; it exports quick() -> i32."""
+    types = [functype([], []), functype([], [I32])]
+    funcs: list[Func] = [(0, b"\x03\x40\x0c\x00\x0b"), (1, b"\x41\x07")]  # spin: loop; br 0; end / quick: 7
+    return module(types, funcs, [("quick", 0, 1)], start=0)
+
+
+def traps_at_start() -> bytes:
+    """A module whose start function executes `unreachable`, so making an instance of it traps."""
+    types = [functype([], []), functype([], [I32])]
+    funcs: list[Func] = [(0, b"\x00"), (1, b"\x41\x07")]  # unreachable / quick: 7
+    return module(types, funcs, [("quick", 0, 1)], start=0)
 
 
 def imports_global(valtype: int = I32, mutable: bool = True) -> bytes:
