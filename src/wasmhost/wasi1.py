@@ -35,6 +35,7 @@ from collections.abc import Callable, Iterable, Mapping, Sequence
 from typing import Any, Literal, Protocol, TypeVar
 
 from ._api import Instance, Module
+from ._binary import i32, i64
 
 SNAPSHOT = "wasi_snapshot_preview1"
 
@@ -154,15 +155,13 @@ SIGNATURES: dict[str, tuple[tuple[str, ...], tuple[str, ...]]] = {}
 _F = TypeVar("_F", bound=Callable[..., object])
 
 
-def _call(*params: str, results: tuple[str, ...] = ("i32",)) -> Callable[[_F], _F]:
+def _call(*params: str, results: tuple[str, ...] = (i32,)) -> Callable[[_F], _F]:
     def register(fn: _F) -> _F:
         SIGNATURES[fn.__name__] = (params, results)
         return fn
 
     return register
 
-
-I32, I64 = "i32", "i64"
 
 # Python's errno numbers -> WASI's (the position in the table).
 _HOST_ERRNO: dict[int, int] = {}
@@ -372,7 +371,7 @@ class Wasi:
         method = getattr(self, name)
         if legacy and name in _SNAPSHOT_AWARE:
             method = functools.partial(method, legacy=True)
-        masks = tuple(MASK32 if p == I32 else MASK64 for p in params)
+        masks = tuple(MASK32 if p == i32 else MASK64 for p in params)
 
         def call(*args: int) -> int | None:
             try:
@@ -477,19 +476,19 @@ class Wasi:
 
     # --- arguments, environment
 
-    @_call(I32, I32)
+    @_call(i32, i32)
     def args_get(self, argv: int, argv_buf: int) -> None:
         self._strings(self.args, argv, argv_buf)
 
-    @_call(I32, I32)
+    @_call(i32, i32)
     def args_sizes_get(self, argc: int, size: int) -> None:
         self._sizes(self.args, argc, size)
 
-    @_call(I32, I32)
+    @_call(i32, i32)
     def environ_get(self, environ: int, environ_buf: int) -> None:
         self._strings(self.env, environ, environ_buf)
 
-    @_call(I32, I32)
+    @_call(i32, i32)
     def environ_sizes_get(self, count: int, size: int) -> None:
         self._sizes(self.env, count, size)
 
@@ -517,20 +516,20 @@ class Wasi:
         Clockid.thread_cputime_id: ("thread_time", time.thread_time_ns),
     }
 
-    @_call(I32, I32)
+    @_call(i32, i32)
     def clock_res_get(self, clock_id: int, ptr: int) -> None:
         if clock_id not in self._CLOCKS:
             raise _Fail(Errno.inval)
         resolution = time.get_clock_info(self._CLOCKS[clock_id][0]).resolution
         self._put(ptr, "<Q", max(1, round(resolution * 1e9)))
 
-    @_call(I32, I64, I32)
+    @_call(i32, i64, i32)
     def clock_time_get(self, clock_id: int, precision: int, ptr: int) -> None:
         if clock_id not in self._CLOCKS:
             raise _Fail(Errno.inval)
         self._put(ptr, "<Q", self._CLOCKS[clock_id][1]() & MASK64)
 
-    @_call(I32, I32)
+    @_call(i32, i32)
     def random_get(self, buf: int, size: int) -> None:
         if buf + size > len(self._mem()):  # before asking the system for that many bytes
             raise _Fail(Errno.fault)
@@ -540,17 +539,17 @@ class Wasi:
     def sched_yield(self) -> None:
         time.sleep(0)
 
-    @_call(I32, results=())
+    @_call(i32, results=())
     def proc_exit(self, code: int) -> None:
         raise WasiExit(code)
 
-    @_call(I32)
+    @_call(i32)
     def proc_raise(self, signal: int) -> None:
         if signal >= len(TABLES["signal"]):
             raise _Fail(Errno.inval)
         raise _Fail(Errno.nosys)  # there are no signals to raise here
 
-    @_call(I32, I32, I32, I32)
+    @_call(i32, i32, i32, i32)
     def poll_oneoff(self, in_ptr: int, out_ptr: int, count: int, nevents: int, legacy: bool = False) -> None:
         if count == 0:
             raise _Fail(Errno.inval)
@@ -606,12 +605,12 @@ class Wasi:
 
     # --- files: reading, writing, position
 
-    @_call(I32, I32, I32, I32)
+    @_call(i32, i32, i32, i32)
     def fd_read(self, fd: int, iovs: int, count: int, nread: int) -> None:
         entry = self._file(fd, Rights.fd_read)
         self._put(nread, "<I", self._gather(entry, self._iovs(iovs, count), None))
 
-    @_call(I32, I32, I32, I64, I32)
+    @_call(i32, i32, i32, i64, i32)
     def fd_pread(self, fd: int, iovs: int, count: int, offset: int, nread: int) -> None:
         entry = self._file(fd, Rights.fd_read | Rights.fd_seek)
         if entry.kind != "file":
@@ -662,12 +661,12 @@ class Wasi:
         finally:
             os.lseek(osfd, here, os.SEEK_SET)
 
-    @_call(I32, I32, I32, I32)
+    @_call(i32, i32, i32, i32)
     def fd_write(self, fd: int, iovs: int, count: int, nwritten: int) -> None:
         entry = self._file(fd, Rights.fd_write)
         self._put(nwritten, "<I", self._scatter(entry, self._iovs(iovs, count), None))
 
-    @_call(I32, I32, I32, I64, I32)
+    @_call(i32, i32, i32, i64, i32)
     def fd_pwrite(self, fd: int, iovs: int, count: int, offset: int, nwritten: int) -> None:
         entry = self._file(fd, Rights.fd_write | Rights.fd_seek)
         if entry.kind != "file":
@@ -690,7 +689,7 @@ class Wasi:
             raise _Fail(Errno.badf)
         return len(data)
 
-    @_call(I32, I64, I32, I32)
+    @_call(i32, i64, i32, i32)
     def fd_seek(self, fd: int, offset: int, whence: int, ptr: int, legacy: bool = False) -> None:
         entry = self._file(fd)
         names = UNSTABLE_TABLES["whence"] if legacy else TABLES["whence"]
@@ -706,14 +705,14 @@ class Wasi:
         how = {"set": os.SEEK_SET, "cur": os.SEEK_CUR, "end": os.SEEK_END}[names[whence]]
         self._put(ptr, "<Q", os.lseek(entry.osfd, offset, how))
 
-    @_call(I32, I32)
+    @_call(i32, i32)
     def fd_tell(self, fd: int, ptr: int) -> None:
         entry = self._file(fd, Rights.fd_tell)
         if entry.kind != "file":
             raise _Fail(Errno.spipe)
         self._put(ptr, "<Q", os.lseek(entry.osfd, 0, os.SEEK_CUR))
 
-    @_call(I32, I64, I64, I32)
+    @_call(i32, i64, i64, i32)
     def fd_advise(self, fd: int, offset: int, length: int, advice: int) -> None:
         entry = self._entry(fd, Rights.fd_advise)
         if advice >= len(TABLES["advice"]):
@@ -727,7 +726,7 @@ class Wasi:
             if hint is not None:
                 os.posix_fadvise(entry.osfd, offset, length, hint)
 
-    @_call(I32, I64, I64)
+    @_call(i32, i64, i64)
     def fd_allocate(self, fd: int, offset: int, length: int) -> None:
         entry = self._file(fd, Rights.fd_allocate)
         if entry.kind != "file":
@@ -737,26 +736,26 @@ class Wasi:
         elif os.fstat(entry.osfd).st_size < offset + length:
             os.ftruncate(entry.osfd, offset + length)
 
-    @_call(I32)
+    @_call(i32)
     def fd_datasync(self, fd: int) -> None:
         entry = self._entry(fd, Rights.fd_datasync)
         if entry.kind == "file":
             getattr(os, "fdatasync", os.fsync)(entry.osfd)
 
-    @_call(I32)
+    @_call(i32)
     def fd_sync(self, fd: int) -> None:
         entry = self._entry(fd, Rights.fd_sync)
         if entry.kind == "file":
             os.fsync(entry.osfd)
 
-    @_call(I32)
+    @_call(i32)
     def fd_close(self, fd: int) -> None:
         entry = self._entry(fd)
         del self._fds[fd]
         if entry.osfd >= 0:
             os.close(entry.osfd)
 
-    @_call(I32, I32)
+    @_call(i32, i32)
     def fd_renumber(self, source: int, target: int) -> None:
         entry = self._entry(source)
         old = self._entry(target)
@@ -768,7 +767,7 @@ class Wasi:
 
     # --- descriptors' own state
 
-    @_call(I32, I32)
+    @_call(i32, i32)
     def fd_fdstat_get(self, fd: int, ptr: int, legacy: bool = False) -> None:
         entry = self._entry(fd)
         keep = UNSTABLE_ALL_RIGHTS if legacy else ALL_RIGHTS  # the first snapshot has no right for sock_accept
@@ -776,21 +775,21 @@ class Wasi:
             ptr, STRUCTS["fdstat"].format, entry.filetype, entry.flags, entry.rights & keep, entry.inheriting & keep
         )
 
-    @_call(I32, I32)
+    @_call(i32, i32)
     def fd_fdstat_set_flags(self, fd: int, flags: int) -> None:
         entry = self._entry(fd, Rights.fd_fdstat_set_flags)
         if flags >> len(TABLES["fdflags"]):
             raise _Fail(Errno.inval)
         entry.flags = flags  # append is honoured by fd_write; the others are only recorded
 
-    @_call(I32, I64, I64)
+    @_call(i32, i64, i64)
     def fd_fdstat_set_rights(self, fd: int, base: int, inheriting: int) -> None:
         entry = self._entry(fd)
         if base & ~entry.rights or inheriting & ~entry.inheriting:  # rights can be given up, never gained
             raise _Fail(Errno.notcapable)
         entry.rights, entry.inheriting = base, inheriting
 
-    @_call(I32, I32)
+    @_call(i32, i32)
     def fd_filestat_get(self, fd: int, ptr: int, legacy: bool = False) -> None:
         entry = self._entry(fd, Rights.fd_filestat_get)
         if entry.kind == "file":
@@ -818,14 +817,14 @@ class Wasi:
         # the first snapshot counts links in 32 bits, and its record is laid out differently
         self._put(ptr, (UNSTABLE_STRUCTS if legacy else STRUCTS)["filestat"].format, *fields)
 
-    @_call(I32, I64)
+    @_call(i32, i64)
     def fd_filestat_set_size(self, fd: int, size: int) -> None:
         entry = self._file(fd, Rights.fd_filestat_set_size)
         if entry.kind != "file":
             raise _Fail(Errno.inval)
         os.ftruncate(entry.osfd, size)
 
-    @_call(I32, I64, I64, I32)
+    @_call(i32, i64, i64, i32)
     def fd_filestat_set_times(self, fd: int, atim: int, mtim: int, flags: int) -> None:
         entry = self._entry(fd, Rights.fd_filestat_set_times)
         if entry.kind in ("stdin", "stdout", "stderr"):
@@ -851,14 +850,14 @@ class Wasi:
 
     # --- preopened directories, directory listing
 
-    @_call(I32, I32)
+    @_call(i32, i32)
     def fd_prestat_get(self, fd: int, ptr: int) -> None:
         entry = self._entry(fd)
         if entry.preopen is None:
             raise _Fail(Errno.badf)
         self._put(ptr, STRUCTS["prestat"].format, Preopentype.dir, len(entry.preopen))
 
-    @_call(I32, I32, I32)
+    @_call(i32, i32, i32)
     def fd_prestat_dir_name(self, fd: int, ptr: int, size: int) -> None:
         entry = self._entry(fd)
         if entry.preopen is None:
@@ -867,7 +866,7 @@ class Wasi:
             raise _Fail(Errno.nametoolong)
         self._write(ptr, entry.preopen)
 
-    @_call(I32, I32, I32, I64, I32)
+    @_call(i32, i32, i32, i64, i32)
     def fd_readdir(self, fd: int, buf: int, size: int, cookie: int, used: int) -> None:
         entry = self._dir(fd, Rights.fd_readdir)
         if cookie == 0 or entry.listing is None:
@@ -895,24 +894,24 @@ class Wasi:
 
     # --- paths
 
-    @_call(I32, I32, I32)
+    @_call(i32, i32, i32)
     def path_create_directory(self, fd: int, ptr: int, size: int) -> None:
         _, path = self._resolve(fd, Rights.path_create_directory, ptr, size, False)
         os.mkdir(path)
 
-    @_call(I32, I32, I32, I32, I32)
+    @_call(i32, i32, i32, i32, i32)
     def path_filestat_get(self, fd: int, flags: int, ptr: int, size: int, out: int, legacy: bool = False) -> None:
         follow = bool(flags & Lookupflags.symlink_follow)
         _, path = self._resolve(fd, Rights.path_filestat_get, ptr, size, follow)
         self._put_stat(out, os.stat(path) if follow else os.lstat(path), legacy)
 
-    @_call(I32, I32, I32, I32, I64, I64, I32)
+    @_call(i32, i32, i32, i32, i64, i64, i32)
     def path_filestat_set_times(self, fd: int, flags: int, ptr: int, size: int, atim: int, mtim: int, fst: int) -> None:
         follow = bool(flags & Lookupflags.symlink_follow)
         _, path = self._resolve(fd, Rights.path_filestat_set_times, ptr, size, follow)
         self._set_times(path, atim, mtim, fst, follow)
 
-    @_call(I32, I32, I32, I32, I32, I32, I32)
+    @_call(i32, i32, i32, i32, i32, i32, i32)
     def path_link(
         self, old_fd: int, flags: int, old_ptr: int, old_size: int, new_fd: int, new_ptr: int, new_size: int
     ) -> None:
@@ -921,7 +920,7 @@ class Wasi:
         _, new = self._resolve(new_fd, Rights.path_link_target, new_ptr, new_size, False)
         os.link(old, new)
 
-    @_call(I32, I32, I32, I32, I32, I64, I64, I32, I32)
+    @_call(i32, i32, i32, i32, i32, i64, i64, i32, i32)
     def path_open(
         self,
         fd: int,
@@ -981,31 +980,31 @@ class Wasi:
         self._fds[new] = entry
         self._put(out, "<I", new)
 
-    @_call(I32, I32, I32, I32, I32, I32)
+    @_call(i32, i32, i32, i32, i32, i32)
     def path_readlink(self, fd: int, ptr: int, size: int, buf: int, buf_len: int, used: int) -> None:
         _, path = self._resolve(fd, Rights.path_readlink, ptr, size, False)
         target = os.fsencode(os.readlink(path))[:buf_len]
         self._write(buf, target)
         self._put(used, "<I", len(target))
 
-    @_call(I32, I32, I32)
+    @_call(i32, i32, i32)
     def path_remove_directory(self, fd: int, ptr: int, size: int) -> None:
         _, path = self._resolve(fd, Rights.path_remove_directory, ptr, size, False)
         os.rmdir(path)
 
-    @_call(I32, I32, I32, I32, I32, I32)
+    @_call(i32, i32, i32, i32, i32, i32)
     def path_rename(self, old_fd: int, old_ptr: int, old_size: int, new_fd: int, new_ptr: int, new_size: int) -> None:
         _, old = self._resolve(old_fd, Rights.path_rename_source, old_ptr, old_size, False)
         _, new = self._resolve(new_fd, Rights.path_rename_target, new_ptr, new_size, False)
         os.replace(old, new)
 
-    @_call(I32, I32, I32, I32, I32)
+    @_call(i32, i32, i32, i32, i32)
     def path_symlink(self, old_ptr: int, old_size: int, fd: int, new_ptr: int, new_size: int) -> None:
         target = self._string(old_ptr, old_size)  # stored as given; a link that leads out is refused when followed
         _, path = self._resolve(fd, Rights.path_symlink, new_ptr, new_size, False)
         os.symlink(target, path)
 
-    @_call(I32, I32, I32)
+    @_call(i32, i32, i32)
     def path_unlink_file(self, fd: int, ptr: int, size: int) -> None:
         _, path = self._resolve(fd, Rights.path_unlink_file, ptr, size, False)
         if stat.S_ISDIR(os.lstat(path).st_mode):
@@ -1014,19 +1013,19 @@ class Wasi:
 
     # --- sockets: none (a descriptor is never a socket)
 
-    @_call(I32, I32, I32)
+    @_call(i32, i32, i32)
     def sock_accept(self, fd: int, flags: int, out: int) -> None:
         self._socket(fd)
 
-    @_call(I32, I32, I32, I32, I32, I32)
+    @_call(i32, i32, i32, i32, i32, i32)
     def sock_recv(self, fd: int, iovs: int, count: int, flags: int, nread: int, roflags: int) -> None:
         self._socket(fd)
 
-    @_call(I32, I32, I32, I32, I32)
+    @_call(i32, i32, i32, i32, i32)
     def sock_send(self, fd: int, iovs: int, count: int, flags: int, nwritten: int) -> None:
         self._socket(fd)
 
-    @_call(I32, I32)
+    @_call(i32, i32)
     def sock_shutdown(self, fd: int, how: int) -> None:
         self._socket(fd)
 
