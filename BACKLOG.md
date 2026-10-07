@@ -57,6 +57,10 @@ the owner does). Newest commit: look at CI first. `Tests` was green on every job
 "changes produced, but not on a pull_request" step (CI log); locally the only file they change is the old `examples/jitcheck.py` (`ruff format`), so that is the likely cause, not checked in CI. It is red on `main` too
 (run 174, `599e2e8`), so it is not from this work. Formatting that file is one small commit; waiting for the owner. Locally the full `pytest` passes on wasmtime, wasm3, node and bun (jsc, gi-jsc and jscontext only in CI); the self-test has 35 steps on wasmtime/wasm3 and 41 on the JS engines.
 
+**Python 3.15 (2026-10-07, on the owner's word):** the classifier `Programming Language :: Python :: 3.15` is in `pyproject.toml`, and the CI matrix has `3.15` where it had `3.14` (the free-threaded `3.14t` stays; `3.15t` is not in the matrix, and
+`pywasm3` builds only `cp311-*` and `cp314t-*` wheels, so check that before adding it). `3.15` is not pinned to a patch version: until its stable release (the owner says 2026-10-08) uv takes the release candidate. Run locally on `3.15.0rc3` with `uv` 0.12.23
+(installed with pip; the older `uv` of `~/.local/bin` only saw `3.15.0b4`): the whole suite, 906 passed, 166 skipped, no failures, wasm3 from git included. Look at the first CI run of the matrix.
+
 **Done** (phases 1 to 4): B-201 (`Function`, `signature`, `type()`, identity, `elem`, the safety net through `call_indirect`), B-202, B-204, B-301 (`Memory.view`), B-302 (`bench`),
 B-304 (a lock per backend, `await compile/instantiate`, threads only with `threaded=True`), B-507, B-509, fast buffers, Bun in CI, and **phase 4: B-401 (memory ceiling), B-402/B-403
 (timeout), B-404 (fuel)**, closed by the owner. The README has the limits in one section, "Limits for untrusted code". **Verified on the device by the owner** (Pythonista, iPhone 16,
