@@ -177,7 +177,7 @@ def test_a_limit_the_backend_cannot_keep_is_an_error_not_a_traceback(
 def test_a_real_program_with_a_folder(capsys: pytest.CaptureFixture[str], session: str, tmp_path: Path) -> None:
     """coreutils (uutils, in Rust) through the command: arguments, a folder, a file read, a read-only folder."""
     need_imports()
-    (tmp_path / "a.txt").write_text("hello from host\n", encoding="utf-8")
+    (tmp_path / "a.txt").write_bytes(b"hello from host\n")  # bytes: write_text would make \r\n on Windows
     base = ["run", "--backend", session, "--argv0", "coreutils", "--dir", f"{tmp_path}::/data"]
     program = str(EXAMPLES / "coreutils.wasm")
     assert _cli.main([*base, program, "cat", "/data/a.txt"]) == 0
