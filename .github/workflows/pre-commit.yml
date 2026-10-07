@@ -5,7 +5,11 @@ name: Pre-commit
 
 on:
   push:
+    paths-ignore: &non-code-paths
+      - "**.md"
+      - "LICENSE"
   pull_request:
+    paths-ignore: *non-code-paths
   workflow_dispatch:
   workflow_call:
 

@@ -17,6 +17,7 @@ with SIGILL.
 
 from __future__ import annotations
 
+import gc
 import os
 import sys
 from collections.abc import Iterator
@@ -77,8 +78,13 @@ def pytest_report_header(config: pytest.Config) -> str:
 
 @pytest.fixture
 def session(backend: str) -> Iterator[str]:
-    """A fresh backend per test, so tests can't leak modules or memory into each other."""
+    """A fresh backend per test, so tests can't leak modules or memory into each other.
+
+    The instances of a test are collected when it ends, not left to the collector: an `Instance` is in a reference
+    cycle (it holds its exports, which hold it), so it is freed only when the collector runs, which a free-threaded
+    build does rarely, and wasm3 has 128 runtimes at most in a process (a 129th is "memory allocation failed")."""
     wasmhost.close()
     wasmhost.set_backend(backend)
     yield backend
     wasmhost.close()
+    gc.collect()

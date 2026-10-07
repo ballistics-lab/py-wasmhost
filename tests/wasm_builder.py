@@ -52,16 +52,22 @@ def module(
     memory: bool = False,
     globals_: list[bytes] | None = None,
     imports: list[bytes] | None = None,
+    memory_limits: bytes | None = None,
+    start: int | None = None,
 ) -> bytes:
     out = b"\0asm\x01\x00\x00\x00" + section(1, vec(types))
     if imports:
         out += section(2, vec(imports))
     out += section(3, vec([uleb(f[0]) for f in funcs]))
-    if memory:
+    if memory_limits is not None:
+        out += section(5, vec([memory_limits]))  # the limits as they are written: flags, minimum, maybe maximum
+    elif memory:
         out += section(5, vec([b"\x01\x01\x04"]))  # min 1 page, max 4
     if globals_:
         out += section(6, vec(globals_))
     out += section(7, vec([name(n) + bytes([kind]) + uleb(i) for n, kind, i in exports]))
+    if start is not None:
+        out += section(8, uleb(start))  # the function that runs when the instance is made
     out += section(10, vec([body(f[1], f[2]) if len(f) == 3 else body(f[1]) for f in funcs]))
     return out
 
@@ -161,6 +167,27 @@ def imports_memory() -> bytes:
     return module(types, [(0, b"\x41\x00")], [("zero", 0, 0)], imports=imports)
 
 
+def grows_memory() -> bytes:
+    """Imports the memory env.memory (min 1 page); exports grow(pages) -> i32 (memory.grow: the old size in pages, or -1
+    when the memory would pass its maximum) and size() -> i32 (memory.size)."""
+    types = [functype([I32], [I32]), functype([], [I32])]
+    imports = [name("env") + name("memory") + b"\x02" + b"\x00\x01"]
+    funcs: list[Func] = [
+        (0, b"\x20\x00\x40\x00"),  # grow: local.get 0; memory.grow
+        (1, b"\x3f\x00"),  # size: memory.size
+    ]
+    return module(types, funcs, [("grow", 0, 0), ("size", 0, 1)], imports=imports)
+
+
+def owns_memory(initial: int = 1, maximum: int | None = None) -> bytes:
+    """A module that makes its own memory (`initial` pages, a `maximum` or none) and exports it as "memory", with
+    grow(pages) -> i32 (memory.grow: the old size, or -1 past the maximum) and size() -> i32 (memory.size)."""
+    types = [functype([I32], [I32]), functype([], [I32])]
+    funcs: list[Func] = [(0, b"\x20\x00\x40\x00"), (1, b"\x3f\x00")]
+    limits = (b"\x00" + uleb(initial)) if maximum is None else (b"\x01" + uleb(initial) + uleb(maximum))
+    return module(types, funcs, [("grow", 0, 0), ("size", 0, 1), ("memory", 2, 0)], memory_limits=limits)
+
+
 def spinner() -> bytes:
     """spin() loops forever; quick() -> i32 returns 7; busy(n) -> i32 counts up to n in a loop and returns n."""
     types = [functype([], []), functype([], [I32]), functype([I32], [I32])]
@@ -175,6 +202,20 @@ def spinner() -> bytes:
         ),
     ]
     return module(types, funcs, [("spin", 0, 0), ("quick", 0, 1), ("busy", 0, 2)])
+
+
+def spins_at_start() -> bytes:
+    """A module whose start function loops forever, so making an instance never ends; it exports quick() -> i32."""
+    types = [functype([], []), functype([], [I32])]
+    funcs: list[Func] = [(0, b"\x03\x40\x0c\x00\x0b"), (1, b"\x41\x07")]  # spin: loop; br 0; end / quick: 7
+    return module(types, funcs, [("quick", 0, 1)], start=0)
+
+
+def traps_at_start() -> bytes:
+    """A module whose start function executes `unreachable`, so making an instance of it traps."""
+    types = [functype([], []), functype([], [I32])]
+    funcs: list[Func] = [(0, b"\x00"), (1, b"\x41\x07")]  # unreachable / quick: 7
+    return module(types, funcs, [("quick", 0, 1)], start=0)
 
 
 def imports_global(valtype: int = I32, mutable: bool = True) -> bytes:

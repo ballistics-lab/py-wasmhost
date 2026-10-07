@@ -17,12 +17,13 @@ from __future__ import annotations
 
 import atexit
 import base64
+import contextlib
 import importlib
 import json
 import re
 import shutil
 import subprocess
-from collections.abc import Sequence
+from collections.abc import Generator, Sequence
 from typing import Any
 
 from ._backend import (
@@ -40,7 +41,7 @@ from ._backend import (
 )
 from ._binary import FuncType
 from ._capi import CApi, load_library
-from ._errors import CompileError, LinkError, Trap
+from ._errors import CompileError, LinkError, Timeout, Trap
 
 __all__ = ("GIJavaScriptCoreBackend", "JSContextBackend", "JSBackend", "NodeBackend")
 
@@ -50,6 +51,7 @@ _JS_ERRORS: dict[str, type[BaseException]] = {
     "RuntimeError": Trap,
     "RangeError": IndexError,  # a memory access out of bounds
     "TypeError": TypeError,
+    "TimeoutError": Timeout,  # Node's `vm` timeout, which the shim names so (see `_NODE_LOOP`)
 }
 # What a host function's failure throws in the engine. The real exception is kept in Python and raised there, from
 # the call that was running, when this text comes back (an exception can't cross the engine's boundary itself).
@@ -259,6 +261,23 @@ class JSBackend(Backend):
         self._capi: CApi | None = (
             None  # JavaScriptCore's C API, for engines that are it: bytes in place, host functions
         )
+        # The `timeout` (seconds) of the instances that have one, by the number the engine gives: an instance, and an
+        # object (an exported function or table, and what is taken from such a table). `_eval_timeout` is the one
+        # that the script being run is under; only an engine with the "timeout" feature ever has any.
+        self._inst_timeout: dict[int, float] = {}
+        self._obj_timeout: dict[int, float] = {}
+        self._eval_timeout: float | None = None
+
+    @contextlib.contextmanager
+    def _under(self, seconds: float | None) -> Generator[None]:
+        """The scripts run inside are under this timeout (none: under the one already in force, if any)."""
+        previous = self._eval_timeout
+        if seconds is not None:
+            self._eval_timeout = seconds
+        try:
+            yield
+        finally:
+            self._eval_timeout = previous
 
     def evaluate(self, src: str) -> str:
         """Run `src` and return the value of its last expression as a string."""
@@ -357,20 +376,36 @@ class JSBackend(Backend):
         return int(self._run(f'__wh.compile("{data.hex()}")'))
 
     def instantiate(
-        self, module: int, imports: Sequence[HostFunction | HostObject] = (), *, isolated: bool = False
+        self,
+        module: int,
+        imports: Sequence[HostFunction | HostObject] = (),
+        *,
+        isolated: bool = False,
+        timeout: float | None = None,
+        fuel: int | None = None,
     ) -> int:
+        if fuel is not None:
+            raise NotImplementedError(f"the {self.name} backend can't count what a call runs")
         if isolated:
             raise NotImplementedError(f"the {self.name} backend has one store for everything: no isolated instances")
+        if timeout is not None and not self.supports("timeout"):
+            raise NotImplementedError(f"the {self.name} backend can't stop a call that runs too long")
         if not imports:
-            return int(self._run(f"__wh.instantiate({module})"))
-        self._run("0")  # the registry (`__wh`) first: the import object uses it
-        if any(isinstance(i, HostFunction) for i in imports):
-            if not self.supports("imports"):
-                raise NotImplementedError(f"the {self.name} backend can't take imports (host functions)")
-            if not self._hostcall_ready:
-                self._install_hostcall()
-                self._hostcall_ready = True
-        return int(self._run(f"__wh.instantiate({module},{self._import_object(imports)})"))
+            with self._under(timeout):  # a start function runs now
+                handle = int(self._run(f"__wh.instantiate({module})"))
+        else:
+            self._run("0")  # the registry (`__wh`) first: the import object uses it
+            if any(isinstance(i, HostFunction) for i in imports):
+                if not self.supports("imports"):
+                    raise NotImplementedError(f"the {self.name} backend can't take imports (host functions)")
+                if not self._hostcall_ready:
+                    self._install_hostcall()
+                    self._hostcall_ready = True
+            with self._under(timeout):
+                handle = int(self._run(f"__wh.instantiate({module},{self._import_object(imports)})"))
+        if timeout is not None:
+            self._inst_timeout[handle] = timeout
+        return handle
 
     def new_global(self, kind: str, value: int | float, mutable: bool) -> int:
         return int(
@@ -379,12 +414,14 @@ class JSBackend(Backend):
 
     def call(self, instance: int, name: str, args: Sequence[int | float], ftype: FuncType) -> list[int | float]:
         literals = ",".join(_literal(a, k) for a, k in zip(args, ftype.params, strict=True))
-        text = self._run(f"__wh.call({instance},{json.dumps(name)},[{literals}])")
+        with self._under(self._inst_timeout.get(instance)):
+            text = self._run(f"__wh.call({instance},{json.dumps(name)},[{literals}])")
         return [_parse(t, k) for t, k in zip(text.split(","), ftype.results, strict=True)] if ftype.results else []
 
     def call_ref(self, func: int, args: Sequence[int | float], ftype: FuncType) -> list[int | float]:
         literals = ",".join(_literal(a, k) for a, k in zip(args, ftype.params, strict=True))
-        text = self._run(f"__wh.callref({func},[{literals}])")
+        with self._under(self._obj_timeout.get(func)):
+            text = self._run(f"__wh.callref({func},[{literals}])")
         return [_parse(t, k) for t, k in zip(text.split(","), ftype.results, strict=True)] if ftype.results else []
 
     def function_key(self, func: int) -> int:
@@ -403,11 +440,18 @@ class JSBackend(Backend):
     def export_global(self, instance: int, name: str, kind: str) -> int:
         return self._export(instance, name)
 
+    def _export_timed(self, instance: int, name: str) -> int:
+        """An exported function or table: it is under the timeout of its instance, and so is what is taken from it."""
+        handle = self._export(instance, name)
+        if instance in self._inst_timeout:
+            self._obj_timeout[handle] = self._inst_timeout[instance]
+        return handle
+
     def export_table(self, instance: int, name: str) -> int:
-        return self._export(instance, name)
+        return self._export_timed(instance, name)
 
     def export_function(self, instance: int, name: str) -> int:
-        return self._export(instance, name)
+        return self._export_timed(instance, name)
 
     def new_memory(self, initial: int, maximum: int | None) -> int:
         return int(self._run(f"__wh.newMemory({int(initial)},{-1 if maximum is None else int(maximum)})"))
@@ -420,7 +464,11 @@ class JSBackend(Backend):
 
     def table_get(self, table: int, index: int) -> int | None:
         text = self._o("tableget", table, int(index))
-        return int(text) if text else None
+        if not text:
+            return None
+        if table in self._obj_timeout:  # a function of a table of a timed instance is timed too
+            self._obj_timeout.setdefault(int(text), self._obj_timeout[table])
+        return int(text)
 
     def table_set(self, table: int, index: int, func: int | None) -> None:
         self._o("tableset", table, int(index), -1 if func is None else func)
@@ -496,7 +544,8 @@ class JSBackend(Backend):
             else:
                 lines.append(f"if ({_expr(step.value)}{'===' if step.when_zero else '!=='}0) return;")
         body = "function(ex,r,W,R,O){" + "".join(lines) + "}"
-        reply = json.loads(self._run(f"__wh.run({instance},{body})"))
+        with self._under(self._inst_timeout.get(instance)):  # the whole batch is one script, so one timeout
+            reply = json.loads(self._run(f"__wh.run({instance},{body})"))
         values: dict[int, Any] = {}
         for slot, text in enumerate(reply["r"]):
             if text is None or slot not in kinds:
@@ -614,7 +663,8 @@ class GIJavaScriptCoreBackend(JSBackend):
 # A `vm` context is a fresh global object with only the JS builtins (Promise, WebAssembly, Date, ...).
 # The process leaves when its stdin closes, so a killed parent doesn't leave it running.
 #
-# The protocol is JSON lines. Python sends {"eval": source}; Node answers {"ok": value} or {"err": text}. A host
+# The protocol is JSON lines. Python sends {"eval": source} (and "timeout": milliseconds, to stop a script that runs
+# longer); Node answers {"ok": value} or {"err": text}. A host
 # function is `__hostcall(number, argumentsAsJson)`: Node writes {"cb": [number, arguments]} and then *reads its
 # stdin synchronously* for {"ret": text} (or {"fail": true}) -- a WebAssembly call is on the stack and can't be
 # left, so the wait can't be an event -- while Python may send further {"eval": ...} lines meanwhile (a host
@@ -634,9 +684,13 @@ function writeAll(text) {
         catch (e) { if (e.code === 'EAGAIN') sleep(0.05); else throw e; }
     }
 }
-function evaluate(src) {
-    try { return { ok: String(vm.runInContext(src, ctx)) }; }
-    catch (e) { return { err: String(e) }; }  // same text as JavaScriptCore's exception.toString()
+// `timeout` (milliseconds) stops a script that runs longer, wasm included, and the context is fine afterwards
+function evaluate(src, timeout) {
+    try { return { ok: String(vm.runInContext(src, ctx, timeout ? { timeout } : undefined)) }; }
+    catch (e) {
+        if (e && e.code === 'ERR_SCRIPT_EXECUTION_TIMEOUT') return { err: 'TimeoutError: ' + e.message };
+        return { err: String(e) };  // same text as JavaScriptCore's exception.toString()
+    }
 }
 
 const decoder = new StringDecoder('utf8');
@@ -664,14 +718,17 @@ ctx.__hostcall = (ident, argsJson) => {
         const line = readLineSync();
         if (line === null) throw new Error('wasmhost: the parent closed the pipe');
         const msg = JSON.parse(line);
-        if (msg.eval !== undefined) { writeAll(JSON.stringify(evaluate(msg.eval)) + '\n'); continue; }
+        if (msg.eval !== undefined) { writeAll(JSON.stringify(evaluate(msg.eval, msg.timeout)) + '\n'); continue; }
         if (msg.fail) throw '@HOST_ERROR@';
         return msg.ret;
     }
 };
 
 const rl = require('readline').createInterface({ input: process.stdin });
-rl.on('line', (line) => writeAll(JSON.stringify(evaluate(JSON.parse(line).eval)) + '\n'));
+rl.on('line', (line) => {
+    const msg = JSON.parse(line);
+    writeAll(JSON.stringify(evaluate(msg.eval, msg.timeout)) + '\n');
+});
 rl.on('close', () => process.exit(0));
 """.replace("@HOST_ERROR@", HOST_ERROR)
 
@@ -682,7 +739,8 @@ class NodeBackend(JSBackend):
     name = "node"
     _base64 = True
     program = "node"  # what is looked for on PATH
-    features = JSBackend.features | {"imports", "threads"}  # a process: any thread may talk to it, one at a time
+    # a process: any thread may talk to it, one at a time; and `vm` can stop a script that runs too long
+    features = JSBackend.features | {"imports", "threads", "timeout"}
 
     def __init__(self, node: str | None = None) -> None:
         super().__init__()
@@ -715,7 +773,10 @@ class NodeBackend(JSBackend):
         """Nothing to do: `__hostcall` is in the context from the start."""
 
     def evaluate(self, src: str) -> str:
-        self._send({"eval": src})
+        message: dict[str, Any] = {"eval": src}
+        if self._eval_timeout is not None:
+            message["timeout"] = max(1, round(self._eval_timeout * 1000))
+        self._send(message)
         while True:
             line = self._stdout.readline()
             if not line:
@@ -747,3 +808,4 @@ class BunBackend(NodeBackend):
 
     name = "bun"
     program = "bun"
+    features = NodeBackend.features - {"timeout"}  # its `vm` timeout does not stop a wasm loop: the process hangs

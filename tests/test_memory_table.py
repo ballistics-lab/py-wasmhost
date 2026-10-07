@@ -185,3 +185,38 @@ def test_the_javascript_form_of_the_initial_value(tables: wasmhost.Backend) -> N
     table = wasmhost.Table({"element": "anyfunc", "initial": 2, "maximum": 3}, add)
     assert (len(table), table.get(0) is add, table.get(1) is add) == (2, True, True)
     assert wasmhost.Table(wasmhost.TableType("funcref", 1, None), add).get(0) is add  # a TableType too
+
+
+def test_an_imported_memory_limits_the_module_that_grows_it(memories: wasmhost.Backend) -> None:
+    """The host's `maximum` is a ceiling the module can't pass: its own memory.grow answers -1, as the specification
+    has it, and neither the memory nor the instance is harmed."""
+    mem = wasmhost.Memory(1, 3)
+    inst = wasmhost.Instance(wasmhost.Module(wb.grows_memory()), {"env": {"memory": mem}})
+    assert inst.exports.size() == 1
+    assert inst.exports.grow(2) == 1  # 1 -> 3 pages: exactly the maximum
+    assert inst.exports.size() == 3 and len(mem) == 3 * 65536
+    assert inst.exports.grow(1) == -1  # over it
+    assert inst.exports.grow(0) == 3  # still answers, and still the same size
+    assert inst.exports.size() == 3 and len(mem) == 3 * 65536
+    mem.write(3 * 65536 - 1, b"\x07")  # the last byte is there; the refused grow did not break the memory
+    assert mem.read(3 * 65536 - 1, 1) == b"\x07"
+
+
+def test_a_big_grow_is_refused_not_fatal(memories: wasmhost.Backend) -> None:
+    """The largest request a module can make (65536 pages = 4 GiB) is refused by the maximum, with no allocation."""
+    mem = wasmhost.Memory(1, 2)
+    inst = wasmhost.Instance(wasmhost.Module(wb.grows_memory()), {"env": {"memory": mem}})
+    assert inst.exports.grow(65536) == -1
+    assert inst.exports.grow(-1) == -1  # 0xFFFFFFFF pages as an unsigned number
+    assert inst.exports.size() == 1 and len(mem) == 65536
+    assert inst.exports.grow(1) == 1  # the instance is fine, and the room that is left can still be used
+
+
+def test_the_limit_is_shared_by_every_instance_of_the_memory(memories: wasmhost.Backend) -> None:
+    mem = wasmhost.Memory(1, 2)
+    module = wasmhost.Module(wb.grows_memory())
+    a = wasmhost.Instance(module, {"env": {"memory": mem}})
+    b = wasmhost.Instance(module, {"env": {"memory": mem}})
+    assert a.exports.grow(1) == 1
+    assert b.exports.size() == 2  # one memory, seen by both
+    assert b.exports.grow(1) == -1  # the ceiling is on the memory, not on the instance

@@ -38,8 +38,8 @@ Where it differs from a real shell:
   command starts, so a file an earlier command of the line made is found).
 - No variables, loops, `$(...)` or `&`.
 
-The module is Rust's output (multi-value, reference types, bulk memory), so the engine has to take those: wasmtime and
-JavaScriptCore or Node of a recent enough version do; wasm3 does not.
+The module is Rust's output, and the engine has to take what that uses: wasmtime, wasm3, and JavaScriptCore or Node of a
+recent enough version do.
 
 The first start compiles the module in the engine (some seconds, more on a phone); each command then runs its own
 instance of it. `coreutils.wasm` is read from `examples/wasm/` next to this file, else from the cache

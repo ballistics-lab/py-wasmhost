@@ -41,9 +41,10 @@ from ._binary import (
     MemoryType,
     ModuleInfo,
     TableType,
+    limit_memory,
     parse,
 )
-from ._errors import CompileError, LinkError, Trap, WasmError
+from ._errors import CompileError, LinkError, OutOfFuel, Timeout, Trap, WasmError
 from ._registry import BACKENDS, default_backend
 from ._trampoline import call_checked
 
@@ -57,8 +58,10 @@ __all__ = (
     "LinkError",
     "Memory",
     "Module",
+    "OutOfFuel",
     "Ref",
     "Table",
+    "Timeout",
     "Trap",
     "WasmError",
     "close",
@@ -815,6 +818,29 @@ class Module:
             raise CompileError(str(exc)) from None
         self._backend = _backend(backend)
         self._handle = self._backend.compile(data)
+        self._wasm = data  # for `Instance(max_memory=...)` and `timeout=`, which compile a copy of their own
+        # (ceiling, counts epochs, counts fuel) -> (the copy, its description)
+        self._variants: dict[tuple[int | None, bool, bool], tuple[Any, ModuleInfo]] = {}
+
+    def _variant(self, pages: int | None, epochs: bool, fuel: bool) -> tuple[Any, ModuleInfo]:
+        """The module as an instance with `max_memory=pages`, a `timeout` (`epochs`) and/or `fuel` needs it: every
+        memory it defines held to `pages` (see `limit_memory`), and compiled for counting where the backend needs
+        that. Compiled once per combination and kept, so the next instance costs no compile; one that needs no change
+        is the module itself."""
+        key = (pages, epochs, fuel)
+        found = self._variants.get(key)
+        if found is None:
+            data, handle, info = self._wasm, self._handle, self._info
+            if pages is not None:
+                data = limit_memory(self._wasm, pages)  # a ValueError: a memory that starts over the ceiling
+                if data != self._wasm:
+                    handle, info = self._backend.compile(data), parse(data)  # type() then says the maximum that holds
+            if (epochs or fuel) and (
+                compiled := self._backend.compile_limited(data, epochs=epochs, fuel=fuel)
+            ) is not None:
+                handle = compiled
+            found = self._variants[key] = (handle, info)
+        return found
 
     @staticmethod
     def exports(module: Module) -> list[ExportDescriptor]:
@@ -831,7 +857,7 @@ class Module:
 
 
 def _resolve_imports(
-    module: Module, imports: Mapping[str, Mapping[str, object]] | None
+    module: Module, imports: Mapping[str, Mapping[str, object]] | None, max_memory: int | None = None
 ) -> list[HostFunction | HostObject]:
     """The module's imports, each with what the import object has for it, as the JS API checks: a callable for a
     function, a Global (or, for an immutable one, a plain number) for a global, a Memory, a Table."""
@@ -871,6 +897,14 @@ def _resolve_imports(
                 raise LinkError(f"import {where} is not a {cls.__name__}")
             if value._backend is not module._backend:
                 raise LinkError(f"import {where} was made on another backend ({value._backend.name})")
+            limit = max_memory
+            if d.kind == "memory" and limit is not None:
+                ceiling = cast("Memory", value)._maximum
+                if ceiling is None or ceiling > limit:
+                    raise LinkError(
+                        f"import {where} has {'no maximum' if ceiling is None else f'a maximum of {ceiling} pages'}, "
+                        f"over max_memory ({limit})"
+                    )
             found.append(HostObject(d.module, d.name, d.kind, value._handle))
         else:
             raise NotImplementedError(f"importing a {d.kind} ({where}) is not supported")
@@ -886,7 +920,33 @@ class Instance:
     `isolated=True` (not in the JavaScript API) gives the instance a store of its own, which goes away with it: its
     memory is freed when the instance is dropped, but it can't share a Global with any other instance. Where it is
     not wanted or not available (`backend.supports("isolated")`) it is a NotImplementedError. Without it, all the
-    instances of a backend live in one store, as in JavaScript, and their memory is freed with the backend."""
+    instances of a backend live in one store, as in JavaScript, and their memory is freed with the backend.
+
+    `max_memory=pages` (not in the JavaScript API, which has no way to cap a memory that the module makes itself) holds
+    every memory the module defines to that many 64 KiB pages: one with no maximum gets it, a larger maximum is lowered
+    to it, and `memory.grow` past it answers -1 (so does `Memory.grow` from Python: an IndexError). A module that starts
+    above it is a ValueError. It works by writing the maximum into the module, so it is the same on every engine; the
+    module with a given ceiling is compiled once and kept, so only the first instance with it pays for a compile. A
+    memory the module imports is the host's: its own maximum is the ceiling there, and one with no maximum, or a
+    larger one, is a LinkError.
+
+    `timeout=seconds` (not in the JavaScript API; `backend.supports("timeout")`: wasmtime, Node and wasm3, a
+    NotImplementedError elsewhere) stops any call into the instance that runs longer, with a `Timeout` (a `Trap`): an
+    infinite loop in untrusted code ends, and the instance can be called again (not on wasm3, see below). The time is
+    the wall clock, host functions included; it is per call, and a batch is one call; the start function is under it
+    too. On wasmtime the instance is made for an engine that counts epochs (a tight loop runs about three times slower
+    there) and lives in a store of its own, like an isolated one, so it can't share a Memory, Table or Global made
+    outside it. On Node a function or table of the instance is timed, but a `Timeout` in a batch drops the results of
+    the steps before it. On wasm3 no thread can stop a call (it holds the GIL), so the call runs in slices of gas and
+    the clock is looked at between them; a call that paused can't be cancelled, so after a `Timeout` every call on that
+    instance is a `Trap` ("can't run again"), while other instances are fine. The JavaScriptCore engines and Bun can't
+    stop a wasm loop (a script's time limit does not reach it).
+
+    `fuel=n` (not in the JavaScript API; `backend.supports("fuel")`: wasmtime and wasm3, a NotImplementedError
+    elsewhere) stops a call that uses more than `n` units of what the engine counts, with an `OutOfFuel` (a `Trap`).
+    Deterministic, but the unit is the engine's own, so a number does not carry between engines. Every call starts with
+    the whole budget; a batch is one call, and a call from a host function shares the outer one. With a `timeout` too,
+    whichever runs out first ends the call (on wasm3 that finishes the instance, as a `Timeout` does)."""
 
     def __init__(
         self,
@@ -894,9 +954,27 @@ class Instance:
         imports: Mapping[str, Mapping[str, object]] | None = None,
         *,
         isolated: bool = False,
+        max_memory: int | None = None,
+        timeout: float | None = None,
+        fuel: int | None = None,
     ) -> None:
-        hosts = _resolve_imports(module, imports)
+        given = cast("object", max_memory)  # a caller without type checks may pass anything
+        if given is not None and (isinstance(given, bool) or not isinstance(given, int) or given < 0):
+            raise TypeError("max_memory is a number of 64 KiB pages, an int that is not negative")
+        seconds = cast("object", timeout)
+        if seconds is not None and (
+            isinstance(seconds, bool) or not isinstance(seconds, (int, float)) or not 0 < seconds < float("inf")
+        ):
+            raise TypeError("timeout is a number of seconds, more than 0")
+        units = cast("object", fuel)
+        if units is not None and (isinstance(units, bool) or not isinstance(units, int) or units <= 0):
+            raise TypeError("fuel is a number of units, an int more than 0")
+        hosts = _resolve_imports(module, imports, max_memory)
         backend = module._backend
+        if timeout is not None and not backend.supports("timeout"):
+            raise NotImplementedError(f"the {backend.name} backend can't stop a call that runs too long")
+        if fuel is not None and not backend.supports("fuel"):
+            raise NotImplementedError(f"the {backend.name} backend can't count what a call runs")
         if any(isinstance(h, HostFunction) for h in hosts) and not backend.supports("imports"):
             raise NotImplementedError(f"the {backend.name} backend can't take imports (host functions)")
         for h in hosts:
@@ -906,9 +984,12 @@ class Instance:
             raise NotImplementedError(f"the {backend.name} backend has one store for everything: no isolated instances")
         self._backend = backend
         _release_views(backend)  # a start function may run
-        self._handle = backend.instantiate(module._handle, hosts, isolated=isolated)
+        handle, info = module._handle, module._info
+        if max_memory is not None or timeout is not None or fuel is not None:
+            handle, info = module._variant(max_memory, timeout is not None, fuel is not None)
+        self._handle = backend.instantiate(handle, hosts, isolated=isolated, timeout=timeout, fuel=fuel)
         items: dict[str, Export | _LazyFunction] = {}
-        for e in module._info.exports:
+        for e in info.exports:
             if e.kind == "function" and isinstance(e.type, FuncType):
                 items[e.name] = _LazyFunction(functools.partial(self._export_function, e.name, e.type))
             elif e.kind == "memory" and isinstance(e.type, MemoryType):
@@ -975,7 +1056,13 @@ class Instantiated(NamedTuple):
 
 @overload
 def instantiate_sync(
-    wasm: Module, imports: Mapping[str, Mapping[str, object]] | None = None, *, backend: Backend | str | None = None
+    wasm: Module,
+    imports: Mapping[str, Mapping[str, object]] | None = None,
+    *,
+    backend: Backend | str | None = None,
+    max_memory: int | None = None,
+    timeout: float | None = None,
+    fuel: int | None = None,
 ) -> Instance: ...
 @overload
 def instantiate_sync(
@@ -983,19 +1070,25 @@ def instantiate_sync(
     imports: Mapping[str, Mapping[str, object]] | None = None,
     *,
     backend: Backend | str | None = None,
+    max_memory: int | None = None,
+    timeout: float | None = None,
+    fuel: int | None = None,
 ) -> Instantiated: ...
 def instantiate_sync(
     wasm: bytes | bytearray | memoryview | Module,
     imports: Mapping[str, Mapping[str, object]] | None = None,
     *,
     backend: Backend | str | None = None,
+    max_memory: int | None = None,
+    timeout: float | None = None,
+    fuel: int | None = None,
 ) -> Instantiated | Instance:
     """`WebAssembly.instantiate` without the promise: from bytes, a `Module` and an `Instance` (an `Instantiated`);
-    from a `Module`, just the `Instance`."""
+    from a `Module`, just the `Instance`. `max_memory`, `timeout` and `fuel` are the ones of `Instance`."""
     if isinstance(wasm, Module):
-        return Instance(wasm, imports)
+        return Instance(wasm, imports, max_memory=max_memory, timeout=timeout, fuel=fuel)
     module = Module(wasm, backend=backend)
-    return Instantiated(module, Instance(module, imports))
+    return Instantiated(module, Instance(module, imports, max_memory=max_memory, timeout=timeout, fuel=fuel))
 
 
 async def _offload(backend: Backend | str | None, work: Callable[[Backend], Any], threaded: bool) -> Any:
@@ -1029,6 +1122,9 @@ async def instantiate(
     *,
     backend: Backend | str | None = None,
     threaded: bool = False,
+    max_memory: int | None = None,
+    timeout: float | None = None,
+    fuel: int | None = None,
 ) -> Instance: ...
 @overload
 async def instantiate(
@@ -1037,6 +1133,9 @@ async def instantiate(
     *,
     backend: Backend | str | None = None,
     threaded: bool = False,
+    max_memory: int | None = None,
+    timeout: float | None = None,
+    fuel: int | None = None,
 ) -> Instantiated: ...
 async def instantiate(
     wasm: bytes | bytearray | memoryview | Module,
@@ -1044,6 +1143,9 @@ async def instantiate(
     *,
     backend: Backend | str | None = None,
     threaded: bool = False,
+    max_memory: int | None = None,
+    timeout: float | None = None,
+    fuel: int | None = None,
 ) -> Instantiated | Instance:
     """`WebAssembly.instantiate(bytes | module, imports)`, awaited: from bytes an `Instantiated` (`module`,
     `instance`), from a `Module` just the `Instance`.
@@ -1054,7 +1156,13 @@ async def instantiate(
     so it should not touch what the event loop owns."""
     return cast(
         "Instantiated | Instance",
-        await _offload(backend, lambda chosen: instantiate_sync(wasm, imports, backend=chosen), threaded),
+        await _offload(
+            backend,
+            lambda chosen: instantiate_sync(
+                wasm, imports, backend=chosen, max_memory=max_memory, timeout=timeout, fuel=fuel
+            ),
+            threaded,
+        ),
     )
 
 

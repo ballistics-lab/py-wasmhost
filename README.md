@@ -248,13 +248,13 @@ fallback if the C API ever fails. The self-test reports which was used (`N bytes
 
 | Backend     | Where                                                          | How it is detected                                                                                                                                                                                                                                                  |
 | ----------- | -------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `wasmtime`  | anywhere with the `wasmtime` package                           | `import wasmtime` (`pip install wasmtime`)                                                                                                                                                                                                                          |
-| `wasm3`     | CPython 3.11+ with [pywasm3](https://github.com/wasm3/pywasm3) | `import wasm3`; install it from git: `uv add "pywasm3 @ git+https://github.com/wasm3/pywasm3"` (its PyPI release predates the API used here)                                                                                                                        |
+| `wasmtime`  | anywhere with the `wasmtime` package                           | `import wasmtime` (`pip install wasmtime`) |
+| `wasm3`     | CPython 3.11+ with [pywasm3](https://github.com/wasm3/pywasm3) | `import wasm3`; install it from git: `uv add "pywasm3 @ git+https://github.com/wasm3/pywasm3"` (its PyPI release predates the API used here) |
 | `jscontext` | iOS (Pythonista, PythonIDE), and a Mac with rubicon-objc       | Apple's `JSContext` through an Objective-C bridge: Pythonista's `objc_util` (both iOS apps have it), or [`rubicon-objc`](https://github.com/beeware/rubicon-objc) (`pip install rubicon-objc`; tested in CI on macOS, not on a device). `backend.bridge` says which |
-| `jsc`       | Linux, macOS                                                   | JavaScriptCore's C API through `ctypes`, no PyGObject: `apt install libjavascriptcoregtk-4.1-0` (macOS uses the system framework)                                                                                                                                   |
-| `gi-jsc`    | Linux                                                          | the same engine through PyGObject (`apt install gir1.2-javascriptcoregtk-4.1 python3-gi`)                                                                                                                                                                           |
-| `node`      | anywhere with Node.js                                          | `node` on `PATH`                                                                                                                                                                                                                                                    |
-| `bun`       | anywhere with [Bun](https://bun.sh)                            | `bun` on `PATH`. It is JavaScriptCore (as in Safari and on iOS) in a runtime of its own, and runs the very script `node` does                                                                                                                                       |
+| `jsc`       | Linux, macOS                                                   | JavaScriptCore's C API through `ctypes`, no PyGObject: `apt install libjavascriptcoregtk-4.1-0` (macOS uses the system framework) |
+| `gi-jsc`    | Linux                                                          | the same engine through PyGObject (`apt install gir1.2-javascriptcoregtk-4.1 python3-gi`, or `pip install wasmhost[gi-jsc]`: see below) |
+| `node`      | anywhere with Node.js                                          | `node` on `PATH` |
+| `bun`       | anywhere with [Bun](https://bun.sh)                            | `bun` on `PATH`. It is JavaScriptCore (as in Safari and on iOS) in a runtime of its own, and runs the very script `node` does |
 
 With nothing configured, the first backend that starts wins, in the order shown: the native runtimes when they are installed, then the JavaScript engines. (On Pythonista nothing above `jscontext` can be installed, so it is the pick there; on a Mac that has rubicon-objc, `wasmtime` still comes first.) Each backend's constructor is its
 own probe: it fails when its runtime is missing. Choose one with `WASMHOST_BACKEND=<name>`,
@@ -264,15 +264,39 @@ Python side that provides imports; what runs the module is the backend.)
 
 Not every backend can do everything; `backend.supports(...)` says:
 
-|             | `memory.grow` from Python                                      | `table.length` | host functions (`imports`)                                | Global, Memory, Table on their own (`import.*`) | table get/set/grow (`table.funcs`) | `isolated`   |
-| ----------- | -------------------------------------------------------------- | -------------- | --------------------------------------------------------- | ----------------------------------------------- | ---------------------------------- | ------------ |
-| `wasmtime`  | yes                                                            | yes            | yes                                                       | yes                                             | yes                                | yes          |
-| `wasm3`     | no (`NotImplementedError`; a module's own `memory.grow` works) | no             | yes                                                       | no                                              | no                                 | yes (always) |
-| `jscontext` | yes                                                            | yes            | yes, through JavaScriptCore's C API (under either bridge) | yes                                             | yes                                | no           |
-| `jsc`       | yes                                                            | yes            | yes                                                       | yes                                             | yes                                | no           |
-| `gi-jsc`    | yes                                                            | yes            | no                                                        | yes                                             | yes                                | no           |
-| `node`      | yes                                                            | yes            | yes                                                       | yes                                             | yes                                | no           |
-| `bun`       | yes                                                            | yes            | yes                                                       | yes                                             | yes                                | no           |
+|             | `memory.grow` from Python                                      | `table.length` | host functions (`imports`)                                | Global, Memory, Table on their own (`import.*`) | table get/set/grow (`table.funcs`) | `isolated`   | `timeout`                          | `fuel` |
+| ----------- | -------------------------------------------------------------- | -------------- | --------------------------------------------------------- | ----------------------------------------------- | ---------------------------------- | ------------ | ---------------------------------- | ----- |
+| `wasmtime`  | yes                                                            | yes            | yes                                                       | yes                                             | yes                                | yes          | yes                                | yes |
+| `wasm3`     | no (`NotImplementedError`; a module's own `memory.grow` works) | no             | yes                                                       | no                                              | no                                 | yes (always) | yes (an instance that timed out is finished) | yes (a trap, the instance goes on) |
+| `jscontext` | yes                                                            | yes            | yes, through JavaScriptCore's C API (under either bridge) | yes                                             | yes                                | no           | no                                 | no |
+| `jsc`       | yes                                                            | yes            | yes                                                       | yes                                             | yes                                | no           | no                                 | no |
+| `gi-jsc`    | yes                                                            | yes            | no                                                        | yes                                             | yes                                | no           | no                                 | no |
+| `node`      | yes                                                            | yes            | yes                                                       | yes                                             | yes                                | no           | yes                                | no |
+| `bun`       | yes                                                            | yes            | yes                                                       | yes                                             | yes                                | no           | no (its wasm loop is not stopped)  | no |
+
+**`wasm3` has room for 128 live instances in a process.** Its guarded memory hands out slots of one arena, a module loaded takes
+one and a runtime freed gives it back, so the 129th instance alive at once is `RuntimeError: memory allocation failed` (measured,
+and the same whether the module has a memory or not). An `Instance` is in a reference cycle (it holds its exports, which hold it), so
+one is freed only when Python's cyclic collector gets to it: in a loop that makes many of them, on a build whose collector runs rarely
+(the free-threaded `3.14t` did, in CI), call `gc.collect()` now and then, or keep them few. The other backends have no such limit.
+
+**PyGObject for `gi-jsc`.** The simplest way is the system's own `python3-gi` (with `gir1.2-javascriptcoregtk-4.1`) and the system's Python, as
+CI does. To have it in a venv instead, `pip install "wasmhost[gi-jsc]"` (or `uv sync --extra gi-jsc`) builds PyGObject from source, so the system needs
+its development files first, and which ones depends on the PyGObject that gets built: **3.52 and later need `girepository-2.0`** (GLib 2.80+: Ubuntu 24.04
+and later), **3.50 and earlier need `girepository-1.0`**:
+
+```bash
+# Ubuntu 24.04 and later (PyGObject 3.52+, the default)
+sudo apt install libgirepository-2.0-dev gir1.2-javascriptcoregtk-4.1 libcairo2-dev pkg-config python3-dev build-essential
+
+# an older Ubuntu (22.04): the older development package, and keep PyGObject below 3.52
+sudo apt install libgirepository1.0-dev gir1.2-javascriptcoregtk-4.1 libcairo2-dev pkg-config python3-dev build-essential
+pip install "wasmhost[gi-jsc]" "pygobject<3.52"
+```
+
+The build stops with `Dependency 'girepository-2.0' is required but not found` when only the older package is there (seen on Ubuntu 26.04, where
+`libgirepository1.0-dev` alone was not enough for PyGObject 3.58). The backend asks for the `4.1` typelib of JavaScriptCore, so on a system that only
+has `4.0` it does not start: use `jsc`, which needs no PyGObject. The Ubuntu 22.04 line was not tried here.
 
 **No JIT on iOS.** In Pythonista (and any app that is not Safari) JavaScriptCore runs WebAssembly without its JIT, so `jscontext` there is
 an interpreter: `python -m wasmhost bench` shows a loop several times slower than `jsc` on a desktop and close to `jsc --no-jit`.
@@ -283,6 +307,54 @@ on iOS; the cost of a call from Python is the same either way (the bridge domina
 (2.9.6 and 2.9.7 tried) panics ("Deno has panicked", `capacity overflow`) when a `WebAssembly.Exception` leaves
 `vm.runInContext`, which is what a module that throws an exception of a tag the caller does not catch does there. Node
 and Bun are the same V8 and JavaScriptCore without this. It is an upstream bug; see `BACKLOG.md` (B-701b).
+
+## Limits for untrusted code
+
+Three limits, each an extension outside the JavaScript API except the first road of the memory ceiling.
+What an engine can't do is a `NotImplementedError` (`backend.supports("timeout")`, `supports("fuel")`), never a silent no-op.
+
+| Backend                       | Memory ceiling | `timeout` | `fuel` |
+| ----------------------------- | -------------- | --------- | ------ |
+| `wasmtime`                    | yes            | yes       | yes    |
+| `wasm3`                       | yes            | yes       | yes    |
+| `node`                        | yes            | yes       | no     |
+| `bun`                         | yes            | no        | no     |
+| `jsc`, `gi-jsc`, `jscontext`  | yes            | no        | no     |
+
+So **on iOS (`jscontext`) only the memory ceiling exists**: do not run untrusted code there expecting a time limit.
+
+**Memory.** `memory.grow` past the ceiling answers `-1` and nothing else changes. A module that *imports* its memory
+(Emscripten `IMPORTED_MEMORY`, `wasm-ld --import-memory`) is held as in JavaScript: give it `Memory(initial, maximum)` (not on
+`wasm3`, which has no imported memory). A memory the module makes itself, with no maximum, is held by
+`Instance(module, max_memory=pages)` (also in `instantiate` and `instantiate_sync`): the maximum is written into a copy of the
+module, so it works the same on every engine, and the copy for a given ceiling is compiled once and kept.
+
+**Time.** `Instance(module, timeout=seconds)` ends a call that runs longer with a `Timeout` (a `Trap`). It is wall-clock time,
+per call (a batch is one call; the start function and host functions are under it too).
+
+- `wasmtime`: by epochs. The instance gets an engine that counts them, a tight loop runs about 3 times slower, and it lives in a
+  store of its own, so it can't share a `Memory`, `Table` or `Global` made outside it. The instance can be called again.
+- `node`: `vm`'s timeout. A `Timeout` in a batch drops the results of the steps before it. The instance can be called again.
+- `wasm3`: no thread can stop a call (it holds the GIL), so the call is cut into slices of gas (about 5 ms of a tight loop, about
+  8% cost) and the clock is looked at between them, using pywasm3's suspendable runs. A paused call can't be cancelled, so
+  **an instance that timed out is finished: every later call is a `Trap` that says so** (other instances, and a new one from the
+  same module, are fine).
+- `bun` (its `vm` timeout leaves a wasm loop running) and the JavaScriptCore ones (a script's time limit does not reach a wasm
+  loop, checked with `JSContextGroupSetExecutionTimeLimit`): not possible.
+
+**Fuel.** `Instance(module, fuel=n)` ends a call that uses more than `n` units with an `OutOfFuel` (a `Trap`). It is
+deterministic, the same on every machine, and needs no thread. The unit is the engine's own (a turn of a tight loop is 8 on
+`wasmtime`, under 0.1 on `wasm3`), so a number does not carry from one engine to the other. Each call starts with the whole
+budget (a batch is one call; a call from a host function shares the outer one).
+
+- `wasmtime`: `consume_fuel`. The instance gets an engine that counts fuel (a tight loop about 2.4 times slower) and a store of
+  its own, like a timed one.
+- `wasm3`: pywasm3's gas. A clean trap, and the instance goes on; with a `timeout` too it can't (the call is in slices), as after a
+  `Timeout`.
+- Node, Bun and the JavaScriptCore engines have nothing to count with.
+
+`timeout` and `fuel` can be given together; whichever runs out first ends the call (on `wasmtime` that instance pays for both
+engines, about 5 times slower on a tight loop).
 
 ## Try it on a device
 
@@ -317,9 +389,11 @@ out of memory (MB/s) and the engine itself (a recursive
 | Pythonista 3, Python 3.10.4, iPhone 16 (iPhone17,3), iOS 26 (Darwin 25.6) | `jscontext` (`objc_util`) | **28/28**, bytes `via C API`, host functions, both encodings of WebAssembly exceptions (`try_table` and `try`/`catch`) (wasmhost 0.0.3b2) | 40 / 85 us            |
 | Pythonista 3, Python 3.10.4, iPhone 16 (iPhone17,3), iOS 26 (Darwin 25.6) | `jscontext` (`objc_util`) | **35/35**, bytes `via C API`, both encodings of exceptions, functions and signatures, async, threads (wasmhost 0.0.4.dev64)               | 68 / 156 us           |
 | Pythonista 3, Python 3.10.4, iPhone 16 (iPhone17,3), iOS 26 (Darwin 25.6) | `jscontext` (`objc_util`) | **36/36**, a 1 MiB buffer moves at 5400 MB/s in and 12700 MB/s out (a typed array through the C API; through hex it was about 40) (wasmhost 0.0.4.dev84) | 36 / 84 us |
+| Pythonista 3, Python 3.10.4, iPhone 16 (iPhone17,3), iOS 26 (Darwin 25.6) | `jscontext` (`objc_util`) | **38/38**, a memory held by the maximum of an imported `Memory` and by `Instance(max_memory=)` (wasmhost 0.1.0b2.dev3)                       | 36 / 83 us            |
 | PythonIDE, Python 3.14.7, `ios-13.0-arm64-iphoneos`                       | `jscontext` (`objc_util`) | **25/25**, bytes `via C API`, host functions (wasmhost 0.0.2b1)                                                                           | 39 / 77 us            |
 | Linux, CPython 3.14t                                                      | `jsc`                     | 35/35                                                                                                                                     | 32 / 102 us           |
 | Linux, CPython 3.14t                                                      | `gi-jsc`                  | 27/27 (host functions: not available, as documented)                                                                                      | 35 / 62 us            |
+| Ubuntu 26.04, CPython 3.10.20, PyGObject 3.58.0 (`pip`, built from source) | `gi-jsc`                  | **38/38** (host functions: not available, as documented)                                                                                  | 32 / 74 us            |
 | Linux, CPython 3.14t                                                      | `node`                    | 35/35                                                                                                                                     | 82 / 340 us           |
 | Linux, CPython 3.11, Bun 1.4.2                                            | `bun`                     | 35/35                                                                                                                                     | 133 / 287 us          |
 | Linux, CPython 3.14t                                                      | `wasmtime`                | 29/29                                                                                                                                     | 66 / 212 us           |
@@ -354,7 +428,8 @@ which it is meant to be done.
 - **Memory is copied** on `read` and `write`. `Memory.view(offset, length)` gives the engine's own memory as a `memoryview`, with no copy, on `wasmtime` and `wasm3`
   (not on a JavaScript engine, whose memory lives in another place); it is released when the module may have run (a call, a batch, a `grow`), so it is
   for use at once. On a JavaScript engine the cost of moving a buffer is in the encoding, not the copy: see `wasmhost bench`.
-- **Limits on untrusted code**: no ceiling on memory other than a memory's own maximum, and no time or fuel limit.
+- **Limits on untrusted code** are only partly possible: a memory ceiling everywhere, a timeout and a fuel count only where the
+  engine can do it, and **none of the last two on iOS**. See "Limits for untrusted code" above.
 - **Threads.** A module built with `-pthread` (the WebAssembly threads proposal: a `shared` memory that the module
   imports, atomic instructions, threads made by the host as several instances of the module on one memory) does not
   run: `Memory(..., shared=True)` raises `NotImplementedError`, so it can not be given as an import. Build without
@@ -372,7 +447,7 @@ uv run pytest                            # every backend that starts here
 uv run pytest --wasm-backend node        # one backend: it must start, or the run stops with an error
 uv run pytest --wasm-backend bun         # needs `bun` on PATH
 uv run pytest --wasm-backend wasmtime    # or wasm3, or jsc (needs the JavaScriptCore library)
-uv run pytest --wasm-backend gi-jsc      # needs PyGObject: run it with a system-site-packages venv (see the CI job)
+uv run pytest --wasm-backend gi-jsc      # needs PyGObject: `uv sync --extra gi-jsc` after the packages above, or a system-site-packages venv (the CI job)
 uv run pyright && uv run ruff check
 ```
 

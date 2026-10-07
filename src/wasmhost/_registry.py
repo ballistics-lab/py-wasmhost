@@ -33,7 +33,9 @@ JS_BACKENDS: Final[dict[str, type[JSBackend]]] = {
 # Tried in this order when nothing is chosen: the in-process runtimes when installed -- wasmtime (a JIT), wasm3
 # (an interpreter) -- then the JavaScript engines: JSContext (iOS; also a Mac with rubicon-objc, where the native
 # runtimes above win), JavaScriptCore through its C API, through PyGObject, then Node, then Bun. On Pythonista
-# nothing above JSContext can be installed, so it is the pick there. Each constructor is its own availability
+# nothing above JSContext can be installed, so it is the pick there. Note that iOS gives it no JIT for wasm: for pure
+# computation `wasm3` would be several times faster, but a C extension can't be installed there (see `wasmhost bench`).
+# Each constructor is its own availability
 # probe: it raises when its runtime isn't there (ImportError for objc_util/wasmtime/gi, a missing `node` or `bun`
 # binary, an engine without WebAssembly), so "available" means "could actually start".
 AUTO_ORDER: Final[tuple[str, ...]] = ("wasmtime", "wasm3", "jscontext", "jsc", "gi-jsc", "node", "bun")
