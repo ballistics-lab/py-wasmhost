@@ -148,10 +148,8 @@ def run(host_args: Sequence[str], path: str, program_args: Sequence[str]) -> int
     try:
         wasm = Path(path).read_bytes()
     except OSError as exc:
-        print(  # the text of `wasmtime`
-            f'Error: failed to open wasm module "{path}"\n\nCaused by:\n    {exc.strerror or exc} (os error {exc.errno})',
-            file=sys.stderr,
-        )
+        cause = f"{exc.strerror or exc} (os error {exc.errno})"
+        print(f'Error: failed to open wasm module "{path}"\n\nCaused by:\n    {cause}', file=sys.stderr)  # as wasmtime
         return 1
     options: dict[str, Any] = {
         key: value
