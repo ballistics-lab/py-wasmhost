@@ -57,7 +57,7 @@ What the host answers is the 27 WASI calls the module imports (arguments, enviro
 `__host_dup` and `__host_dup2`, are what let it have pipes and redirections without `fork`. All of it is in `Wasi`.
 
 The build uses WebAssembly exception handling (for `setjmp`), so the engine must take it. Tried here: wasmtime, Node,
-Bun, JavaScriptCore (`jsc`) and wasm3. `python -m wasmhost` is the self-test that says what an engine takes.
+Bun, JavaScriptCore (`jsc`) and wasm3. `python -m wasmhost self test` is the self-test that says what an engine takes.
 
 At the prompt the shell asks for each line when it wants one and the host answers with `input()`, which is all the
 console of Pythonista (not a terminal, no `select`) allows. The shell prints its own prompts (`$ ` and `> `); it also

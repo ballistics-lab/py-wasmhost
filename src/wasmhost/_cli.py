@@ -47,7 +47,13 @@ def add_version_command(subparser: _SubparsersLike) -> None:
 
 
 def build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(prog="python -m wasmhost", description="WebAssembly from Python.")
+    parser = argparse.ArgumentParser(
+        prog="python -m wasmhost",
+        description=(
+            "Run WebAssembly from Python with the JavaScript WebAssembly API, "
+            "on JavaScriptCore, Node, Bun, wasmtime or wasm3."
+        ),
+    )
     parser.add_argument("-V", "--version", action="version", version=_VERSION)
 
     commands = parser.add_subparsers(dest="command", metavar="COMMAND")

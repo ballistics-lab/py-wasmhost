@@ -1,4 +1,4 @@
-"""A self-test to run on the device: `python -m wasmhost selftest`, or `wasmhost.selftest()` from a console.
+"""A self-test to run on the device: `python -m wasmhost self test`, or `wasmhost.selftest()` from a console.
 
 Made for Pythonista (or any iOS Python app), where nothing else can be run to see whether wasmhost works: it
 walks through the things that could go wrong there -- the Objective-C bridge, `WebAssembly` and `BigInt` in the
