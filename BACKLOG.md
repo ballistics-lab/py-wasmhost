@@ -53,8 +53,7 @@ the feature itself:
 ## Current state (2026-10-07, written as a handoff to the next session)
 
 **Where things are.** Branch `claude/kind-goldberg-3dsi27`, the one to work in (it started from `main` at `599e2e8`: PR #10 "Limits for untrusted code" and the tag `v0.1.0b2`). Never create a PR or rename the branch: the owner does.
-Look at CI of the newest commit first (`git log`). At `c06ac9e` (run 132) `Tests` was green on every job but `macos-latest / pypy3.11`, the known flake below; run 133 (`5e265fb`, the rename to `wasmhost.wasi.preview1`) had not finished when this was
-written. `Pre-commit` has been green in CI since `d823812` (it was red on every push because `ruff format` kept changing `examples/jitcheck.py`; fixed). Locally `pre-commit` runs pyright, ruff and the whole `pytest` (wasmtime, wasm3, node, bun
+Look at CI of the newest commit first (`git log`). `Tests` at `5e265fb` (run 133, the rename to `wasmhost.wasi.preview1`) was green on every job; at `c06ac9e` (run 132) and `6f782dc` (run 131) it was red only on `macos-latest / pypy3.11`, the known flake below. `Pre-commit` has been green in CI since `d823812` (it was red on every push because `ruff format` kept changing `examples/jitcheck.py`; fixed). Locally `pre-commit` runs pyright, ruff and the whole `pytest` (wasmtime, wasm3, node, bun
 here; `jsc`, `gi-jsc` and `jscontext` only in CI); on Python 3.15.0rc3 the whole suite passes too (906 passed, 166 skipped). The self-test has 35 steps on wasmtime and wasm3 and 41 on the JS engines.
 
 **Done in this branch (phases 1 to 5, in part).**
@@ -75,7 +74,7 @@ steps fail; cause unknown, the owner suspects iSH's i386 emulator and will look 
 **To do first, if the owner has not said otherwise:**
 1. A wheel for the device after the rename (`git fetch --tags`, then `uv build --wheel`; the version comes from git tags) and a re-run of `wasmhost self test`: 41/41 expected on `jscontext` (timeout and fuel say "not available"). Add rows to README when
    the owner reports. Check the wheel has `wasmhost/wasi/preview1.py`: `pyproject.toml` lists the packages by hand (`wasmhost`, `wasmhost.wasi`), a new subpackage has to be added there.
-2. The CI of the newest commit, and the macOS/PyPy flake (below): it has now come back three times in seven runs on this branch, so "seen once" is out of date; the owner chose to treat it as a flake, but it may be worth the guesses in its entry.
+2. The CI of the newest commit, and the macOS/PyPy flake (below): it has now come back three times in the ten runs 124 to 133 on this branch, so "seen once" is out of date; the owner chose to treat it as a flake, but it may be worth the guesses in its entry.
 3. The first CI run after Python 3.15 is released (the matrix is unpinned).
 4. B-405 when upstream merges pywasm3's two PRs (#13, #14); B-406 is closed (option b: leave it, documented).
 5. Then the owner picks: B-203 (`externref`), a binary channel for node/bun (about 50 MB/s through the pipe and JSON now), B-006 (CI for examples), or the rest of phase 5 (B-503 `openat` sandbox, B-504 preopens and read-only, B-505 tests on all
@@ -614,9 +613,9 @@ shared memory, memory64 (and GC), each with `supports(...)`.
     and 2 whole-suite runs under `--wasm-backend wasmtime` all passed. That says only that it does not show there; macOS, arm64
     and PyPy 3.11 were not tried.
   - If it comes back: re-run the job once; a second failure is a real one. Then try the guesses above on a macOS runner.
-  - **It came back (2026-10-07, branch `claude/kind-goldberg-3dsi27`): three times in seven runs.** Run 124 (`b774846`): the steps `wasmtime` and `jsc` failed; the segfault shown is in the `jsc` step, in `tests/test_coreutils_example.py::
+  - **It came back (2026-10-07, branch `claude/kind-goldberg-3dsi27`): three times in the ten runs 124 to 133.** Run 124 (`b774846`): the steps `wasmtime` and `jsc` failed; the segfault shown is in the `jsc` step, in `tests/test_coreutils_example.py::
     test_lua_runs_as_a_program_of_the_shell[jsc]`, in the ctypes call `JSValueToStringCopy` (`_capi.py`, `_text`, called from `evaluate`, here from a host function: `fd_write`). Run 131 (`6f782dc`) and run 132 (`c06ac9e`): the same job
-    failed; for 132 the failing step is `pytest --wasm-backend wasmtime` (what the log's tail shows is the last step, which passed with 419 passed). The same job was green in runs 125, 127 and 130. None of the three commits touched the code on that
+    failed; for 132 the failing step is `pytest --wasm-backend wasmtime` (what the log's tail shows is the last step, which passed with 419 passed). The same job was green in the other runs (125, 127, 130 and 133 among them). None of the three commits touched the code on that
     path. So "seen once" is out of date. The step output of the failed `wasmtime` step was not read (the tool gives only the tail of a log): reading it is the first thing to do.
 
 ## General definition of done
