@@ -899,7 +899,12 @@ DESCRIPTION = "Check that wasmhost works here."
 
 
 def add_arguments(parser: argparse.ArgumentParser) -> None:
-    parser.add_argument("--backend", choices=sorted(BACKENDS), help="one backend (default: the first that starts)")
+    parser.add_argument(
+        "--backend",
+        "--runtime",
+        choices=sorted(BACKENDS),
+        help="one backend (default: $WASMHOST_BACKEND, else the first that starts)",
+    )
     parser.add_argument("--all", action="store_true", help="every backend that starts here")
 
 

@@ -280,7 +280,7 @@ fallback if the C API ever fails. The self-test reports which was used (`N bytes
 | `bun`       | anywhere with [Bun](https://bun.sh)                            | `bun` on `PATH`. It is JavaScriptCore (as in Safari and on iOS) in a runtime of its own, and runs the very script `node` does |
 
 With nothing configured, the first backend that starts wins, in the order shown: the native runtimes when they are installed, then the JavaScript engines. (On Pythonista nothing above `jscontext` can be installed, so it is the pick there; on a Mac that has rubicon-objc, `wasmtime` still comes first.) Each backend's constructor is its
-own probe: it fails when its runtime is missing. Choose one with `WASMHOST_BACKEND=<name>`,
+own probe: it fails when its runtime is missing. Choose one with `WASMHOST_BACKEND=<name>` (or `--runtime <name>`, the same as `--backend <name>`, in `run`, `bench` and `self test`; the option wins over the variable),
 `wasmhost.set_backend("<name>")` or `Module(..., backend="<name>")`; `wasmhost.get_backend().name` says which is in
 use. `wasmhost.close()` closes the backends it started. (In WebAssembly's words the *host* is the embedder, the
 Python side that provides imports; what runs the module is the backend.)

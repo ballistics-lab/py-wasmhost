@@ -22,7 +22,9 @@ from . import BACKENDS, Instance, Module, Trap, WasmError, get_backend, set_back
 from .wasi.preview1 import WasiExit, Wasip1
 
 # The options that take a value: the command line is split before argparse sees it, to find the module.
-VALUE_OPTIONS = frozenset({"--argv0", "--backend", "--dir", "--env", "--invoke", "--max-memory", "--timeout", "--fuel"})
+VALUE_OPTIONS = frozenset(
+    {"--argv0", "--backend", "--runtime", "--dir", "--env", "--invoke", "--max-memory", "--timeout", "--fuel"}
+)
 INFO_OPTIONS = frozenset({"-h", "--help"})
 TRAP_EXIT = 3 if os.name == "nt" else 134  # what wasmtime exits with on a trap (abort(): SIGABRT, or 3 on Windows)
 
@@ -51,7 +53,12 @@ def build_parser() -> argparse.ArgumentParser:
         usage="wasmhost run [OPTIONS] MODULE.wasm [-- PROGRAM ARGUMENTS]",
         description="Run a WebAssembly module: a WASI command (_start), or one exported function with --invoke.",
     )
-    parser.add_argument("--backend", choices=sorted(BACKENDS), help="the backend (default: the first that starts)")
+    parser.add_argument(
+        "--backend",
+        "--runtime",
+        choices=sorted(BACKENDS),
+        help="the backend (default: $WASMHOST_BACKEND, else the first that starts)",
+    )
     parser.add_argument(
         "--dir", action="append", default=[], metavar="HOST[::GUEST]", help="preopen a directory (GUEST is its name)"
     )

@@ -134,3 +134,19 @@ def test_arguments_are_read_as_wasmtime_reads_them() -> None:
     for kind, text in (("i32", "2147483648"), ("i32", "0xffffffff"), ("i64", "9223372036854775808")):
         with pytest.raises(ValueError, match="too large"):
             _run.parse_value(kind, text)
+
+
+def test_runtime_is_the_backend_option_and_the_environment_variable(
+    capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch, session: str, arith: str
+) -> None:
+    """`--runtime NAME` is `--backend NAME` is `WASMHOST_BACKEND=NAME` (in `run`, `bench`, `self test`); the option wins."""
+    assert _cli.main(["run", "--runtime", session, "--invoke", "add", arith, "2", "3"]) == 0
+    assert capsys.readouterr().out == "5\n"
+    monkeypatch.setenv("WASMHOST_BACKEND", session)
+    assert _cli.main(["run", "--invoke", "add", arith, "2", "3"]) == 0  # no option: the variable
+    assert capsys.readouterr().out == "5\n"
+    monkeypatch.setenv("WASMHOST_BACKEND", "no-such-backend")
+    assert _cli.main(["run", "--runtime", session, "--invoke", "add", arith, "2", "3"]) == 0  # the option wins
+    assert capsys.readouterr().out == "5\n"
+    for line in (["bench", "--runtime", session], ["self", "test", "--runtime", session]):
+        assert _cli.build_parser().parse_args(line).backend == session
