@@ -678,9 +678,9 @@ def poll(host: Host, *subs: bytes) -> list[tuple[int, ...]]:
 def test_poll_a_clock_sleeps(host: Host) -> None:
     import time
 
-    started = time.monotonic()
-    events = poll(host, sub_clock(42, 30_000_000))
-    assert time.monotonic() - started >= 0.025
+    started = time.perf_counter()  # not time.monotonic: on Windows its tick is 15.6 ms, a 30 ms sleep can read as 16
+    events = poll(host, sub_clock(42, 50_000_000))
+    assert time.perf_counter() - started >= 0.02  # it waited, and did not come back at once
     assert events == [(42, 0, 0, 0, 0)]
 
 
@@ -856,9 +856,9 @@ def poll_old(host: Host, *subs: bytes) -> list[tuple[int, ...]]:
 def test_subscriptions_are_56_bytes_in_the_first_snapshot(old: Host) -> None:
     import time
 
-    started = time.monotonic()
-    assert poll_old(old, sub_clock_old(42, 30_000_000)) == [(42, 0, 0, 0, 0)]
-    assert time.monotonic() - started >= 0.025
+    started = time.perf_counter()
+    assert poll_old(old, sub_clock_old(42, 50_000_000)) == [(42, 0, 0, 0, 0)]
+    assert time.perf_counter() - started >= 0.02
     # the second subscription is found only if the stride is 56
     events = poll_old(old, sub_clock_old(1, 5_000_000_000), sub_fd_old(2, 2, 1))
     assert events == [(2, 0, 2, 0, 0)]
