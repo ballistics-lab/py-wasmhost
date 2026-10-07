@@ -308,6 +308,54 @@ on iOS; the cost of a call from Python is the same either way (the bridge domina
 `vm.runInContext`, which is what a module that throws an exception of a tag the caller does not catch does there. Node
 and Bun are the same V8 and JavaScriptCore without this. It is an upstream bug; see `BACKLOG.md` (B-701b).
 
+## Limits for untrusted code
+
+Three limits, each an extension outside the JavaScript API except the first road of the memory ceiling.
+What an engine can't do is a `NotImplementedError` (`backend.supports("timeout")`, `supports("fuel")`), never a silent no-op.
+
+| Backend                       | Memory ceiling | `timeout` | `fuel` |
+| ----------------------------- | -------------- | --------- | ------ |
+| `wasmtime`                    | yes            | yes       | yes    |
+| `wasm3`                       | yes            | yes       | yes    |
+| `node`                        | yes            | yes       | no     |
+| `bun`                         | yes            | no        | no     |
+| `jsc`, `gi-jsc`, `jscontext`  | yes            | no        | no     |
+
+So **on iOS (`jscontext`) only the memory ceiling exists**: do not run untrusted code there expecting a time limit.
+
+**Memory.** `memory.grow` past the ceiling answers `-1` and nothing else changes. A module that *imports* its memory
+(Emscripten `IMPORTED_MEMORY`, `wasm-ld --import-memory`) is held as in JavaScript: give it `Memory(initial, maximum)` (not on
+`wasm3`, which has no imported memory). A memory the module makes itself, with no maximum, is held by
+`Instance(module, max_memory=pages)` (also in `instantiate` and `instantiate_sync`): the maximum is written into a copy of the
+module, so it works the same on every engine, and the copy for a given ceiling is compiled once and kept.
+
+**Time.** `Instance(module, timeout=seconds)` ends a call that runs longer with a `Timeout` (a `Trap`). It is wall-clock time,
+per call (a batch is one call; the start function and host functions are under it too).
+
+- `wasmtime`: by epochs. The instance gets an engine that counts them, a tight loop runs about 3 times slower, and it lives in a
+  store of its own, so it can't share a `Memory`, `Table` or `Global` made outside it. The instance can be called again.
+- `node`: `vm`'s timeout. A `Timeout` in a batch drops the results of the steps before it. The instance can be called again.
+- `wasm3`: no thread can stop a call (it holds the GIL), so the call is cut into slices of gas (about 5 ms of a tight loop, about
+  8% cost) and the clock is looked at between them, using pywasm3's suspendable runs. A paused call can't be cancelled, so
+  **an instance that timed out is finished: every later call is a `Trap` that says so** (other instances, and a new one from the
+  same module, are fine).
+- `bun` (its `vm` timeout leaves a wasm loop running) and the JavaScriptCore ones (a script's time limit does not reach a wasm
+  loop, checked with `JSContextGroupSetExecutionTimeLimit`): not possible.
+
+**Fuel.** `Instance(module, fuel=n)` ends a call that uses more than `n` units with an `OutOfFuel` (a `Trap`). It is
+deterministic, the same on every machine, and needs no thread. The unit is the engine's own (a turn of a tight loop is 8 on
+`wasmtime`, under 0.1 on `wasm3`), so a number does not carry from one engine to the other. Each call starts with the whole
+budget (a batch is one call; a call from a host function shares the outer one).
+
+- `wasmtime`: `consume_fuel`. The instance gets an engine that counts fuel (a tight loop about 2.4 times slower) and a store of
+  its own, like a timed one.
+- `wasm3`: pywasm3's gas. A clean trap, and the instance goes on; with a `timeout` too it can't (the call is in slices), as after a
+  `Timeout`.
+- Node, Bun and the JavaScriptCore engines have nothing to count with.
+
+`timeout` and `fuel` can be given together; whichever runs out first ends the call (on `wasmtime` that instance pays for both
+engines, about 5 times slower on a tight loop).
+
 ## Try it on a device
 
 The package carries a self-test, since nothing else can be run in Pythonista/Python IDE to see whether this works there:
@@ -380,31 +428,8 @@ which it is meant to be done.
 - **Memory is copied** on `read` and `write`. `Memory.view(offset, length)` gives the engine's own memory as a `memoryview`, with no copy, on `wasmtime` and `wasm3`
   (not on a JavaScript engine, whose memory lives in another place); it is released when the module may have run (a call, a batch, a `grow`), so it is
   for use at once. On a JavaScript engine the cost of moving a buffer is in the encoding, not the copy: see `wasmhost bench`.
-- **Limits on untrusted code.** Memory has a ceiling, by two roads. A module that *imports* its memory (Emscripten
-  `IMPORTED_MEMORY`, `wasm-ld --import-memory`) is held as in JavaScript: give it `Memory(initial, maximum)`. A memory the
-  module makes itself, with no maximum, is held by `Instance(module, max_memory=pages)` (also in `instantiate` and
-  `instantiate_sync`), which is not in the JavaScript API: the maximum is written into a copy of the module, so it works the
-  same on every engine, and the copy for a given ceiling is compiled once and kept. Either way `memory.grow` past the ceiling
-  answers `-1` and nothing else changes (on `wasm3`, which has no imported memory, only the second road).
-  Time has a limit where the engine can stop a loop: `Instance(module, timeout=seconds)` ends a call that runs longer with a
-  `Timeout` (a `Trap`; the instance can be called again, except on `wasm3`), in `wasmtime` (by epochs: that instance is made for an
-  engine that counts them, runs a tight loop about three times slower, and lives in a store of its own, so it can not share a
-  `Memory`, `Table` or `Global` made outside it), `node` (`vm`'s timeout; a `Timeout` in a batch drops the results of the steps
-  before it) and `wasm3`. On `wasm3` no thread can stop a call (it holds the GIL), so the call is cut into slices of gas (about
-  5 ms of a tight loop, which cost about 8%) and the clock is looked at between them, using pywasm3's suspendable runs; but a call that
-  paused can't be cancelled, so **an instance that timed out is finished: every later call is a `Trap` that says so** (other
-  instances, and a new one from the same module, are fine). It is wall-clock time, per call (a batch is one call; the start function is
-  under it too, on `wasm3` at the first call), host functions included. **Where the engine can't, `Instance(timeout=)` is a
-  `NotImplementedError`** (`backend.supports("timeout")`): the JavaScriptCore ones (`jscontext`, `jsc`, `gi-jsc`: a script's time limit
-  does not reach a wasm loop, checked with `JSContextGroupSetExecutionTimeLimit`) and `bun` (its `vm` timeout leaves a wasm loop
-  running). So on iOS there is no time limit: do not run untrusted code there expecting one.
-  Work has a limit too, where the engine can count it: `Instance(module, fuel=n)` ends a call that uses more than `n` units with an
-  `OutOfFuel` (a `Trap`) in `wasmtime` (`consume_fuel`: that instance gets an engine that counts fuel, a tight loop about 2.4 times slower,
-  and a store of its own, like a timed one) and `wasm3` (pywasm3's gas: a trap, and the instance goes on; it can't when it also has a
-  `timeout`, which cuts the call into slices). The unit is the engine's own (a turn of a tight loop is 8 on `wasmtime` and under 0.1 on
-  `wasm3`), so a number does not carry from one to the other; it is deterministic, and the same on every machine. Each call starts with the
-  whole budget (a batch is one call, and a call from a host function shares the outer one). It can be given with a `timeout`, and
-  whichever runs out first ends the call. Node, Bun and the JavaScriptCore engines can't count: `NotImplementedError`, as on iOS.
+- **Limits on untrusted code** are only partly possible: a memory ceiling everywhere, a timeout and a fuel count only where the
+  engine can do it, and **none of the last two on iOS**. See "Limits for untrusted code" above.
 - **Threads.** A module built with `-pthread` (the WebAssembly threads proposal: a `shared` memory that the module
   imports, atomic instructions, threads made by the host as several instances of the module on one memory) does not
   run: `Memory(..., shared=True)` raises `NotImplementedError`, so it can not be given as an import. Build without

@@ -4,7 +4,7 @@ A phased plan. The phases are ordered from what is cheap and needed by other ite
 Marks: `[x]` done, `[ ]` not done, `[~]` partly done. Size: **S** (up to a day), **M** (a few days),
 **L** (a week or more). "Backends" says where this can actually be done; the rest honestly report `supports(...) == False`.
 
-The state on `main` (commit `260f11c`) was checked against the code and `git log`. Whatever lies outside this repository was not checked here
+The state of the branch `claude/loving-hawking-u966j0` (2026-10-07) was checked against the code and `git log`. Whatever lies outside this repository was not checked here
 and is marked "not verified"; the only exception: `tiny-bclibc-wasm` was verified and it works (the owner confirmed this).
 
 ## Rule: the self-test ships together with the feature
@@ -52,47 +52,32 @@ the feature itself:
 
 ## Current state (2026-10-07; `examples/zigcc` was merged into `main` by the owner and deleted, work goes on in `claude/loving-hawking-u966j0`)
 
-**Done in the branch and verified** (pre-commit is green; the full `pytest` passes on wasmtime, jsc, node, bun, wasm3; CI is green on all platforms;
-the self-test has 34 steps on wasmtime/wasm3 and 40 on the JS engines): B-201 (steps 1-4: `Function`, `signature`, `type()`, identity, `elem`, the
-safety net through `call_indirect`), B-202 (the initial value of a table), B-204 (multi-value in a batch), B-301 (`Memory.view`), B-302 (`bench`
-with buffer transfer), B-304 (a lock per backend, `await compile/instantiate`, threads only with `threaded=True`), B-507 (the `wasmhost` command),
-B-509 (`wasi_sh.py`, `--home`), fast buffers (a typed array through the C API on jsc/jscontext, base64 on node/bun), Bun as a backend in CI, tests for
-`pyodide.py` and `wasi_sh.py`. **Verified by the owner on the device (Pythonista, iPhone 16, iOS 26, `jscontext`):** self-test 36/36 (38/38 after B-401, see there), buffers intact
-from 1 byte to 8 MiB at 5400/12700 MB/s (1 MiB write/read), `await compile/instantiate`, multi-value in a batch, `wasi_sh --home`, `bench`.
+**Done in the branch and verified** (pre-commit is green; the full `pytest` passes on wasmtime, jsc, node, bun, wasm3; CI is green on all platforms; the
+self-test has 34 steps on wasmtime/wasm3 and 40 on the JS engines): phases 1 to 4 except what is listed as open below. In short: B-201 (`Function`, `signature`,
+`type()`, identity, `elem`, the safety net through `call_indirect`), B-202, B-204, B-301 (`Memory.view`), B-302 (`bench`), B-304 (a lock per backend, `await
+compile/instantiate`, threads only with `threaded=True`), B-507, B-509, fast buffers (a typed array through the C API on jsc/jscontext, base64 on node/bun), Bun in CI,
+and **phase 4, limits for untrusted code: B-401 (memory ceiling), B-402/B-403 (timeout), B-404 (fuel)**; the README has them in one section, "Limits for untrusted
+code". **Verified by the owner on the device (Pythonista, iPhone 16, iOS 26, `jscontext`):** self-test 38/38 (before the fuel step; 40 expected now: a device re-run is
+pending), buffers intact from 1 byte to 8 MiB at 5400/12700 MB/s (1 MiB write/read), `await compile/instantiate`, multi-value in a batch, `wasi_sh --home`, `bench`.
 
-**Deferred by owner decision:** B-304a (examples on asyncio; the shape of the `pyodide.py` API is not settled: add `async` methods alongside (the
-proposal) or convert it fully), WASI in the library itself (phase 5), Deno (B-701b: a bug in Deno itself).
+**Deferred by owner decision:** B-304a (examples on asyncio; the shape of the `pyodide.py` API is not settled), WASI in the library itself (phase 5), Deno (B-701b: a bug in Deno itself).
 
-**Waiting for the owner before the PR:** the branch name and tidying (B-003), the release (B-801); `coreutils.wasm` stays in git (B-004, owner
-decision, the history has two copies, about 21 MB: a squash would leave one); `tiny-bclibc-wasm` (B-803).
+**Waiting for the owner or upstream:** the branch name and tidying (B-003), the release (B-801); `coreutils.wasm` stays in git (B-004, owner decision, the history has two
+copies, about 21 MB: a squash would leave one); `tiny-bclibc-wasm` (B-803); B-405 (re-pin pywasm3 after its two open PRs are merged); B-406 (whether to break the `Instance`
+reference cycle in the library: wasm3 has 128 runtime slots per process).
 
-**Not covered by tests:** `examples/wasmclang.py`, `jslinux.py` (unavailable in the assistant's environment: `bellard.org` is blocked), `coremark.py`;
-the "Examples" step in CI runs only `basic.py` and `imports.py` (B-006). B-302a is only partly done (see its entry).
+**Not covered by tests:** `examples/wasmclang.py`, `jslinux.py` (unavailable in the assistant's environment: `bellard.org` is blocked), `coremark.py`; the "Examples" step
+in CI runs only `basic.py` and `imports.py` (B-006). B-302a is only partly done (see its entry).
 
-**Next candidates:** B-203 (`externref`), a binary channel for node/bun (about 50 MB/s through the pipe and JSON now), phase 4 is done (B-401 the memory ceiling, B-402/B-403 the timeout and its tests, where an engine can: none on iOS); the fuel limit (wasmtime `consume_fuel`, wasm3 `gas_limit`) is B-404, done. Nothing open in phase 4. Fact (confirmed by the owner, matches the measurements): `jscontext` on iOS has **no JIT**, so for pure computation `wasm3` would be faster than
-JavaScriptCore there, but `pywasm3` cannot be installed on iOS (a C extension).
+**Next candidates:** B-203 (`externref`), a binary channel for node/bun (about 50 MB/s through the pipe and JSON now), B-303 (batch `read/write`). Phase 4 has nothing open
+except B-405/B-406 above. Fact (confirmed by the owner, matches the measurements): `jscontext` on iOS has **no JIT**, so for pure computation `wasm3` would be faster than
+JavaScriptCore there, but `pywasm3` cannot be installed on iOS (a C extension), and neither timeout nor fuel exists on iOS.
 
 ## Order of work
 
-Owner decision: everything is done in the current branch (the owner opens the PR and tidies the branch), and `B-304` (async) goes **after** `B-201`. Each step comes with tests, a step in the
-self-test and a green pre-commit; each is a separate commit.
-
-1. ✅ **B-201, step 1** (done; `tests/test_functions.py`, the `functions` step in the self-test): `Function` with `signature`, `type()`, a cache keyed by the function, `call_ref` in three backends,
-   `FuncRef` is removed, `Table.get/set` on `Function`, a call without a signature resolves it lazily.
-2. ✅ **B-201, step 2** (done, `CallStep` carries the handle, not the name): `Batch` on `handle`, a single call path.
-3. ✅ **B-201, step 3** (done: `ModuleInfo.elems`, `_learn_table_entries`, `tests/test_elem_signatures.py`; the offset through `global.get` of an imported global and the form with `ref.func` expressions are both covered, there is a step in the self-test; not covered: passive segments and `table.init`, where in principle only a manual `signature` works): a snapshot by function identity (auto-resolution by `elem` on the JS engines).
-4. ✅ **B-201, step 4** (done: `_trampoline.py`, `supports("table.signatures")` in wasmtime, the test `test_a_wrong_signature_is_refused_not_obeyed`, a step in the self-test; overhead: ~+12 µs on jsc, within noise on node/bun, because the trampoline caches the last function in the slot; the plan was: ① in `src/wasmhost/` a new `_trampoline.py` with a wasm generator: a module
-   that imports `env.t` (a `funcref` table, 1 slot) and exports `call(f)`, whose body is `call_indirect (type N)`; the type N is
-   the signature from `FuncType`, with a module cache keyed by `FuncType`; a prototype is in `tests/wasm_builder.py` (`tables`/`call_indirect`);
-   ② in `_api.py::Function.__call__`, when `self._instance is None` (a table entry, not an export) and `signature` is set, and
-   the backend lacks `supports("table.signatures")`: `scratch.set(0, self)` into a service table and a call of this trampoline's `call`;
-   the "signature mismatch" trap (`Trap`) is turned into `TypeError("функція не має підпису ...")`;
-   ③ exports and wasmtime stay direct calls; ④ `supports("table.signatures")` in `_native.py`/`_js.py`;
-   ⑤ tests: a function of another type in a slot with an annotation on jsc/node/bun, on wasmtime without the trampoline; a step in the self-test;
-   remove from the README the caveat about a wrong annotation.) It was: a safety net through `call_indirect` (a wasm generator, the type is checked by the engine).
-5. ✅ **B-304** (done, a thread only with `threaded=True`, no threads by default: `Backend._lock`; `compile`/`instantiate` as `async`, `instantiate_sync`, `supports("threads")` in wasmtime/node/bun, `tests/test_async.py`, a step in the self-test; source: async) (`async def compile/instantiate`, `instantiate_sync`, no races).
-6. ✅ **B-204** (a `Ref` tuple for multi-value in `Batch`), ✅ **B-507** (the `wasmhost` command), ✅ **B-509** (`examples/wasi_sh.py`).
-7. ✅ **B-202**, ✅ **B-301**, ✅ **B-302**. Next: B-203, phase 4 (restrictions for untrusted code).
+Owner decision: everything is done in the current branch (the owner opens the PR and tidies the branch). Each step comes with tests, a step in the
+self-test and a green pre-commit, and is a separate commit. Done so far, in order: B-201 (steps 1-4), B-304, B-204, B-507, B-509, B-202, B-301, B-302,
+then phase 4 (B-401 to B-404). The detail of each is in its own entry below. Open: B-203, B-303, B-304a, B-006, phases 5 and 6.
 
 ## Accepted API decisions
 
@@ -122,7 +107,7 @@ a clean API.
 - [x] The command line: `python -m wasmhost self test [--backend NAME] [--all]` as a subcommand,
       the first positional argument is left free for a module; without a command the help is printed (code 2). The module `_cli.py`.
 - [x] The self-test on the device was reconciled with `main` (steps for `Memory`, `Table`, `customSections`) — see B-005.
-- [~] Examples in the branch `examples/zigcc` (not in `main`): `wasmclang.py` (clang/lld in wasm, C and C++),
+- [~] Examples from the branch `examples/zigcc` (merged into `main` by the owner, the branch deleted): `wasmclang.py` (clang/lld in wasm, C and C++),
       `coreutils.py` (a shell over uutils coreutils and Lua with a WASI host in Python), `examples/wasm/coreutils.wasm`,
       `examples/wasm/lua.wasm`, the test `tests/test_coreutils_example.py`. The decision about a PR into `main` — see phase 0.
 
@@ -356,7 +341,7 @@ Done when: transferring a buffer of megabytes is not copied on wasmtime and wasm
       imports, max_memory=pages)`, also in `instantiate` and `instantiate_sync` (the owner chose `Instance`, not `Module`, and asked for a
       cache). `_binary.limit_memory` writes the ceiling into the memory section (no maximum gets it, a larger one is lowered, a smaller one stays;
       a module that starts above it is a `ValueError`; a custom page size is refused), so it is the same on every engine, `wasm3` included.
-      `Module` keeps its bytes and `Module._variant(pages, timed)` (it was `_held_to`) compiles the changed copy once per ceiling (a module that needs no change is the module
+      `Module` keeps its bytes and `Module._variant(pages, epochs, fuel)` (it was `_held_to`) compiles the changed copy once per ceiling (a module that needs no change is the module
       itself, nothing is compiled); `type()` of an exported memory says the maximum that holds. A memory the module imports is checked against the
       ceiling: no maximum, or a larger one, is a `LinkError`. Tests: `tests/test_max_memory.py`.
       Limits of this: only memories; no time or fuel (B-402); a bigger-than-needed ceiling costs nothing, but a module compiled with a custom page
@@ -366,7 +351,7 @@ Done when: transferring a buffer of megabytes is not copied on wasmtime and wasm
       A timeout: `Instance(module, imports, timeout=seconds)`, also `instantiate` and `instantiate_sync`; a call that runs longer ends with `wasmhost.Timeout`
       (a `Trap`), and the instance can be called again. Wall-clock time, per call (a batch is one call), the start function included.
       Measured before building (2026-10-07, Linux): **wasmtime** epochs stop a loop (0.30 s for 0.3 s asked) but a tight loop runs about 3 times slower (0.032 -> 0.105 s for
-      1e8 iterations), so the epoch engine is a second `Engine`, made only for instances that ask (`Backend.compile_timed`, `Module._variant`: the module is
+      1e8 iterations), so the epoch engine is a second `Engine`, made only for instances that ask (`Backend.compile_limited`, `Module._variant`: the module is
       compiled for it once and kept), and such an instance lives in a store of its own (it can't share a `Memory`, `Table` or `Global` made outside it); a daemon watchdog thread
       (`_Watchdog`) per backend, made when first needed, calls `increment_epoch`. **node**: `vm.runInContext(src, ctx, {timeout})` stops a wasm loop (0.33 s),
       the context is fine afterwards; the timeout goes with the request, and is kept for an instance, its exported functions and tables (and what is taken from them),
@@ -406,15 +391,11 @@ Done when: transferring a buffer of megabytes is not copied on wasmtime and wasm
       Not verified on macOS/Windows or a device by this item itself (CI will say); the wasmtime and wasm3 numbers are from one Linux machine.
       Checked on the way, 2026-10-07: pywasm3's `request_suspend()` from another thread can not work, whatever a note said: a call holds the GIL, a `threading.Timer` never ran in 10 s, with `suspendable` and gas armed
       before `find_function` (pywasm3 at 4c1334e); the documented way is from a host function. Snapshots (`save_snapshot` / `load_snapshot`) and `memory_limit` / `table_limit` / `continuation_limit` are there, unused.
-      **The open pywasm3 PR #14 (2026-10-07, the owner's, branch `fix/gil-env-lock` of o-murphy/pywasm3, 7562b12, "Serialize calls into a shared Environment on GIL builds too"), checked: not needed for this item.**
-      What it fixes: on a GIL build the lock of an `Environment` existed only on free-threaded builds, so a host function that gives up the GIL (sleep, I/O, a memory read) let another thread start a call on
-      the same runtime on top of the first one's stack (a flaky `[trap] stack overflow` in pywasm3's `test_shared_runtime`); the fix is a recursive `PyThread` lock, taken without the GIL while waiting
-      (read in the C diff: `env_lock` / `env_unlock`, a lock made with the environment). Tried here, without touching the pin: built from that commit in a scratch venv, `wasmhost` on wasm3 gives
-      **174 passed, 76 skipped, the same as on the pinned `main` (4c1334e)**, including `test_timeout.py` and `test_fuel.py`; pywasm3's own `tests/test_threads.py` passes there (6 passed, 1 skipped).
-      Why we are not exposed: every public method of a backend takes its lock (`Backend._lock`, one per backend instance, reentrant), so one call at a time per backend, and a call from a host function is the same thread;
-      a `Wasm3Backend` owns its `Environment`, so two backends never share a runtime; the slices of a timed call are inside one locked call. It does not change the timeout either: a call still holds the GIL
-      between imports (the `threading.Timer` probe was run on the pinned `main` only, where the timer never ran during a wasm loop; not tried on the branch, but its C diff has nothing that releases the GIL while wasm runs).
-      So: no need to wait for it (it is hardening for anyone who calls one pywasm3 runtime from several threads without a lock of their own). **Owner's decision (2026-10-07): B-404 stays closed; the re-pin is B-405.**
+      **pywasm3 PR #14 (2026-10-07, the owner's, `fix/gil-env-lock`, 7562b12: a recursive lock of an `Environment` on GIL builds too), checked: not needed for this item.**
+      Built from that commit in a scratch venv: `wasmhost` on wasm3 gives **174 passed, 76 skipped, the same as on the pinned `main` (4c1334e)**, `test_timeout.py` and `test_fuel.py`
+      included. We are not exposed to what it fixes (two threads calling one runtime): every public method of a backend takes `Backend._lock`, a `Wasm3Backend` owns its
+      `Environment`, and the slices of a timed call are inside one locked call. It does not change the timeout: a call still holds the GIL between imports (the `threading.Timer`
+      probe was run on the pinned `main` only). **Owner's decision (2026-10-07): B-404 stays closed; the re-pin is B-405.**
 - [ ] **B-405** (added 2026-10-07 on the owner's word; waiting for upstream, nothing to do here until then) Re-pin `pywasm3` (`[tool.uv.sources]` in `pyproject.toml`, and `uv.lock`) when upstream merges its two open PRs.
       Now pinned to `4c1334e` (main of 2026-09-28: the exception handling API, wasm3 0.9.2, on top of suspendable runs, snapshots, gas and the resource caps). The two PRs, both the owner's, both of 2026-10-07
       (named from the PR heads on `wasm3/pywasm3`, read through git; whether they are still open was not checked, the GitHub API does not reach that repository from here, the owner says two are open):
@@ -435,6 +416,7 @@ Done when: transferring a buffer of megabytes is not copied on wasmtime and wasm
       **Not fixed in the library, the owner decides:** (a) break the cycle: the lazy export holding the instance through a weak reference, and `_Exports` not keeping the `Function` it made (the backend's weak cache
       keeps `exports.add is exports.add`; cost: a cache lookup on each `exports.name`, to be measured on the hot path of a call); (b) leave it and say so, as the README now does ("room for 128 live instances");
       (c) both. A user who makes hundreds of wasm3 instances in a loop on a free-threaded build is the one this touches.
+      **Owner's answer (2026-10-07), read as option (b): leave the library as it is and say so** (README: "room for 128 live instances"); the cycle is not broken. The status mark is the owner's to set.
 
 Risks: JSC has no interruption, so on iOS this is not guaranteed; a separate note is needed about what the sandbox does not
 promise.
