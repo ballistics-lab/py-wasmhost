@@ -52,23 +52,28 @@ the feature itself:
 
 ## Current state (2026-10-07, written as a handoff to the next session)
 
-**Where things are.** Branch `claude/loving-hawking-u966j0` (the only one to work in; never create a PR, the owner does). CI of `3b9a35a` (the fix for the red
-`3.14t` jobs) was green on every job but one still finishing when checked (`macos-latest / pypy3.11`, every step already success; that job is the known flake, see "Known flaky CI failures");
-the commit after it is docs only. Look at CI of the newest commit first. Pre-commit is green; the full `pytest` passes on wasmtime, jsc, node, bun, wasm3; the self-test has
-35 steps on wasmtime/wasm3 and 41 on the JS engines.
+**Where things are.** Branch `claude/kind-goldberg-3dsi27` (the one this work is on; it started from `main` at `599e2e8`, after PR #10 "Limits for untrusted code" and the tag `v0.1.0b2`; never create a PR,
+the owner does). Newest commit: look at CI first. `Tests` was green on every job at `c5aaf86` (run 125). `Pre-commit` is red on every **push** (not on a PR): the hooks change files, which fails the
+"changes produced, but not on a pull_request" step (CI log); locally the only file they change is the old `examples/jitcheck.py` (`ruff format`), so that is the likely cause, not checked in CI. It is red on `main` too
+(run 174, `599e2e8`), so it is not from this work. Formatting that file is one small commit; waiting for the owner. Locally the full `pytest` passes on wasmtime, wasm3, node and bun (jsc, gi-jsc and jscontext only in CI); the self-test has 35 steps on wasmtime/wasm3 and 41 on the JS engines.
 
 **Done** (phases 1 to 4): B-201 (`Function`, `signature`, `type()`, identity, `elem`, the safety net through `call_indirect`), B-202, B-204, B-301 (`Memory.view`), B-302 (`bench`),
 B-304 (a lock per backend, `await compile/instantiate`, threads only with `threaded=True`), B-507, B-509, fast buffers, Bun in CI, and **phase 4: B-401 (memory ceiling), B-402/B-403
 (timeout), B-404 (fuel)**, closed by the owner. The README has the limits in one section, "Limits for untrusted code". **Verified on the device by the owner** (Pythonista, iPhone 16,
 iOS 26, `jscontext`): self-test 38/38 (before the fuel step), buffers intact from 1 byte to 8 MiB, `await compile/instantiate`, multi-value in a batch, `wasi_sh --home`, `bench`.
+**B-501 is implemented but not closed** (the owner closes it): `src/wasmhost/wasi1.py`, all 46 functions of `wasi_snapshot_preview1`, with tests and a self-test step (see B-501 below).
+**Also run by the owner (wasmhost 0.1.0b2, before the WASI step):** iSH-AOK (aarch64) on `wasmtime` and on `wasm3`, both 34/34; the original iSH (i686) on `wasm3`, 31/34 (a memory declared 1..4 pages is 4 pages
+from the start, so three memory steps fail; cause unknown, the owner suspects iSH's i386 emulator and will look when an issue is filed; see B-505 and the README).
 
 **To do first, if the owner has not said otherwise:**
-1. A device re-run of `wasmhost self test` (a fresh wheel: `git fetch --tags`, then `uv build --wheel`; the version comes from git tags): 40/40 expected on `jscontext`, where the
-   timeout and fuel steps say "not supported" instead of failing. Add a row to README "Where it has been run" when the owner reports it.
-2. B-405 when upstream merges pywasm3's two PRs (#13, #14); B-406 is closed (option b: leave it, documented).
-3. Then the owner picks: B-203 (`externref`), a binary channel for node/bun (about 50 MB/s through the pipe and JSON now), B-006 (CI for examples).
+1. **B-502** (the owner's order, 2026-10-07: refresh BACKLOG and README first, then B-502): move the examples and their tests to `wasmhost.wasi1`, leaving a thin `Wasi(args=, preopens=, stdin=, stdout=)` in each. The
+   examples carry their own hosts today (`examples/coreutils.py`, `wasmclang.py`, `wasi_sh.py`), two of them for `wasi_unstable` as well, which `wasi1` does not provide yet: decide that first.
+2. A device re-run of `wasmhost self test` (a fresh wheel: `git fetch --tags`, then `uv build --wheel`; the version comes from git tags): 41/41 expected on `jscontext` (35 on wasmtime and wasm3), where the
+   timeout and fuel steps say "not supported" instead of failing, and the WASI step should pass. Add a row to README "Where it has been run" when the owner reports it.
+3. B-405 when upstream merges pywasm3's two PRs (#13, #14); B-406 is closed (option b: leave it, documented).
+4. Then the owner picks: B-203 (`externref`), a binary channel for node/bun (about 50 MB/s through the pipe and JSON now), B-006 (CI for examples).
 
-**Deferred by owner decision:** B-303 (until it is really needed), B-304a (examples on asyncio), WASI in the library (phase 5), Deno (B-701b: a bug in Deno itself). **Waiting for the owner:** the branch name and tidying
+**Deferred by owner decision:** B-303 (until it is really needed), B-304a (examples on asyncio), the rest of phase 5 (B-503 to B-506, B-508; phase 5 itself was started by the owner's command on 2026-10-07: B-501, its tests and self-test, then B-502), Deno (B-701b: a bug in Deno itself). **Waiting for the owner:** the branch name and tidying
 (B-003), `coreutils.wasm` stays in git (B-004), `tiny-bclibc-wasm` (B-803). **Not covered by tests:** `examples/wasmclang.py`, `jslinux.py` (`bellard.org` is blocked
 in the assistant's environment), `coremark.py`; the "Examples" step in CI runs only `basic.py` and `imports.py` (B-006).
 
@@ -77,13 +82,17 @@ in the assistant's environment), `coremark.py`; the "Examples" step in CI runs o
   calls `gc.collect()` for that reason. `suspendable` and `gas_limit` must be set **before** the first `find_function`. An instance that timed out is finished.
 - A pre-commit "Failed" on pytest can be only the hook seeing a tracked file edited while it ran: do not edit files during a run, and re-run before believing it.
 - Run one pre-commit at a time. `git fetch` and `git pull --ff-only` before each commit; look at CI after each push.
+- The WASI specification is **not in `main`** of WebAssembly/WASI: it is the branch `wasi-0.1`, directory `preview1` (`witx/*.witx`, `docs.md`; commit `fae981b` when copied into `tests/data/wasi`). `wasi.dev` is blocked in the
+  assistant's environment; reading another repository takes `add_repo` (git only, no Actions logs).
+- `gi-jsc` takes no host functions (`supports("imports")` is false): a test that gives a module imports must skip there, as `tests/test_wasi1_run.py` does (CI went red on it once).
+- `ruff format` in pre-commit keeps reformatting `examples/jitcheck.py` (see above): `git checkout examples/jitcheck.py` before committing, or it rides along by accident.
 - Facts: `jscontext` on iOS has **no JIT**, no wasmtime or wasm3 there, and neither timeout nor fuel; the owner works in Ukrainian, this file stays in English.
 
 ## Order of work
 
 Owner decision: everything is done in the current branch (the owner opens the PR and tidies the branch). Each step comes with tests, a step in the
 self-test and a green pre-commit, and is a separate commit. Done so far, in order: B-201 (steps 1-4), B-304, B-204, B-507, B-509, B-202, B-301, B-302,
-then phase 4 (B-401 to B-404). The detail of each is in its own entry below. Open: B-203, B-303, B-304a, B-006, phases 5 and 6.
+then phase 4 (B-401 to B-404), then B-501 (implemented 2026-10-07, not closed). The detail of each is in its own entry below. Open: B-203, B-303, B-304a, B-006, phase 5 from B-502, and phase 6.
 
 ## Accepted API decisions
 
@@ -440,17 +449,17 @@ Self-test: the steps "memory limit" and "interruption of an infinite loop" with 
 
 Done when: an infinite loop is interrupted with a `Trap`-like error where the engine supports it.
 
-## Phase 5. WASI1 (deferred by owner decision, L)
+## Phase 5. WASI1 (started by the owner's command on 2026-10-07: B-501, tests, self-test; the rest deferred, L)
 
-Decision: "WASI1 for later". Touch nothing without a command. Preparatory material already exists in the branch `examples/zigcc`:
-the class `Wasi` in `examples/coreutils.py` (over 40 calls, both snapshots `wasi_snapshot_preview1` and `wasi_unstable`,
-files in a real folder, stdio, arguments, a clock, `sleep`), tests on wasmtime and node.
+Decision: "WASI1 for later", then on 2026-10-07 the owner commanded B-501 with its tests and self-test, and B-502 after the docs refresh. Anything else in this phase waits for a command. The specification to follow is the
+official `wasi_snapshot_preview1` (branch `wasi-0.1` of WebAssembly/WASI), not the example. Preparatory material, now in `main`: the class `Wasi` in `examples/coreutils.py` (over 40 calls, both snapshots
+`wasi_snapshot_preview1` and `wasi_unstable`, files in a real folder, stdio, arguments, a clock, `sleep`), tests on wasmtime and node.
 
 - [ ] **B-501** Provide a reusable Python module `wasmhost.wasi1` with a full WASI1-compatible host API, not just the subset used in one example. The public surface should cover the ~50 WASI1 functions and be usable across backends that support it.
       Work done 2026-10-07 in branch `claude/kind-goldberg-3dsi27`, **status not changed (the owner closes it)**: `src/wasmhost/wasi1.py` has all 46 functions of `wasi_snapshot_preview1`
       (the specification: branch `wasi-0.1` of WebAssembly/WASI, `preview1/witx`), written from the witx files and not from `examples/coreutils.py`; `tests/test_wasi1_spec.py` compares it with a copy of those files
       (`tests/data/wasi`), `tests/test_wasi1.py` tests each call, `tests/test_wasi1_run.py` runs a program on every backend, and the self-test has a WASI step. Not done: `wasi_unstable` (the first snapshot),
-      sockets (they answer `ENOTSOCK`), a read-only mode (B-504), `openat` (B-503); not run on a device.
+      sockets (they answer `ENOTSOCK`), a read-only mode (B-504), `openat` (B-503); not run on a device. `Tests` green in CI on `c5aaf86`; the self-test step passes on wasmtime, wasm3, node and bun here.
 - [ ] **B-502** Update all WASI examples and tests to use `wasmhost.wasi1` instead of carrying a copy of `Wasi` in each example. The example-side API should stay thin: `Wasi(args=…, preopens={"/": dir}, stdin=…, stdout=…)` is a convenience wrapper around the common module, not the implementation itself.
 - [ ] **B-503** A sandbox through `openat` with `dir_fd`, to remove the gap between checking the path and opening
       (right now `resolve()` checks, then `os.open`).
