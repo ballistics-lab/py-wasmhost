@@ -2,7 +2,7 @@
 
 WebAssembly from **CPython, PyPy and Pythonista**, with the JavaScript WebAssembly API: modules, instances, memory,
 globals, and host functions (Python callables the module calls). It runs on whichever backend is available:
-JavaScriptCore's `JSContext` in Pythonista on iOS, JavaScriptCore or Node on a computer, or, when installed,
+JavaScriptCore's `JSContext` in Pythonista on iOS, JavaScriptCore, Node or Bun on a computer, or, when installed,
 wasmtime or wasm3. Plain Python, no dependencies, no C extension of its own.
 
 [![license]][MIT]
@@ -49,6 +49,18 @@ both in a bare JavaScript engine:
 Both keep their downloads in `$WASMHOST_CACHE`, else `~/.cache/wasmhost`, else `./.cache` where there is no usable
 home directory (PythonIDE).
 
+`examples/wasmclang.py` compiles C and C++ to WebAssembly with clang and lld that are themselves WebAssembly (the wasm-clang
+project), with Python as their WASI host, and runs the result, with no compiler installed and no process started, so
+it works in Pythonista.
+
+`examples/coreutils.py` is a small shell over uutils coreutils (Rust, built to WASI, in `examples/wasm/`): `ls`, `cat`,
+`sort`, `cp`, `seq`, `wc` and the rest, and `lua`, with pipes and redirects, over a directory of the real file system.
+The WASI host for the modules is written in Python, on wasmhost; it is also a model of how to write one.
+
+`examples/wasi_sh.py` is a real POSIX shell, BusyBox `ash` with about fifty utilities (the wasi-sh project's
+`busybox.wasm`, downloaded once from npm), with pipes, `$(...)`, here-documents and functions, over a file system that is
+a Python dict: nothing real is touched. It is made for Pythonista (`input()` at the prompt, no terminal needed).
+
 `examples/coremark.py` runs CoreMark (the wasm3 project's build, in `examples/wasm/`) on every backend that starts here,
 to compare their speed. A runtime that finishes the last pass in under 10 s is not scored by CoreMark itself, so it
 prints the pass time too.
@@ -69,7 +81,7 @@ prints the pass time too.
 ```shell
 uv add wasmhost
 
-# With wasmtime, the in-process JIT (otherwise Node or WebKitGTK JavaScriptCore is used)
+# With wasmtime, the in-process JIT (otherwise Node, Bun or WebKitGTK JavaScriptCore is used)
 uv add wasmhost[wasmtime]
 ```
 
@@ -78,7 +90,7 @@ uv add wasmhost[wasmtime]
 ```shell
 pip install wasmhost
 
-# With wasmtime, the in-process JIT (otherwise Node or WebKitGTK JavaScriptCore is used)
+# With wasmtime, the in-process JIT (otherwise Node, Bun or WebKitGTK JavaScriptCore is used)
 pip install wasmhost[wasmtime]
 ```
 
@@ -102,18 +114,19 @@ returns what the signature says: `None`, one value, or a tuple for several resul
 - **A host function can call the module again** (`instance.exports.f(...)` from inside it), and its own errors come
   out of the outer call.
 - **Errors in the import object** are the API's: a missing module is a `TypeError`, a missing or non-callable
-  function a `LinkError`. Importing a memory, a table or a global is not supported yet (`NotImplementedError`), and
-  a backend that can't take host functions says so (`backend.supports("imports")`).
+  function a `LinkError`. A global, a memory and a table go into the same import object (see below). A backend that
+  can't take host functions says so (`backend.supports("imports")`), and one that can't take the others says so
+  with `import.global`, `import.memory` and `import.table`.
 
 How a host function is called depends on the backend: `wasmtime` and `wasm3` call the Python function themselves; the
 JavaScript engines that are JavaScriptCore (`jsc`, and `jscontext` on iOS) do it through its C API, which makes a
-JavaScript function that calls Python; Node writes a request on its pipe and waits for the answer, reading its
+JavaScript function that calls Python; Node and Bun write a request on their pipe and waits for the answer, reading its
 stdin synchronously. Only `gi-jsc` can't: PyGObject has no way to make a JavaScript function that calls Python.
 
 ## Globals
 
-`Global(type, value, mutable=False)` makes a `WebAssembly.Global` on its own, and an instance can import it, one
-instance or several:
+`Global(type, value, mutable=False)` makes a `WebAssembly.Global` on its own (or, as in JavaScript,
+`Global({"value": "i32", "mutable": True}, 7)`), and an instance can import it, one instance or several:
 
 ```python
 counter = wasmhost.Global("i32", 0, mutable=True)
@@ -126,13 +139,14 @@ An exported global (`instance.exports.g`) can be passed to another instance the 
 plain number is enough (`{"env": {"limit": 100}}`), as in the JavaScript API. A wrong import (a number for a mutable
 global, another type, another backend) is a `LinkError`; an immutable global's `value` can't be written (`TypeError`).
 `backend.supports("import.global")` says whether a backend can (`wasm3` can't: pywasm3 makes no global outside a
-module).
+module). A global has to be as mutable as the module says (`LinkError` otherwise), as in JavaScript.
 
 ## Memories and tables
 
 `Memory(initial, maximum=None)` (in 64 KiB pages) and `Table("funcref", initial, maximum=None)` make a
 `WebAssembly.Memory` and `WebAssembly.Table` on their own, to import into one instance or several (an Emscripten build
-imports its memory):
+imports its memory). As in JavaScript they also take a descriptor, `Memory({"initial": 1, "maximum": 16})` and
+`Table({"element": "anyfunc", "initial": 2})`:
 
 ```python
 mem = wasmhost.Memory(1, 16)
@@ -141,9 +155,15 @@ mem.write(0, b"shared with every instance that imports it")
 
 table = wasmhost.Table("funcref", 2)
 user = wasmhost.Instance(module, {"env": {"table": table}})
-table.set(0, provider.exports.add)  # an exported Function (or a FuncRef, or None to empty the entry)
-table.get(0)  # a FuncRef: it goes into another table, it is not callable
+table.set(0, provider.exports.add)  # a Function (or None to empty the entry)
+table.get(0) is provider.exports.add  # True: one function is one object, as in JavaScript
+table.get(0).type()  # FuncType((i32, i32), (i32,)); wasmtime finds it, a JavaScript engine does not tell:
+# there a function an `elem` segment put in the table is known, any other: a `ValueError` and `table.get(0).signature = FuncType((i32, i32), (i32,))` (a call looks for it, too);
+# a wrong signature given by hand is a `TypeError` when called (the engine checks the type), never a wrong result
 table.grow(2)  # the length before
+wasmhost.Table(
+    "funcref", 2, 4, provider.exports.add
+)  # every entry starts as `add`; table.grow(1, f) adds entries of `f`
 ```
 
 An import that is not the right object, is too small for the module or comes from another backend is a `LinkError`.
@@ -158,6 +178,43 @@ so many instances add up (300 instances of 1 MiB were 315 MB, not given back by 
 is freed when the instance is. Its price: it shares nothing (a Global made outside it is a `ValueError`).
 `backend.supports("isolated")` is true for `wasmtime` and `wasm3` (a `wasm3` instance is isolated anyway); on the
 JavaScript engines, which have one store, it is a `NotImplementedError`.
+
+## Types
+
+`type()` is the type reflection of the JavaScript API, with its names, on a function, a memory, a table and a global
+(on every backend: the types are read from the module's binary, not asked of the engine, which may not have them):
+
+```python
+instance.exports.add.type()  # FuncType(parameters=('i32', 'i32'), results=('i32',))
+instance.exports.memory.type()  # MemoryType(minimum=1, maximum=4, shared=False)
+instance.exports.table.type()  # TableType(element='funcref', minimum=2, maximum=None)
+instance.exports.counter.type()  # GlobalType(value='i32', mutable=True)
+```
+
+`Module.imports()` and `Module.exports()` give the same types in the `type` of each entry, so what a module asks
+for (the limits of an imported memory or table, whether a global is mutable) can be read before it is instantiated.
+What `type()` gives goes back into the constructor: `Memory(memory.type())`.
+
+Value types are `wasmhost.i32`, `i64`, `f32` and `f64`. They are `str`s (`i32 == "i32"`), so a name does wherever one
+of them goes: `FuncType((i32, i32), (i32,))` and `FuncType(("i32", "i32"), ("i32",))` are the same. An `i64` is an
+`int` here, as every integer type is; it is what JavaScript takes as a `BigInt`.
+
+`minimum` is the size now, as the specification has it (a table's `minimum` in JavaScriptCore is too; its memory's
+stays the initial size). A shared memory is refused (`NotImplementedError`): there are no threads here.
+
+## Async and threads
+
+`await wasmhost.compile(bytes)` and `await wasmhost.instantiate(bytes | module, imports)` are the JavaScript API's promises
+(`instantiate` of bytes gives `Instantiated(module, instance)`, of a `Module` just the `Instance`). The synchronous
+`Module(...)`, `Instance(...)` and `instantiate_sync(...)` stay. By default the work is done in place with a turn of the
+event loop before and after it, and uses **no threads**, so it works where Python's threads do not. `threaded=True` does it in a
+worker thread on `wasmtime`, `node` and `bun`, which keeps the loop free during a long compile (the JavaScriptCore backends
+and `wasm3` are tied to their thread and always run in place).
+
+A backend takes one call at a time: every call into it holds a lock of the backend's own (reentrant, so a host function
+may call back into the same backend), and two backends never wait for each other. Several tasks or threads may use one
+backend, one after the other; to run two engines side by side make two backends (`wasmhost.NodeBackend()` twice), the
+default one is shared. A host function must not wait for another thread that wants the same backend.
 
 ## Batches
 
@@ -175,6 +232,7 @@ batch.run()
 out.value  # bytes (`.done` says whether the step ran)
 ```
 
+A function with several results gives a tuple of `Ref`s (`low, high = batch.call(split, x)`), each usable by later steps.
 A failing step (a trap, an out-of-bounds access) raises from `run()`, after the earlier steps' results are set.
 Only `i32` results can be used in arithmetic (`ptr * 8`, `ptr + 4`).
 
@@ -188,14 +246,15 @@ fallback if the C API ever fails. The self-test reports which was used (`N bytes
 
 ## Backends
 
-| Backend | Where | How it is detected |
-|---|---|---|
-| `wasmtime` | anywhere with the `wasmtime` package | `import wasmtime` (`pip install wasmtime`) |
-| `wasm3` | CPython 3.11+ with [pywasm3](https://github.com/wasm3/pywasm3) | `import wasm3`; install it from git: `uv add "pywasm3 @ git+https://github.com/wasm3/pywasm3"` (its PyPI release predates the API used here) |
-| `jscontext` | iOS (Pythonista, PythonIDE), and a Mac with rubicon-objc | Apple's `JSContext` through an Objective-C bridge: Pythonista's `objc_util` (both iOS apps have it), or [`rubicon-objc`](https://github.com/beeware/rubicon-objc) (`pip install rubicon-objc`; tested in CI on macOS, not on a device). `backend.bridge` says which |
-| `jsc` | Linux, macOS | JavaScriptCore's C API through `ctypes`, no PyGObject: `apt install libjavascriptcoregtk-4.1-0` (macOS uses the system framework) |
-| `gi-jsc` | Linux | the same engine through PyGObject (`apt install gir1.2-javascriptcoregtk-4.1 python3-gi`) |
-| `node` | anywhere with Node.js | `node` on `PATH` |
+| Backend     | Where                                                          | How it is detected                                                                                                                                                                                                                                                  |
+| ----------- | -------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `wasmtime`  | anywhere with the `wasmtime` package                           | `import wasmtime` (`pip install wasmtime`)                                                                                                                                                                                                                          |
+| `wasm3`     | CPython 3.11+ with [pywasm3](https://github.com/wasm3/pywasm3) | `import wasm3`; install it from git: `uv add "pywasm3 @ git+https://github.com/wasm3/pywasm3"` (its PyPI release predates the API used here)                                                                                                                        |
+| `jscontext` | iOS (Pythonista, PythonIDE), and a Mac with rubicon-objc       | Apple's `JSContext` through an Objective-C bridge: Pythonista's `objc_util` (both iOS apps have it), or [`rubicon-objc`](https://github.com/beeware/rubicon-objc) (`pip install rubicon-objc`; tested in CI on macOS, not on a device). `backend.bridge` says which |
+| `jsc`       | Linux, macOS                                                   | JavaScriptCore's C API through `ctypes`, no PyGObject: `apt install libjavascriptcoregtk-4.1-0` (macOS uses the system framework)                                                                                                                                   |
+| `gi-jsc`    | Linux                                                          | the same engine through PyGObject (`apt install gir1.2-javascriptcoregtk-4.1 python3-gi`)                                                                                                                                                                           |
+| `node`      | anywhere with Node.js                                          | `node` on `PATH`                                                                                                                                                                                                                                                    |
+| `bun`       | anywhere with [Bun](https://bun.sh)                            | `bun` on `PATH`. It is JavaScriptCore (as in Safari and on iOS) in a runtime of its own, and runs the very script `node` does                                                                                                                                       |
 
 With nothing configured, the first backend that starts wins, in the order shown: the native runtimes when they are installed, then the JavaScript engines. (On Pythonista nothing above `jscontext` can be installed, so it is the pick there; on a Mac that has rubicon-objc, `wasmtime` still comes first.) Each backend's constructor is its
 own probe: it fails when its runtime is missing. Choose one with `WASMHOST_BACKEND=<name>`,
@@ -205,14 +264,25 @@ Python side that provides imports; what runs the module is the backend.)
 
 Not every backend can do everything; `backend.supports(...)` says:
 
-| | `memory.grow` from Python | `table.length` | host functions (`imports`) | Global, Memory, Table on their own (`import.*`) | table get/set/grow (`table.funcs`) | `isolated` |
-|---|---|---|---|---|---|---|
-| `wasmtime` | yes | yes | yes | yes | yes | yes |
-| `wasm3` | no (`NotImplementedError`; a module's own `memory.grow` works) | no | yes | no | no | yes (always) |
-| `jscontext` | yes | yes | yes, through JavaScriptCore's C API (under either bridge) | yes | yes | no |
-| `jsc` | yes | yes | yes | yes | yes | no |
-| `gi-jsc` | yes | yes | no | yes | yes | no |
-| `node` | yes | yes | yes | yes | yes | no |
+|             | `memory.grow` from Python                                      | `table.length` | host functions (`imports`)                                | Global, Memory, Table on their own (`import.*`) | table get/set/grow (`table.funcs`) | `isolated`   |
+| ----------- | -------------------------------------------------------------- | -------------- | --------------------------------------------------------- | ----------------------------------------------- | ---------------------------------- | ------------ |
+| `wasmtime`  | yes                                                            | yes            | yes                                                       | yes                                             | yes                                | yes          |
+| `wasm3`     | no (`NotImplementedError`; a module's own `memory.grow` works) | no             | yes                                                       | no                                              | no                                 | yes (always) |
+| `jscontext` | yes                                                            | yes            | yes, through JavaScriptCore's C API (under either bridge) | yes                                             | yes                                | no           |
+| `jsc`       | yes                                                            | yes            | yes                                                       | yes                                             | yes                                | no           |
+| `gi-jsc`    | yes                                                            | yes            | no                                                        | yes                                             | yes                                | no           |
+| `node`      | yes                                                            | yes            | yes                                                       | yes                                             | yes                                | no           |
+| `bun`       | yes                                                            | yes            | yes                                                       | yes                                             | yes                                | no           |
+
+**No JIT on iOS.** In Pythonista (and any app that is not Safari) JavaScriptCore runs WebAssembly without its JIT, so `jscontext` there is
+an interpreter: `python -m wasmhost bench` shows a loop several times slower than `jsc` on a desktop and close to `jsc --no-jit`.
+For plain computation an interpreter such as `wasm3` would be faster there, but `wasm3` is a C extension that can not be installed
+on iOS; the cost of a call from Python is the same either way (the bridge dominates).
+
+**Deno is not supported.** Run on its pipe protocol like Node, it passes all of the self-test but the exception-handling step: Deno
+(2.9.6 and 2.9.7 tried) panics ("Deno has panicked", `capacity overflow`) when a `WebAssembly.Exception` leaves
+`vm.runInContext`, which is what a module that throws an exception of a tag the caller does not catch does there. Node
+and Bun are the same V8 and JavaScriptCore without this. It is an upstream bug; see `BACKLOG.md` (B-701b).
 
 ## Try it on a device
 
@@ -221,7 +291,7 @@ The package carries a self-test, since nothing else can be run in Pythonista/Pyt
 ```python
 import wasmhost
 
-wasmhost.selftest()  # or, from a shell: python -m wasmhost [--backend NAME] [--all]
+wasmhost.selftest()  # or, from a shell: python -m wasmhost self test [--backend NAME] [--all]
 ```
 
 It prints one line per check, then `N/M passed`: the Objective-C bridge in use (and, if the C API is not used, why:
@@ -231,32 +301,41 @@ isolated instance, which encodings of WebAssembly exceptions the engine takes (`
 (try/catch): no`: a module built with C++ exceptions, such as bclibc's `bclibc_wasm.wasm` from wasi-sdk, needs the final one),
 and the cost of a call. A check the backend can't do says so (`not available on this backend, as
 documented`) and counts as passed. If something fails, send the whole output. On a computer,
-`python -m wasmhost --all` runs it on every backend that starts.
+`python -m wasmhost self test --all` runs it on every backend that starts. Installed with pip, the same commands are
+there as `wasmhost self test` and `wasmhost bench`.
+
+`python -m wasmhost bench [--backend NAME] [--no-jit] [--buffer KIB]` times a call, a batch of three, moving a buffer in and
+out of memory (MB/s) and the engine itself (a recursive
+`fib`, a loop) on each backend that starts, to choose one. `--no-jit` takes the JIT off JavaScriptCore
+(`JSC_useJIT=false`): where there is none, an interpreter such as `wasm3` can be several times faster.
 
 ### Where it has been run
 
-| Where | Backend | Result | A call / a batch of 3 |
-|---|---|---|---|
-| Pythonista 3 (StaSh 0.7.5), Python 3.10.4, iPhone 16 (iPhone17,3) | `jscontext` (`objc_util`) | **25/25**, bytes `via C API`, host functions (wasmhost 0.0.2b1) | 55 / 102 us |
-| Pythonista 3, Python 3.10.4, iPhone 16 (iPhone17,3), iOS 26 (Darwin 25.6) | `jscontext` (`objc_util`) | **28/28**, bytes `via C API`, host functions, both encodings of WebAssembly exceptions (`try_table` and `try`/`catch`) (wasmhost 0.0.3b2) | 40 / 85 us |
-| PythonIDE, Python 3.14.7, `ios-13.0-arm64-iphoneos` | `jscontext` (`objc_util`) | **25/25**, bytes `via C API`, host functions (wasmhost 0.0.2b1) | 39 / 77 us |
-| Linux, CPython 3.14t | `jsc` | 27/27 | 32 / 102 us |
-| Linux, CPython 3.14t | `gi-jsc` | 27/27 (host functions: not available, as documented) | 35 / 62 us |
-| Linux, CPython 3.14t | `node` | 27/27 | 82 / 340 us |
-| Linux, CPython 3.14t | `wasmtime` | 21/21 | 66 / 212 us |
-| Linux, CPython 3.14t | `wasm3` | 21/21 | 3 / 63 us |
-| Linux, CPython 3.10 and PyPy 3.10 | `node` | 25/25 (an earlier version; and the test suite on 3.10) | |
+| Where                                                                     | Backend                   | Result                                                                                                                                    | A call / a batch of 3 |
+| ------------------------------------------------------------------------- | ------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------- | --------------------- |
+| Pythonista 3 (StaSh 0.7.5), Python 3.10.4, iPhone 16 (iPhone17,3)         | `jscontext` (`objc_util`) | **25/25**, bytes `via C API`, host functions (wasmhost 0.0.2b1)                                                                           | 55 / 102 us           |
+| Pythonista 3, Python 3.10.4, iPhone 16 (iPhone17,3), iOS 26 (Darwin 25.6) | `jscontext` (`objc_util`) | **28/28**, bytes `via C API`, host functions, both encodings of WebAssembly exceptions (`try_table` and `try`/`catch`) (wasmhost 0.0.3b2) | 40 / 85 us            |
+| Pythonista 3, Python 3.10.4, iPhone 16 (iPhone17,3), iOS 26 (Darwin 25.6) | `jscontext` (`objc_util`) | **35/35**, bytes `via C API`, both encodings of exceptions, functions and signatures, async, threads (wasmhost 0.0.4.dev64)               | 68 / 156 us           |
+| Pythonista 3, Python 3.10.4, iPhone 16 (iPhone17,3), iOS 26 (Darwin 25.6) | `jscontext` (`objc_util`) | **36/36**, a 1 MiB buffer moves at 5400 MB/s in and 12700 MB/s out (a typed array through the C API; through hex it was about 40) (wasmhost 0.0.4.dev84) | 36 / 84 us |
+| PythonIDE, Python 3.14.7, `ios-13.0-arm64-iphoneos`                       | `jscontext` (`objc_util`) | **25/25**, bytes `via C API`, host functions (wasmhost 0.0.2b1)                                                                           | 39 / 77 us            |
+| Linux, CPython 3.14t                                                      | `jsc`                     | 35/35                                                                                                                                     | 32 / 102 us           |
+| Linux, CPython 3.14t                                                      | `gi-jsc`                  | 27/27 (host functions: not available, as documented)                                                                                      | 35 / 62 us            |
+| Linux, CPython 3.14t                                                      | `node`                    | 35/35                                                                                                                                     | 82 / 340 us           |
+| Linux, CPython 3.11, Bun 1.4.2                                            | `bun`                     | 35/35                                                                                                                                     | 133 / 287 us          |
+| Linux, CPython 3.14t                                                      | `wasmtime`                | 29/29                                                                                                                                     | 66 / 212 us           |
+| Linux, CPython 3.14t                                                      | `wasm3`                   | 29/29                                                                                                                                     | 3 / 63 us             |
+| Linux, CPython 3.10 and PyPy 3.10                                         | `node`                    | 25/25 (an earlier version; and the test suite on 3.10)                                                                                    |                       |
 
 The counts of the Linux rows are for the current version (the first two phone rows are for `0.0.2b1`: the self-test has
 grown since); the times are one run of the self-test each, so read them as an order of magnitude. A host function costs about
-what a call does, plus a round trip on `node` (measured once: about 4 us on `wasm3`, 50 us on `wasmtime` and `jsc`,
+what a call does, plus a round trip on `node` or `bun` (measured once: about 4 us on `wasm3`, 50 us on `wasmtime` and `jsc`,
 200 us on `node`, per host call including the export around it).
 
 Host functions and the C API bytes path on `jscontext` have run on both iOS apps above; on Linux they also run
 against a fake `objc_util` whose `c` is the real JavaScriptCore library, and on macOS in CI against a real
 Objective-C `JSContext` through rubicon-objc. Not run on a device: the `rubicon-objc` bridge (both iOS apps have
 `objc_util`, so it isn't needed there). Node's synchronous wait for a host function's answer has run in CI on Linux,
-macOS and Windows.
+macOS and Windows; Bun's, in CI on Linux and macOS (not on Windows yet).
 
 ### A note on wasmtime and `faulthandler`
 
@@ -267,13 +346,31 @@ Python's `faulthandler` (on with `python -X faulthandler`, and in pytest) replac
 
 ## Not yet
 
-- **`externref` tables**, `v128` and other reference types, multi-value results in a batch.
+What the JavaScript API has, or a module can need, and wasmhost does not have yet. `BACKLOG.md` has the order in
+which it is meant to be done.
+
+- **Tables and references.** The signature of a table entry is not told by a JavaScript engine (set it by hand,
+  or let the module's `elem` segment tell it; wasmtime finds it); no `externref` (tables, globals or values); no `v128`.
+- **Memory is copied** on `read` and `write`. `Memory.view(offset, length)` gives the engine's own memory as a `memoryview`, with no copy, on `wasmtime` and `wasm3`
+  (not on a JavaScript engine, whose memory lives in another place); it is released when the module may have run (a call, a batch, a `grow`), so it is
+  for use at once. On a JavaScript engine the cost of moving a buffer is in the encoding, not the copy: see `wasmhost bench`.
+- **Limits on untrusted code**: no ceiling on memory other than a memory's own maximum, and no time or fuel limit.
+- **Threads.** A module built with `-pthread` (the WebAssembly threads proposal: a `shared` memory that the module
+  imports, atomic instructions, threads made by the host as several instances of the module on one memory) does not
+  run: `Memory(..., shared=True)` raises `NotImplementedError`, so it can not be given as an import. Build without
+  threads (`-pthread` off, for wasm-ld `--no-threads`). A wasm instance runs in one thread, and a backend takes one
+  call at a time (a lock of its own, see "Async and threads").
+- **Newer proposals**: no API for `WebAssembly.Tag` and `WebAssembly.Exception` (the self-test only reports which
+  encodings of exceptions an engine takes), SIMD, `memory64`, multi-memory, GC types.
+  Whether a module that uses them runs is up to the engine.
+- **WASI** is not part of wasmhost: a module that imports `wasi_snapshot_preview1` needs a host that provides it.
 
 ## Test
 
 ```bash
 uv run pytest                            # every backend that starts here
 uv run pytest --wasm-backend node        # one backend: it must start, or the run stops with an error
+uv run pytest --wasm-backend bun         # needs `bun` on PATH
 uv run pytest --wasm-backend wasmtime    # or wasm3, or jsc (needs the JavaScriptCore library)
 uv run pytest --wasm-backend gi-jsc      # needs PyGObject: run it with a system-site-packages venv (see the CI job)
 uv run pyright && uv run ruff check

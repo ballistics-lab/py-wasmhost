@@ -40,7 +40,7 @@ def test_evaluate_and_errors(jscontext: wasmhost.JSContextBackend) -> None:
 
 
 def test_the_api_through_it(jscontext: wasmhost.JSContextBackend) -> None:
-    module, instance = wasmhost.instantiate(wb.arith(), backend=jscontext)
+    module, instance = wasmhost.instantiate_sync(wb.arith(), backend=jscontext)
     assert wasmhost.Module.exports(module)
     assert instance.exports.add(20, 22) == 42
     assert instance.exports.add64(2**62, 1) == 2**62 + 1

@@ -725,8 +725,8 @@ def main(argv=None):
     print(py.ensure_packages("micropip"))
     py.run("import micropip")
 
-    # REPL: an empty line at the first prompt exits
-    while line := input("pyo>>> "):
+    while True:
+        line = input("pyo>>> ")
         if line.rstrip().endswith(":"):
             lines = [line]
             while more := input("pyo... "):

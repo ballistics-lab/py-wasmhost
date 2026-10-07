@@ -13,7 +13,9 @@ global, whatever its runtime raises itself.
 
 from __future__ import annotations
 
-from collections.abc import Callable, Sequence
+import functools
+import threading
+from collections.abc import Callable, Hashable, Sequence
 from typing import Any, NamedTuple, cast
 
 from ._binary import FuncType
@@ -42,8 +44,8 @@ Operand = int | float | Expr
 
 
 class CallStep(NamedTuple):
-    out: int  # the batch's result slot
-    name: str
+    outs: tuple[int, ...]  # the batch's result slots: one for each result (one, for "no result", when it has none)
+    func: Any  # a function handle (see Backend.export_function)
     args: tuple[Operand, ...]
     ftype: FuncType
 
@@ -140,8 +142,45 @@ def evaluate(operand: Operand, values: dict[int, Any]) -> int | float:
     return left + right if tag == "+" else left - right if tag == "-" else left * right
 
 
+_UNLOCKED = frozenset({"supports"})  # what only reads the class
+
+
+def _locked(method: Callable[..., Any]) -> Callable[..., Any]:
+    @functools.wraps(method)
+    def wrapper(self: Backend, *args: Any, **kwargs: Any) -> Any:
+        with self._lock:  # pyright: ignore[reportPrivateUsage]
+            return method(self, *args, **kwargs)
+
+    wrapper.__wasmhost_locked__ = True  # type: ignore[attr-defined]
+    return wrapper
+
+
 class Backend:
-    """A runtime. Subclasses implement the primitives; `run_batch` has a sequential default."""
+    """A runtime. Subclasses implement the primitives; `run_batch` has a sequential default.
+
+    One backend is one engine, and an engine takes one call at a time: every public method of a backend holds the
+    backend's own lock while it runs, so two threads (or tasks) calling into the same backend go one after the
+    other, and two backends do not wait for each other. The lock is reentrant: a host function that the engine calls
+    from inside a call may call into the same backend again, in the same thread. (A host function that waits for
+    another thread which wants the same backend would wait forever: do not.)"""
+
+    _lock: threading.RLock
+
+    def __new__(cls, *args: Any, **kwargs: Any):  # noqa: ANN204 -- the type of `cls`, which a subclass sets
+        self = super().__new__(cls)
+        self._lock = threading.RLock()
+        return self
+
+    def __init_subclass__(cls, **kwargs: Any) -> None:
+        super().__init_subclass__(**kwargs)
+        for name, member in list(vars(cls).items()):
+            if (
+                not name.startswith("_")
+                and name not in _UNLOCKED
+                and isinstance(member, type(_locked))  # a plain function: not a property, a staticmethod, a number
+                and not getattr(member, "__wasmhost_locked__", False)
+            ):
+                setattr(cls, name, _locked(member))
 
     name: str = "?"
     # What the runtime can't do is left out: "memory.grow" (Memory.grow from Python), "table.length", "imports"
@@ -203,6 +242,11 @@ class Backend:
     def memory_read(self, memory: Any, offset: int, length: int) -> bytes:
         raise NotImplementedError
 
+    def memory_view(self, memory: Any, offset: int, length: int) -> memoryview:
+        """A writable `memoryview` over `length` bytes of the engine's own memory, with no copy: only for a backend
+        with the "memory.view" feature. It is good until the module may have run (the memory may be moved)."""
+        raise NotImplementedError
+
     def memory_write(self, memory: Any, offset: int, data: bytes) -> None:
         raise NotImplementedError
 
@@ -226,7 +270,23 @@ class Backend:
         raise NotImplementedError
 
     def export_function(self, instance: Any, name: str) -> Any:
+        """The handle of an exported function, as `table_get` gives one: the operations below take it."""
         raise NotImplementedError
+
+    def call_ref(self, func: Any, args: Sequence[int | float], ftype: FuncType) -> list[int | float]:
+        """Call a function by its handle (what `export_function` and `table_get` return) with already-checked
+        arguments; the results, in order."""
+        raise NotImplementedError
+
+    def function_key(self, func: Any) -> Hashable:
+        """What tells the functions of this backend apart: the same function gives the same key, whichever handle
+        it came by (an export and the entry of a table that holds it), and another function another key."""
+        raise NotImplementedError
+
+    def function_type(self, func: Any) -> FuncType | None:
+        """The type of the function as the engine knows it, or None when the engine does not say (a JavaScript
+        engine does not: its API has no types of functions)."""
+        return None
 
     def table_grow(self, table: Any, delta: int) -> int:
         """Grow by `delta` null entries; the previous length."""
@@ -248,8 +308,12 @@ class Backend:
                     args = [
                         normalize(evaluate(a, values), k) for a, k in zip(step.args, step.ftype.params, strict=True)
                     ]
-                    results = self.call(instance, step.name, args, step.ftype)
-                    values[step.out] = results[0] if step.ftype.results else None
+                    results = self.call_ref(step.func, args, step.ftype)
+                    if step.ftype.results:
+                        for slot, value in zip(step.outs, results, strict=True):
+                            values[slot] = value
+                    else:
+                        values[step.outs[0]] = None
                 elif isinstance(step, WriteStep):
                     self.memory_write(step.memory, int(evaluate(step.offset, values)), step.data)
                 elif isinstance(step, ReadStep):

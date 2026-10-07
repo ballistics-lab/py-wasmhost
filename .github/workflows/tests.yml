@@ -58,6 +58,16 @@ jobs:
         if: ${{ !cancelled() }} # run every backend even if an earlier one failed
         run: uv run --locked pytest -v --wasm-backend node
 
+      # Bun is JavaScriptCore in a runtime of its own. Not on Windows yet: the pipe protocol of the node backend, with
+      # a synchronous read of stdin, has not been tried there.
+      - name: Set up Bun
+        if: ${{ !cancelled() && matrix.os != 'windows-latest' }}
+        uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
+
+      - name: pytest --wasm-backend bun
+        if: ${{ !cancelled() && matrix.os != 'windows-latest' }}
+        run: uv run --locked pytest -v --wasm-backend bun
+
       - name: pytest --wasm-backend wasm3
         # pywasm3 is a dev dependency only on CPython >= 3.11 (see pyproject.toml). Warnings are errors so
         # that, on 3.14t, an extension turning the GIL back on at import fails the run.

@@ -136,7 +136,7 @@ def test_a_module_that_imports_needs_an_import_object(session: str) -> None:
 
 
 def test_instantiate_shortcut(session: str) -> None:
-    module, instance = wasmhost.instantiate(wb.arith())
+    module, instance = wasmhost.instantiate_sync(wb.arith())
     assert instance.exports.add(20, 22) == 42
     assert wasmhost.Module.exports(module)
 
@@ -169,13 +169,13 @@ def test_batch_does_a_single_evaluate(inst: wasmhost.Instance, monkeypatch: pyte
     engine = wasmhost.get_backend()
     if not isinstance(engine, wasmhost.JSBackend):
         pytest.skip("only a JavaScript engine has trips to save")
+    b = inst.batch()
+    x = b.call(inst.exports.add, 20, 22)  # the first access of an export fetches its handle: one trip, once
+    y = b.call(inst.exports.fadd, 0.5, 0.25)
+    z = b.call(inst.exports.add64, 2**40, 1)
     calls: list[str] = []
     real = engine.evaluate
     monkeypatch.setattr(engine, "evaluate", lambda src: calls.append(src) or real(src))
-    b = inst.batch()
-    x = b.call(inst.exports.add, 20, 22)
-    y = b.call(inst.exports.fadd, 0.5, 0.25)
-    z = b.call(inst.exports.add64, 2**40, 1)
     b.run()
     assert (x.value, y.value, z.value) == (42, 0.75, 2**40 + 1)
     assert len(calls) == 1  # one trip for the three calls

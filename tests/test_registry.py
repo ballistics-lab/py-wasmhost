@@ -10,5 +10,5 @@ def test_the_native_runtimes_are_tried_before_the_javascript_engines() -> None:
 
 
 def test_the_javascript_engines_keep_their_relative_order() -> None:
-    assert list(wasmhost.JS_AUTO_ORDER) == ["jscontext", "jsc", "gi-jsc", "node"]
+    assert list(wasmhost.JS_AUTO_ORDER) == ["jscontext", "jsc", "gi-jsc", "node", "bun"]
     assert set(wasmhost.JS_AUTO_ORDER) == set(wasmhost.JS_BACKENDS)

@@ -1,7 +1,8 @@
 import pytest
+import test_elem_signatures
 
 import wasmhost
-from wasmhost import _selftest
+from wasmhost import _cli, _selftest
 
 
 def test_selftest_passes_on_every_backend(session: str) -> None:
@@ -32,10 +33,45 @@ def test_module_constants_are_the_test_modules() -> None:
     assert _selftest.MODULE == wb.arith()
     assert _selftest.CALLBACKS == wb.callbacks()
     assert _selftest.GLOBAL_IMPORT == wb.imports_global()
+    assert _selftest.MEMORY_USER == wb.uses_memory()
+    assert _selftest.TABLE_OWN == wb.tables(imported=False)
+    assert _selftest.TABLE_IMPORT == wb.tables(imported=True)
+    assert _selftest.TABLE_ELEM == test_elem_signatures.module()
+    assert _selftest.TABLE_ELEM_START == test_elem_signatures.module(start=True)
     assert _selftest.EXCEPTIONS_FINAL == wb.exceptions(final=True)
     assert _selftest.EXCEPTIONS_LEGACY == wb.exceptions(final=False)
 
 
 def test_main(capsys: pytest.CaptureFixture[str], session: str) -> None:
-    assert _selftest.main(["--backend", session]) == 0
+    assert _cli.main(["self", "test", "--backend", session]) == 0
     assert "passed" in capsys.readouterr().out
+
+
+def test_the_command_is_a_subcommand(capsys: pytest.CaptureFixture[str], session: str) -> None:
+    assert _cli.main(["self", "test", "--backend", session]) == 0
+    assert "passed" in capsys.readouterr().out
+
+
+def test_version_and_help_succeed_and_self_alone_is_a_usage_error(capsys: pytest.CaptureFixture[str]) -> None:
+    assert _cli.main(["version"]) == 0
+    assert capsys.readouterr().out.strip() == _cli._VERSION  # pyright: ignore[reportPrivateUsage]
+    assert _cli.main(["help"]) == 0
+    assert "usage: python -m wasmhost" in capsys.readouterr().out
+    with pytest.raises(SystemExit) as stop:
+        _cli.main(["self"])  # no subcommand: usage and a failure, as with no command at all
+    assert stop.value.code == 2
+    assert "usage: python -m wasmhost self" in capsys.readouterr().err
+
+
+def test_without_a_command_there_is_only_help(capsys: pytest.CaptureFixture[str]) -> None:
+    assert _cli.main([]) == 2
+    err = capsys.readouterr().err
+    assert "COMMAND" in err
+    assert "usage: python -m wasmhost" in err
+
+
+def test_a_flag_of_the_selftest_is_not_a_flag_of_the_program(capsys: pytest.CaptureFixture[str]) -> None:
+    with pytest.raises(SystemExit) as stop:
+        _cli.main(["--backend", "node"])  # before the command: it is not the program's flag, so a usage error
+    assert stop.value.code == 2
+    assert "invalid choice" in capsys.readouterr().err

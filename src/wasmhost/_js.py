@@ -16,6 +16,7 @@ lazily), so it runs on PyPy and on Pythonista's interpreter.
 from __future__ import annotations
 
 import atexit
+import base64
 import importlib
 import json
 import re
@@ -73,7 +74,7 @@ def _translate(text: str) -> BaseException | None:
 # the calls that use an i64), so any JavaScriptCore with WebAssembly runs it.
 _JS = r"""
 globalThis.__wh = (function () {
-    var mods = [], insts = [], objs = [], HEX = [], UNHEX = new Uint8Array(128), q;
+    var mods = [], insts = [], objs = [], ids = new Map(), HEX = [], UNHEX = new Uint8Array(128), q;
     for (q = 0; q < 256; q++) HEX.push((q + 256).toString(16).slice(1));
     for (q = 0; q < 10; q++) UNHEX[48 + q] = q;
     for (q = 0; q < 6; q++) { UNHEX[97 + q] = 10 + q; UNHEX[65 + q] = 10 + q; }
@@ -94,6 +95,13 @@ globalThis.__wh = (function () {
     function ret(r) {
         if (r === undefined) return '';
         return Array.isArray(r) ? r.map(fmt).join(',') : fmt(r);
+    }
+    // the number of an object: the same object gets the same number, whichever way it comes (an exported function
+    // and the entry of a table that holds it are one function, and have to be told to be)
+    function reg(o) {
+        var n = ids.get(o);
+        if (n === undefined) { objs.push(o); n = objs.length - 1; ids.set(o, n); }
+        return n;
     }
     return {
         compile: function (hex) { mods.push(new WebAssembly.Module(fromHex(hex))); return mods.length - 1; },
@@ -127,12 +135,12 @@ globalThis.__wh = (function () {
         tableget: function (o, i) {
             var f = objs[o].get(i);
             if (f === null) return '';
-            objs.push(f);
-            return String(objs.length - 1);
+            return String(reg(f));
         },
         tableset: function (o, i, f) { objs[o].set(i, f < 0 ? null : objs[f]); return ''; },
         o: function (n) { return objs[n]; },
-        obj: function (i, name) { objs.push(insts[i].exports[name]); return objs.length - 1; },
+        obj: function (i, name) { return reg(insts[i].exports[name]); },
+        callref: function (o, args) { return ret(objs[o].apply(undefined, args)); },
         get: function (o) { return fmt(objs[o].value); },
         set: function (o, v) { objs[o].value = v; return ''; },
         size: function (o) { return String(objs[o].buffer.byteLength); },
@@ -143,6 +151,23 @@ globalThis.__wh = (function () {
         write: function (o, ptr, hex) {
             var b = fromHex(hex), u = new Uint8Array(objs[o].buffer);
             if (ptr < 0 || ptr + b.length > u.length) throw new RangeError('memory access out of bounds');
+            u.set(b, ptr);
+            return '';
+        },
+        readB64: function (o, ptr, n) {  // only where __Buffer is given (node, bun)
+            return __Buffer.from(objs[o].buffer, ptr, n).toString('base64');
+        },
+        writeB64: function (o, ptr, text) {
+            var b = __Buffer.from(text, 'base64'), u = new Uint8Array(objs[o].buffer);
+            if (ptr < 0 || ptr + b.length > u.length) throw new RangeError('memory access out of bounds');
+            u.set(b, ptr);
+            return '';
+        },
+        writeIn: function (o, ptr, n) {  // bytes that Python left in globalThis.__wasmhost_in, through the C API
+            var b = globalThis.__wasmhost_in, u = new Uint8Array(objs[o].buffer);
+            delete globalThis.__wasmhost_in;
+            if (!b || b.length !== n) throw new Error('the bytes did not arrive whole');
+            if (ptr < 0 || ptr + n > u.length) throw new RangeError('memory access out of bounds');
             u.set(b, ptr);
             return '';
         },
@@ -216,11 +241,15 @@ def _expr(operand: Operand) -> str:
     return f"({_expr(operand[1])}{tag}{_expr(operand[2])})"
 
 
+BIG = 256  # below this many bytes hex is as quick as a typed array through the C API (and needs no extra step)
+
+
 class JSBackend(Backend):
     """A JavaScript engine. Subclasses implement `evaluate`."""
 
     # One store per engine, as in the JavaScript API: whatever is made in it can be imported by any instance.
     features = Backend.features | {"import.global", "import.memory", "import.table", "table.funcs"}
+    _base64 = False  # memory moves as base64 made by a Buffer (node and bun), else as hex or as a typed array (C API)
 
     def __init__(self) -> None:
         self._ready = False
@@ -353,6 +382,14 @@ class JSBackend(Backend):
         text = self._run(f"__wh.call({instance},{json.dumps(name)},[{literals}])")
         return [_parse(t, k) for t, k in zip(text.split(","), ftype.results, strict=True)] if ftype.results else []
 
+    def call_ref(self, func: int, args: Sequence[int | float], ftype: FuncType) -> list[int | float]:
+        literals = ",".join(_literal(a, k) for a, k in zip(args, ftype.params, strict=True))
+        text = self._run(f"__wh.callref({func},[{literals}])")
+        return [_parse(t, k) for t, k in zip(text.split(","), ftype.results, strict=True)] if ftype.results else []
+
+    def function_key(self, func: int) -> int:
+        return func  # one number for one function: the engine side sees to that
+
     def _o(self, fn: str, obj: int, *args: object) -> str:
         extra = "".join(f",{a}" for a in args)
         return self._run(f"__wh.{fn}({obj}{extra})")
@@ -395,9 +432,29 @@ class JSBackend(Backend):
         return int(self._o("grow", memory, int(pages)))
 
     def memory_read(self, memory: int, offset: int, length: int) -> bytes:
-        return bytes.fromhex(self._o("read", memory, int(offset), int(length))) if length else b""
+        if not length:
+            return b""
+        if self._base64:
+            return base64.b64decode(self._o("readB64", memory, int(offset), int(length)))
+        if self._capi is not None and length >= BIG:  # a typed array through the C API: no text in between
+            try:
+                return self._capi.get_bytes(f"new Uint8Array(__wh.o({memory}).buffer, {int(offset)}, {int(length)})")
+            except Exception:  # noqa: BLE001 -- hex works, and the C API stays for what it is needed for
+                pass
+        return bytes.fromhex(self._o("read", memory, int(offset), int(length)))
 
     def memory_write(self, memory: int, offset: int, data: bytes) -> None:
+        if self._base64:
+            self._o("writeB64", memory, int(offset), json.dumps(base64.b64encode(data).decode()))
+            return
+        if self._capi is not None and len(data) >= BIG:
+            try:
+                self._capi.set_global_bytes("__wasmhost_in", data)
+            except Exception:  # noqa: BLE001
+                pass
+            else:
+                self._o("writeIn", memory, int(offset), len(data))
+                return
         self._o("write", memory, int(offset), json.dumps(data.hex()))
 
     def global_get(self, glob: int, kind: str) -> int | float:
@@ -419,13 +476,18 @@ class JSBackend(Backend):
                     _expr(a) if isinstance(a, tuple) else _literal(a, k)
                     for a, k in zip(step.args, step.ftype.params, strict=True)
                 )
-                call = f"ex[{json.dumps(step.name)}]({operands})"
-                if step.ftype.results:
-                    kinds[step.out] = step.ftype.results[0]
-                    lines.append(f"r[{step.out}]={call};")
+                call = f"O[{step.func}]({operands})"
+                if len(step.ftype.results) > 1:  # an array in JavaScript: each element into its own slot
+                    for slot, kind in zip(step.outs, step.ftype.results, strict=True):
+                        kinds[slot] = kind
+                    stores = "".join(f"r[{slot}]=t[{i}];" for i, slot in enumerate(step.outs))
+                    lines.append(f"{{const t={call};{stores}}}")
+                elif step.ftype.results:
+                    kinds[step.outs[0]] = step.ftype.results[0]
+                    lines.append(f"r[{step.outs[0]}]={call};")
                 else:
-                    kinds[step.out] = "void"
-                    lines.append(f"r[{step.out}]=({call},0);")  # a 0 marks the step as done
+                    kinds[step.outs[0]] = "void"
+                    lines.append(f"r[{step.outs[0]}]=({call},0);")  # a 0 marks the step as done
             elif isinstance(step, WriteStep):
                 lines.append(f"W(O[{step.memory}],{_expr(step.offset)},{json.dumps(step.data.hex())});")
             elif isinstance(step, ReadStep):
@@ -560,7 +622,8 @@ class GIJavaScriptCoreBackend(JSBackend):
 # with fs.writeSync, so a reply can't be queued behind a wait.
 _NODE_LOOP = r"""
 const fs = require('fs'), vm = require('vm'), { StringDecoder } = require('string_decoder');
-const ctx = vm.createContext({});
+// __Buffer: base64 of memory is far quicker than hex built in JavaScript
+const ctx = vm.createContext({ __Buffer: Buffer });
 const pause = new Int32Array(new SharedArrayBuffer(4));
 const sleep = ms => Atomics.wait(pause, 0, 0, ms);
 
@@ -617,13 +680,15 @@ class NodeBackend(JSBackend):
     """A long-lived `node` process evaluating scripts in a `vm` context (see the protocol above)."""
 
     name = "node"
-    features = JSBackend.features | {"imports"}
+    _base64 = True
+    program = "node"  # what is looked for on PATH
+    features = JSBackend.features | {"imports", "threads"}  # a process: any thread may talk to it, one at a time
 
     def __init__(self, node: str | None = None) -> None:
         super().__init__()
-        node = node or shutil.which("node")
+        node = node or shutil.which(self.program)
         if not node:
-            raise FileNotFoundError("node not found on PATH")
+            raise FileNotFoundError(f"{self.program} not found on PATH")
         self._proc = subprocess.Popen(
             [node, "-e", _NODE_LOOP],
             stdin=subprocess.PIPE,
@@ -632,7 +697,7 @@ class NodeBackend(JSBackend):
             encoding="utf-8",
         )
         if self._proc.stdin is None or self._proc.stdout is None:  # can't happen with PIPE; narrows the types
-            raise RuntimeError("node started without stdin/stdout pipes")
+            raise RuntimeError(f"{self.program} started without stdin/stdout pipes")
         self._stdin = self._proc.stdin
         self._stdout = self._proc.stdout
         atexit.register(self.close)
@@ -654,7 +719,7 @@ class NodeBackend(JSBackend):
         while True:
             line = self._stdout.readline()
             if not line:
-                raise RuntimeError(f"node exited (status {self._proc.poll()})")
+                raise RuntimeError(f"{self.program} exited (status {self._proc.poll()})")
             reply = json.loads(line)
             if "cb" in reply:  # a host function is being called: answer it (it may evaluate again, nested)
                 ident, args_json = reply["cb"]
@@ -673,3 +738,12 @@ class NodeBackend(JSBackend):
             self._proc.wait(timeout=5)
         if not self._stdout.closed:
             self._stdout.close()
+
+
+class BunBackend(NodeBackend):
+    """Bun, which is JavaScriptCore (as in Safari and on iOS) in a runtime of its own, running the very script
+    `NodeBackend` runs: a long-lived process, one JSON line each way, a synchronous read of its stdin to wait for the
+    answer of a host function. Nothing differs but the program."""
+
+    name = "bun"
+    program = "bun"

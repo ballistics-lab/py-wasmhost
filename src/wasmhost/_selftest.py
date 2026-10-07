@@ -1,14 +1,15 @@
-"""A self-test to run on the device: `python -m wasmhost`, or `wasmhost.selftest()` from a console.
+"""A self-test to run on the device: `python -m wasmhost self test`, or `wasmhost.selftest()` from a console.
 
 Made for Pythonista (or any iOS Python app), where nothing else can be run to see whether wasmhost works: it
 walks through the things that could go wrong there -- the Objective-C bridge, `WebAssembly` and `BigInt` in the
-engine, calls, memory, globals, traps, batches -- prints one line for each, and ends with a summary and the
-cost of a call. If something fails, send the whole output.
+engine, calls, memory, globals, memories and tables made on their own, custom sections, types, traps, batches -- prints
+one line for each, and ends with a summary and the cost of a call. If something fails, send the whole output.
 """
 
 from __future__ import annotations
 
 import argparse
+import asyncio
 import importlib.util
 import math
 import platform
@@ -16,16 +17,19 @@ import sys
 import sysconfig
 import time
 import traceback
-from collections.abc import Callable, Sequence
+from collections.abc import Callable
 from typing import Any
 
-from ._api import Global, Instance, Module, get_backend, validate
+from ._api import Global, Instance, Memory, Module, Table, get_backend, validate
+from ._api import compile as compile_async
+from ._api import instantiate as instantiate_async
 from ._backend import Backend
+from ._binary import FuncType, GlobalType, MemoryType, TableType, i32, i64
 from ._errors import CompileError, LinkError, Trap
 from ._js import JSBackend
 from ._registry import AUTO_ORDER, BACKENDS
 
-__all__ = ("main", "selftest")
+__all__ = ("selftest",)
 
 # A module with: add(i32, i32) -> i32, add64(i64, i64) -> i64, fadd(f64, f64) -> f64, trap(), dup(i32) -> (i32, i32),
 # store8(ptr, value), grow(pages) -> i32, twice(f32) -> f32, a memory of 1 page (at most 4), a mutable i32 global
@@ -69,6 +73,40 @@ GLOBAL_IMPORT = bytes.fromhex(
     "0a1002040023000b0900230041016a24000b"  # code
 )
 
+
+# A module that imports the memory env.memory (min 1 page): load(addr) -> i32 reads a byte, and
+# store(addr, byte) writes one.
+MEMORY_USER = bytes.fromhex(
+    "0061736d01000000010b0260017f017f60027f7f00020f0103656e76066d656d6f72790200010303020001071002046c"
+    "6f616400000573746f726500010a1302070020002d00000b0900200020013a00000b"
+)
+
+# A module with a table of two funcref entries that it exports as "table", and add(a, b), mul(a, b) and
+# call(a, b, index) = table[index](a, b) (call_indirect).
+TABLE_OWN = bytes.fromhex(
+    "0061736d01000000010e0260027f7f017f60037f7f7f017f030403000001040401700002071c04036164640000036d75"
+    "6c00010463616c6c0002057461626c6501000a1d030700200020016a0b0700200020016c0b0b00200020012002110000"
+    "0b"
+)
+
+# Two functions (add, mul) that no one exports, put in the slots 0 and 1 of the exported table by an `elem` segment.
+TABLE_ELEM = bytes.fromhex(
+    "0061736d01000000010a0260027f7f017f600000030403000001040401700002070901057461626c6501000908010041000b"
+    "0200010a14030700200020016a0b0700200020016c0b02000b"
+)
+
+# The same, with a start function, so that no one tells the type of what the table holds.
+TABLE_ELEM_START = bytes.fromhex(
+    "0061736d01000000010a0260027f7f017f600000030403000001040401700002070901057461626c65010008010209080100"
+    "41000b0200010a14030700200020016a0b0700200020016c0b02000b"
+)
+
+# The same module, but its table is imported as env.table (two entries at least) instead of its own.
+TABLE_IMPORT = bytes.fromhex(
+    "0061736d01000000010e0260027f7f017f60037f7f7f017f020f0103656e76057461626c650170000203040300000107"
+    "1403036164640000036d756c00010463616c6c00020a1d030700200020016a0b0700200020016c0b0b00200020012002"
+    "1100000b"
+)
 
 # Two functions, caught() -> i32 and uncaught() -> i32: each throws a WebAssembly exception (tag 0 and tag 1) inside a
 # handler for tag 0. caught() comes out of the handler with 42, uncaught() must not return. There is a module for each
@@ -172,6 +210,14 @@ def _selftest_backend(backend: Backend, out: Callable[[str], object]) -> _Report
     step("batch: an error keeps the earlier results", lambda: _batch_error(box["i"]))
     step("host functions (Python called from the module)", lambda: _host_functions(backend))
     step("globals: made on their own, imported, shared", lambda: _globals_on_their_own(backend))
+    step("memory: made on its own, imported, shared", lambda: _memory_on_its_own(backend))
+    step("table: made on its own, imported, shared", lambda: _table_on_its_own(backend))
+    step("functions: one object per function, signature, a table entry", lambda: _functions(backend))
+    step("async compile and instantiate, tasks at once", lambda: _async(backend))
+    step("threads: one backend, several threads, one call at a time", lambda: _threads(backend))
+    step("memory view: the engine's memory without a copy", lambda: _memory_view(backend, box["i"]))
+    step("custom sections", lambda: _custom_sections(backend))
+    step("type reflection: type() of a function, memory, table and global", lambda: _types(backend))
     step("an isolated instance", lambda: _isolated(backend))
     step("exception handling (which encodings the engine takes)", lambda: _exceptions(backend))
     step("call cost", lambda: _timing(backend, box["i"]))
@@ -278,6 +324,237 @@ def _globals_on_their_own(backend: Backend) -> str:
     except LinkError:
         return "shared by two instances, the host and an export; a wrong import is a LinkError"
     raise AssertionError("a number was taken for a mutable global")
+
+
+def _memory_on_its_own(backend: Backend) -> str:
+    if not backend.supports("import.memory"):
+        try:
+            Memory(1, backend=backend)
+        except NotImplementedError:
+            return "not available on this backend, as documented"
+        raise AssertionError("should be NotImplementedError")
+    mem = Memory(1, 3, backend=backend)
+    _expect(len(mem), 65536)
+    mem.write(10, b"abc")
+    _expect(mem.read(10, 3), b"abc")
+    module = Module(MEMORY_USER, backend=backend)
+    a = Instance(module, {"env": {"memory": mem}}).exports
+    b = Instance(module, {"env": {"memory": mem}}).exports
+    a.store(5, 42)
+    _expect((b.load(5), mem.read(5, 1)), (42, b"\x2a"))  # two instances and the host, one memory
+    mem.write(6, b"\x07")
+    _expect(a.load(6), 7)
+    if backend.supports("memory.grow"):
+        _expect((mem.grow(1), len(mem), mem.read(10, 3)), (1, 2 * 65536, b"abc"))
+        try:
+            mem.grow(5)  # over its maximum
+        except IndexError:
+            pass
+        else:
+            raise AssertionError("a memory grew past its maximum")
+    for wrong in (Memory(0, backend=backend), 1):  # smaller than the module wants, and not a memory at all
+        try:
+            Instance(module, {"env": {"memory": wrong}})
+        except LinkError:
+            pass
+        else:
+            raise AssertionError(f"{wrong!r} was taken for the memory of the module")
+    return "shared by two instances and the host; the limits and a wrong import are checked"
+
+
+def _table_on_its_own(backend: Backend) -> str:
+    if not (backend.supports("import.table") and backend.supports("table.funcs")):
+        try:
+            Table("funcref", 1, backend=backend)
+        except NotImplementedError:
+            return "not available on this backend, as documented"
+        raise AssertionError("should be NotImplementedError")
+    table = Table("funcref", 2, 4, backend=backend)
+    _expect((len(table), table.get(0)), (2, None))
+    provider = Instance(Module(TABLE_OWN, backend=backend)).exports
+    user = Instance(Module(TABLE_IMPORT, backend=backend), {"env": {"table": table}}).exports
+    table.set(0, provider.add)
+    table.set(1, provider.mul)
+    _expect((user.call(6, 7, 0), user.call(6, 7, 1)), (13, 42))  # call_indirect into another instance's functions
+    table.set(1, None)
+    try:
+        user.call(1, 2, 1)  # a null entry
+    except Trap:
+        pass
+    else:
+        raise AssertionError("a null entry was called")
+    _expect((table.grow(1), len(table)), (2, 3))
+    _expect((provider.table.grow(3), len(provider.table)), (2, 5))  # a table the module exports grows too
+    filled = Table("funcref", 2, 4, provider.add, backend=backend)  # every entry starts as `add`, as in JavaScript
+    _expect((filled.get(0) is provider.add, filled.get(1) is provider.add), (True, True))
+    _expect(
+        (filled.grow(1, provider.mul), filled.get(2) is provider.mul, filled.get(0) is provider.add), (2, True, True)
+    )
+    try:
+        Table("externref", 1, backend=backend)
+    except NotImplementedError:
+        return "functions shared across instances; an externref table is not supported yet, as documented"
+    raise AssertionError("an externref table should be NotImplementedError")
+
+
+def _functions(backend: Backend) -> str:
+    """A function is one object (`table.get(0) is exports.add`), its signature is known for an export, can be given
+    by hand for a table entry the engine does not describe, and a wrong one is refused when it contradicts."""
+    if not (backend.supports("import.table") and backend.supports("table.funcs")):
+        return "no functions in tables on this backend"
+    provider = Instance(Module(TABLE_OWN, backend=backend)).exports
+    add = provider.add
+    add_type = FuncType((i32, i32), (i32,))
+    _expect((provider.add is add, add.signature, add.type()), (True, add_type, add_type))
+    table = Table("funcref", 2, backend=backend)
+    table.set(0, add)
+    entry = table.get(0)
+    _expect((entry is add, entry == add, hash(entry) == hash(add)), (True, True, True))
+    _expect(provider.mul == add, False)
+    try:
+        add.signature = FuncType((i32,), (i32,))
+    except ValueError:
+        pass
+    else:
+        raise AssertionError("a signature that contradicts the known one was accepted")
+    fresh = Table("funcref", 1, backend=backend)
+    fresh.set(0, add)
+    other = fresh.get(0)
+    assert other is not None
+    if other.signature is None:
+        try:
+            other.type()
+        except ValueError:
+            other.signature = add_type  # the engine does not say: given by hand
+    _expect(other(2, 3), 5)
+    entry = Instance(Module(TABLE_ELEM, backend=backend)).exports.table.get(1)  # put there by an `elem` segment
+    assert entry is not None
+    _expect((entry.signature, entry(6, 7)), (add_type, 42))  # known without being told, on every backend
+    checked = "a wrong signature refused"
+    if not backend.supports("table.signatures"):  # an engine that does not tell types: the call is checked by it
+        unknown = Instance(Module(TABLE_ELEM_START, backend=backend)).exports.table.get(0)
+        assert unknown is not None and unknown.signature is None
+        unknown.signature = FuncType((i64,), (i64,))  # it is (i32, i32) -> i32
+        try:
+            unknown(1)
+        except TypeError:
+            pass
+        else:
+            raise AssertionError("a function was called as another type")
+        unknown.signature = add_type
+        _expect(unknown(1, 2), 3)
+        checked = "a wrong signature refused by the engine"
+    return f"identity, equality, signature rules, a function of an elem segment, {checked}; a table entry called"
+
+
+def _memory_view(backend: Backend, instance: Instance) -> str:
+    """`Memory.view` is the memory itself, and is unusable (a ValueError) once the module may have run."""
+    if not backend.supports("memory.view"):
+        try:
+            instance.exports.memory.view()
+        except NotImplementedError:
+            return "not available on this backend (a JavaScript engine's memory is not in this process), as documented"
+        raise AssertionError("a view of the memory was given where there is none")
+    memory = instance.exports.memory
+    view = memory.view(100, 4)
+    view[:] = b"view"
+    _expect(memory.read(100, 4), b"view")  # written through the view, read through the engine
+    instance.exports.add(1, 2)
+    try:
+        view[0]
+    except ValueError:
+        return "writes through to the memory; released when the module runs, so never a stale address"
+    raise AssertionError("a view of the memory survived a call into the module")
+
+
+def _threads(backend: Backend) -> str:
+    """Several threads calling into one backend each get right answers (its lock lets one in at a time)."""
+    try:
+        import threading
+    except ImportError:
+        return "skipped: this Python has no threads"
+    ex = Instance(Module(MODULE, backend=backend)).exports
+    wrong: list[str] = []
+
+    def work(seed: int) -> None:
+        for i in range(50):
+            if ex.add(seed, i) != seed + i:
+                wrong.append(f"{seed}+{i}")
+
+    threads = [threading.Thread(target=work, args=(n * 1000,)) for n in range(4)]
+    try:
+        for t in threads:
+            t.start()
+    except RuntimeError:
+        return "skipped: this Python can't start a thread"
+    for t in threads:
+        t.join()
+    _expect(wrong, [])
+    return "four threads, 50 calls each, all right"
+
+
+def _async(backend: Backend) -> str:
+    """`await compile(...)` and `await instantiate(...)`, many tasks at once: each gets its own right answer."""
+    try:
+        asyncio.get_running_loop()
+    except RuntimeError:
+        pass
+    else:
+        return "skipped: an event loop is already running here (asyncio.run can't nest)"
+
+    async def one(n: int, threaded: bool) -> int:
+        module = await compile_async(MODULE, backend=backend, threaded=threaded)
+        instance = await instantiate_async(module, backend=backend, threaded=threaded)
+        assert isinstance(instance, Instance)
+        return int(instance.exports.add(n, n))
+
+    async def main(threaded: bool) -> list[int]:
+        return list(await asyncio.gather(*(one(n, threaded) for n in range(6))))
+
+    _expect(asyncio.run(main(False)), [0, 2, 4, 6, 8, 10])  # the default: no thread
+    where = "in place, a turn of the loop around it"
+    if backend.supports("threads"):
+        _expect(asyncio.run(main(True)), [0, 2, 4, 6, 8, 10])
+        where += "; and in worker threads when asked for"
+    return f"six tasks at once; {where}"
+
+
+def _custom(name: str, payload: bytes) -> bytes:
+    """A custom section (id 0), for a name and payload short enough for a one-byte size."""
+    body = bytes([len(name)]) + name.encode() + payload
+    assert len(body) < 128
+    return b"\x00" + bytes([len(body)]) + body
+
+
+def _custom_sections(backend: Backend) -> str:
+    module = Module(MODULE + _custom("mine", b"hello") + _custom("mine", b"again"), backend=backend)
+    _expect(Module.customSections(module, "mine"), [b"hello", b"again"])
+    _expect(Module.customSections(module, "absent"), [])
+    _expect(Instance(module).exports.add(2, 3), 5)  # a custom section does not get in the way
+    return "two of one name, none of another"
+
+
+def _types(backend: Backend) -> str:
+    """The type reflection of the JavaScript API: `type()` of a function, a memory and a global, and, where the
+    backend makes them on its own, of a memory, a table and a global from a descriptor."""
+    ex = Instance(Module(MODULE, backend=backend)).exports
+    _expect(ex.add.type(), FuncType((i32, i32), (i32,)))  # the types are their names, so both spellings do
+    _expect(repr(ex.add.type()), "FuncType(parameters=(i32, i32), results=(i32,))")
+    _expect(ex.memory.type(), MemoryType(1, 4, False))
+    _expect((ex.counter.type(), ex.ten.type()), (GlobalType("i32", True), GlobalType("i32", False)))
+    _expect(ex.grow(1), 1)  # the module's own memory.grow
+    _expect(ex.memory.type(), MemoryType(2, 4, False))  # the minimum is the size now
+    made: list[str] = []
+    if backend.supports("import.memory"):
+        _expect(Memory({"initial": 1, "maximum": 3}, backend=backend).type(), MemoryType(1, 3, False))
+        made.append("memory")
+    if backend.supports("import.table"):
+        _expect(Table({"element": "anyfunc", "initial": 2}, backend=backend).type(), TableType("funcref", 2, None))
+        made.append("table")
+    if backend.supports("import.global"):
+        _expect(Global({"value": "f64", "mutable": True}, 1.5, backend=backend).type(), GlobalType("f64", True))
+        made.append("global")
+    return "from a descriptor: " + (", ".join(made) or "nothing on this backend")
 
 
 def _exceptions(backend: Backend) -> str:
@@ -409,8 +686,11 @@ def _batch(instance: Instance) -> None:
     b.write(ex.memory, three + 397, b"xyz")
     back = b.read(ex.memory, three * 100, 1)
     text = b.read(ex.memory, three + 397, three)
+    first, second = b.call(ex.dup, three)  # a multi-value result: one Ref for each, usable by the next step
+    again = b.call(ex.add, first, second)
     b.run()
     _expect((three.value, back.value, text.value), (3, b"A", b"xyz"))
+    _expect((first.value, second.value, again.value), (3, 3, 6))
 
 
 def _batch_error(instance: Instance) -> None:
@@ -460,11 +740,16 @@ def selftest(backend: Backend | str | None = None, out: Callable[[str], object] 
     return not report.failed
 
 
-def main(argv: Sequence[str] | None = None) -> int:
-    ap = argparse.ArgumentParser(prog="python -m wasmhost", description="Check that wasmhost works here.")
-    ap.add_argument("--backend", choices=sorted(BACKENDS), help="one backend (default: the first that starts)")
-    ap.add_argument("--all", action="store_true", help="every backend that starts here")
-    args = ap.parse_args(argv)
+DESCRIPTION = "Check that wasmhost works here."
+
+
+def add_arguments(parser: argparse.ArgumentParser) -> None:
+    parser.add_argument("--backend", choices=sorted(BACKENDS), help="one backend (default: the first that starts)")
+    parser.add_argument("--all", action="store_true", help="every backend that starts here")
+
+
+def run(args: argparse.Namespace) -> int:
+    """The `selftest` command, with the arguments `add_arguments` made: 0 if everything passed, else 1."""
     if args.all:
         ok = True
         for name in AUTO_ORDER:
