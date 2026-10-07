@@ -57,7 +57,7 @@ the self-test has 32 steps on wasmtime/wasm3 and 38 on the JS engines): B-201 (s
 safety net through `call_indirect`), B-202 (the initial value of a table), B-204 (multi-value in a batch), B-301 (`Memory.view`), B-302 (`bench`
 with buffer transfer), B-304 (a lock per backend, `await compile/instantiate`, threads only with `threaded=True`), B-507 (the `wasmhost` command),
 B-509 (`wasi_sh.py`, `--home`), fast buffers (a typed array through the C API on jsc/jscontext, base64 on node/bun), Bun as a backend in CI, tests for
-`pyodide.py` and `wasi_sh.py`. **Verified by the owner on the device (Pythonista, iPhone 16, iOS 26, `jscontext`):** self-test 36/36, buffers intact
+`pyodide.py` and `wasi_sh.py`. **Verified by the owner on the device (Pythonista, iPhone 16, iOS 26, `jscontext`):** self-test 36/36 (38/38 after B-401, see there), buffers intact
 from 1 byte to 8 MiB at 5400/12700 MB/s (1 MiB write/read), `await compile/instantiate`, multi-value in a batch, `wasi_sh --home`, `bench`.
 
 **Deferred by owner decision:** B-304a (examples on asyncio; the shape of the `pyodide.py` API is not settled: add `async` methods alongside (the
@@ -360,7 +360,8 @@ Done when: transferring a buffer of megabytes is not copied on wasmtime and wasm
       itself, nothing is compiled); `type()` of an exported memory says the maximum that holds. A memory the module imports is checked against the
       ceiling: no maximum, or a larger one, is a `LinkError`. Tests: `tests/test_max_memory.py`.
       Limits of this: only memories; no time or fuel (B-402); a bigger-than-needed ceiling costs nothing, but a module compiled with a custom page
-      size is not supported. Not verified: JSC on a device (CI covers `jsc`, `gi-jsc`, `jscontext` through the fakes).
+      size is not supported. **Verified by the owner on the device (Pythonista, iPhone 16, iOS 26, `jscontext`, 2026-10-07): self-test 38/38**, both steps
+      run (not "not available"), a call 36 us, a batch of 3 83 us. CI was green on all platforms (run 37616628414).
 - [ ] **B-402** A timeout or execution fuel: `fuel`/`epoch` on wasmtime, a `gas` analogue on wasm3, interruption on Node
       (a separate process). `supports("timeout")` will be `False` on JSC: it is honest to write this in the README.
 - [ ] **B-403** Tests "a module with an infinite loop" on every backend that can do this.
