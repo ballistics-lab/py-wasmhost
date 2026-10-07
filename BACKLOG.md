@@ -450,9 +450,12 @@ files in a real folder, stdio, arguments, a clock, `sleep`), tests on wasmtime a
 - [x] **B-507** (DONE: `[project.scripts]`, `tests/test_cli_entry.py`; we will extend it when running a module appears, B-506) The entry point `wasmhost`: `[project.scripts] wasmhost = "wasmhost._cli:main"` in `pyproject.toml`, so that one can
       write `wasmhost myapp.wasm` and `wasmhost self test`, and not `python -m wasmhost`. Right now there is no such command.
       Check `uv lock --check` and the wheels.
-- [ ] **B-508** Running a module without WASI (like our `fib` and `sum`): it has no `_start` and no arguments, so a separate
-      subcommand with a call of an exported function, for example `wasmhost call myapp.wasm add 2 3` (the types from
-      `Module.exports`). This is an idea, not a decision: discuss before doing it.
+- [ ] **B-508** (rewritten 2026-10-07 on the owner's word; **part of the B-506 design**, deferred with phase 5; the form is **not decided**) Calling an exported function of a module without WASI
+      (like our `fib` and `sum`: no `_start`, no arguments) from the command line. It does not need WASI itself, but it shares the command line with B-506, so the two are designed together.
+      **Two forms, neither chosen:** (a) a subcommand, `wasmhost call myapp.wasm add 2 3`: one more reserved word next to `self`/`test`, and it looks like the WASI form, where everything after the module
+      goes to the program; a module file named `call` would have to be run as `./call`; (b) an option of the host, as `wasmtime --invoke` has: `wasmhost --invoke add myapp.wasm 2 3`: no new reserved word,
+      and it fits the B-506 rule that an option before the module belongs to the host. Either way the argument types come from `Module.exports`. Open: the form, what a module with `_start` does without
+      the option (run as WASI, B-506), what one without prints (its exports?), the output format of results (multi-value), how an `i64`/`f32` argument is written.
 
 Self-test: a WASI step (run a tiny WASI program: `fd_write` into stdout, `args`, a file in a temporary folder).
 
