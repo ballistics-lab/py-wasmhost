@@ -59,11 +59,14 @@ class _Wasm3Global(NamedTuple):
 
 
 class _Wasm3Instance:
-    def __init__(self, runtime: Any, module: Any) -> None:
+    def __init__(self, runtime: Any, module: Any, timeout: float | None = None) -> None:
         self.runtime = runtime
         self.module = module
         self.functions: dict[str, Any] = {}
         self.memories: dict[str, Any] = {}
+        self.timeout = timeout  # seconds for a call, or None
+        self.deadline: float | None = None  # of the call in progress (a call from a host function shares it)
+        self.stopped = False  # a call was stopped by the timeout: the paused call can't be cancelled, so it ends here
 
     def function(self, name: str) -> Any:
         if (f := self.functions.get(name)) is None:
@@ -89,9 +92,14 @@ class Wasm3Backend(Backend):
 
     name = "wasm3"
     # It has no Memory.grow from Python (a module's own memory.grow works, and len(memory) follows) and no tables.
-    features = frozenset({"imports", "isolated", "memory.view"})
+    # "timeout": a call is cut into slices of gas, and the clock is looked at between them (a thread can't stop a call,
+    # which holds the GIL). The paused call can't be cancelled, so an instance that timed out can't run again.
+    features = frozenset({"imports", "isolated", "memory.view", "timeout"})
     # wasm3's own value stack, separate from the module's shadow stack in linear memory.
     STACK_BYTES = 256 * 1024
+    # Gas between two looks at the clock: about 5 ms of a tight loop, which cost about 8% in a measurement (a slice of
+    # 5000 is 1.4 ms and finer, one of 100000 is 27 ms and coarser).
+    SLICE_GAS = 20_000
 
     def __init__(self, stack_size: int = STACK_BYTES) -> None:
         self._wasm3: Any = importlib.import_module("wasm3")  # ImportError here means "backend not available"
@@ -122,29 +130,72 @@ class Wasm3Backend(Backend):
     ) -> _Wasm3Instance:
         # `isolated` is what a wasm3 instance is anyway: it has its own runtime and shares nothing.
         runtime = self._env.new_runtime(self._stack)
+        if timeout is not None:
+            # Both before the first `find_function`: the pause points and the gas count are compiled into the code
+            # as it is found, and a function found earlier would run on, uncounted, for ever.
+            runtime.suspendable = True
+            runtime.gas_limit = self.SLICE_GAS
         parsed = self._env.parse_module(module)
         runtime.load(parsed)
         for host in imports:  # linked after loading, before the first call
             if isinstance(host, HostObject):
                 raise NotImplementedError(f"pywasm3 can't import a {host.kind}: only functions")
             parsed.link_function(host.module, host.name, _wasm3_signature(host.ftype), _wasm3_callable(host))
-        return _Wasm3Instance(runtime, parsed)
+        return _Wasm3Instance(runtime, parsed, timeout)
 
     def new_global(self, kind: str, value: int | float, mutable: bool) -> Any:
         raise NotImplementedError("pywasm3 can't make a global outside a module")
+
+    @contextlib.contextmanager
+    def _deadline(self, instance: _Wasm3Instance) -> Generator[None]:
+        """Around anything that runs wasm in a timed instance: the clock starts at the outermost call, and a call made
+        from a host function while it runs is under the same one."""
+        if instance.timeout is None or instance.deadline is not None:
+            yield
+            return
+        instance.deadline = time.monotonic() + instance.timeout
+        try:
+            yield
+        finally:
+            instance.deadline = None
+
+    def _run(self, instance: _Wasm3Instance, function: Any, args: Sequence[int | float]) -> Any:
+        """The call, in slices of gas if the instance has a timeout: it pauses when a slice is spent (the clock is
+        looked at there), and goes on from where it stopped until it ends or the time is up."""
+        if instance.timeout is None:
+            return function(*args)
+        if instance.stopped:
+            raise Trap("this wasm3 instance was stopped by its timeout and can't run again: make a new one")
+        runtime = instance.runtime
+        runtime.gas_limit = self.SLICE_GAS
+        result = function(*args)
+        while runtime.suspended:  # a call without results gives None whether it ended or paused: `suspended` says
+            if instance.deadline is not None and time.monotonic() >= instance.deadline:
+                instance.stopped = True  # the paused call stays paused: pywasm3 has no way to cancel it
+                raise Timeout(f"the call ran longer than {instance.timeout:g} s")
+            runtime.gas_limit = self.SLICE_GAS
+            result = runtime.resume()
+        return result
 
     def call(
         self, instance: _Wasm3Instance, name: str, args: Sequence[int | float], ftype: FuncType
     ) -> list[int | float]:
         try:
-            result = instance.function(name)(*args)
+            with self._deadline(instance):
+                result = self._run(instance, instance.function(name), args)
         except RuntimeError as exc:
+            if isinstance(exc, (Trap, Timeout)):
+                raise
             if "[trap]" in str(exc):
                 raise Trap(str(exc)) from None
             raise
         if result is None:
             return []
         return list(cast("Sequence[int | float]", result)) if isinstance(result, tuple) else [result]
+
+    def run_batch(self, instance: _Wasm3Instance, steps: Sequence[Step]) -> BatchResult:
+        with self._deadline(instance):  # the whole batch is one call to the timeout
+            return super().run_batch(instance, steps)
 
     def export_function(self, instance: _Wasm3Instance, name: str) -> _Wasm3Function:
         return _Wasm3Function(instance, name)  # pywasm3 has no function objects of its own to hold: by name

@@ -373,16 +373,23 @@ Done when: transferring a buffer of megabytes is not copied on wasmtime and wasm
       so a function that is not one of those is not timed; a `Timeout` in a batch drops the results of the steps before it (the termination can't be caught in the script).
       **Not possible, and `supports("timeout")` is false:** **bun** (its `vm` timeout does not stop a wasm loop: the process hangs, had to be killed); **JavaScriptCore**
       (`jscontext`, `jsc`, `gi-jsc`: `JSContextGroupSetExecutionTimeLimit` is exported and stops a JavaScript loop in 0.30 s, but a wasm loop runs on: probed with
-      `libjavascriptcoregtk` 2.52.6 on Linux; not probed on a device, but the owner's view that JSC has no interruption holds), so **on iOS there is no time limit**; **wasm3** (no time limit: a call holds the GIL,
-      so no thread can act; probed 2026-10-07: pywasm3's `request_suspend()` from a `threading.Timer`, with `suspendable = True`, never ran and `spin()` hung). **Correction (2026-10-07): an
-      earlier note here and in the README said "no gas or interruption in pywasm3"; that was wrong and unchecked: the pinned pywasm3 has `Runtime.gas_limit` / `gas_used` (and `Module.gasLimit`),
-      and an endless loop under a limit ends with `[trap] out of gas` (1.3 s for 5e6 units, the runtime fine afterwards).** A backend without it raises `NotImplementedError` from
+      `libjavascriptcoregtk` 2.52.6 on Linux; not probed on a device, but the owner's view that JSC has no interruption holds), so **on iOS there is no time limit**. A backend without it raises `NotImplementedError` from
       `Instance(timeout=)`, and the self-test step does not run the loop there.
+      **wasm3 (added 2026-10-07, after the owner re-pinned pywasm3 and asked to look at suspend/resume):** a thread can't stop a call (it holds the GIL: `request_suspend()` from a
+      `threading.Timer` never ran and `spin()` hung), but pywasm3's suspendable runs can: `suspendable = True` and `gas_limit` make a call **pause** (return None, `suspended`) when its gas is
+      spent, and `resume()` goes on, so `Wasm3Backend._run` cuts a call into slices of `SLICE_GAS` = 20000 (about 5 ms of a tight loop; measured: 5000 gas is 1.4 ms and notices the deadline 0.4 ms
+      late, 100000 is 27 ms and 13 ms late; a busy loop in slices of 20000 cost x1.08, and `suspendable` alone costs nothing) and looks at the clock between them.
+      **Both settings must come before the first `find_function()`** (the code is instrumented as it is found; set after, an endless loop ran on for ever), so `instantiate` sets them.
+      **Limit: a paused call can't be cancelled** (no such call in pywasm3; turning `suspendable` off and resuming with no gas left paused it again; a new call that has to pause then traps
+      `out of gas`), so **an instance that timed out is finished: every later call is a `Trap`** ("can't run again"), other instances are fine. Calls from a host function share the outer deadline.
+      **Correction (2026-10-07): an earlier note here and in the README said "no gas or interruption in pywasm3"; that was wrong and unchecked.** What pywasm3 has: `Runtime.gas_limit` / `gas_used`,
+      and an endless loop under a limit ends with `[trap] out of gas` (1.3 s for 5e6 units; units are not instructions), plus `suspendable`, `request_suspend`, `resume`, snapshots, and `memory_limit` /
+      `table_limit` / `continuation_limit`, `new_tag` (exceptions, B-601).
       Not done: fuel (a count of instructions, deterministic, no thread): it was only in this item's title, and is now B-404. wasmtime has `consume_fuel` (same cost question as epochs: a
       second engine), wasm3 has `gas_limit` (cheap, no second engine); neither JavaScriptCore nor Node/Bun can count, and iOS has neither wasmtime nor wasm3, so it would not help there.
       Not verified on macOS/Windows or a device by this item itself (CI was green on every platform).
       Found on the way: a trap in the start function leaked out of wasmtime as its own `Trap` (fixed: `Trap` is not a `WasmtimeError`); `wasm3` does not run the start function when the
-      instance is made, but at the first call.
+      instance is made, but at the first call (so there the start function is under the timeout at the first call).
 - [x] **B-403** (DONE 2026-10-07, with B-402: `tests/test_timeout.py`, 36 tests) Tests "a module with an infinite loop" on every backend that can do this:
       `wasmtime` and `node` stop it; the others are skipped with the reason, and `test_a_backend_that_cannot_says_so` checks that they refuse honestly.
 - [ ] **B-404** (added 2026-10-07 on the owner's word; an idea, not started) Fuel / gas: a limit on the instructions a call may run, not on time. Deterministic (the same

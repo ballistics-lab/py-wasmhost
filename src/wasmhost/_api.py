@@ -925,15 +925,17 @@ class Instance:
     memory the module imports is the host's: its own maximum is the ceiling there, and one with no maximum, or a
     larger one, is a LinkError.
 
-    `timeout=seconds` (not in the JavaScript API; `backend.supports("timeout")`: wasmtime and Node, a
+    `timeout=seconds` (not in the JavaScript API; `backend.supports("timeout")`: wasmtime, Node and wasm3, a
     NotImplementedError elsewhere) stops any call into the instance that runs longer, with a `Timeout` (a `Trap`): an
-    infinite loop in untrusted code ends, and the instance can be called again. The time is the wall clock, host
-    functions included; it is per call, and a batch is one call; the start function is under it too. On wasmtime the
-    instance is made for an engine that counts epochs (a tight loop runs about three times slower there) and lives in
-    a store of its own, like an isolated one, so it can't share a Memory, Table or Global made outside it. On Node a
-    function or table of the instance is timed, but a `Timeout` in a batch drops the results of the steps before it.
-    The JavaScriptCore engines and Bun can't stop a wasm loop (a script's time limit does not reach it), and wasm3
-    can't on time (a call holds the GIL, so no timer thread runs; its gas count could limit instructions instead)."""
+    infinite loop in untrusted code ends, and the instance can be called again (not on wasm3, see below). The time is
+    the wall clock, host functions included; it is per call, and a batch is one call; the start function is under it
+    too. On wasmtime the instance is made for an engine that counts epochs (a tight loop runs about three times slower
+    there) and lives in a store of its own, like an isolated one, so it can't share a Memory, Table or Global made
+    outside it. On Node a function or table of the instance is timed, but a `Timeout` in a batch drops the results of
+    the steps before it. On wasm3 no thread can stop a call (it holds the GIL), so the call runs in slices of gas and
+    the clock is looked at between them; a call that paused can't be cancelled, so after a `Timeout` every call on that
+    instance is a `Trap` ("can't run again"), while other instances are fine. The JavaScriptCore engines and Bun can't
+    stop a wasm loop (a script's time limit does not reach it)."""
 
     def __init__(
         self,

@@ -43,6 +43,8 @@ def test_a_timeout_is_a_trap(timed: wasmhost.Backend) -> None:
 
 
 def test_the_instance_is_fine_after_a_timeout(timed: wasmhost.Backend) -> None:
+    if timed.name == "wasm3":
+        pytest.skip("on wasm3 an instance that timed out can't run again: see the test below")
     ex = _spinner().exports
     assert ex.quick() == 7
     with pytest.raises(wasmhost.Timeout):
@@ -50,6 +52,22 @@ def test_the_instance_is_fine_after_a_timeout(timed: wasmhost.Backend) -> None:
     assert (ex.quick(), ex.busy(1000)) == (7, 1000)  # callable again
     with pytest.raises(wasmhost.Timeout):
         ex.spin()  # and stopped again
+
+
+def test_a_wasm3_instance_ends_with_its_timeout(timed: wasmhost.Backend) -> None:
+    """pywasm3 can't cancel a call that paused, so after a Timeout every call is refused, with a reason; the other
+    instances of the backend, made from the same module, are not touched."""
+    if timed.name != "wasm3":
+        pytest.skip("only wasm3 can't go on")
+    module = wasmhost.Module(wb.spinner())
+    stopped = wasmhost.Instance(module, timeout=LIMIT).exports
+    other = wasmhost.Instance(module, timeout=LIMIT).exports
+    with pytest.raises(wasmhost.Timeout):
+        stopped.spin()
+    with pytest.raises(wasmhost.Trap, match="can't run again"):
+        stopped.quick()
+    assert (other.quick(), other.busy(1000)) == (7, 1000)  # a separate runtime
+    assert wasmhost.Instance(module, timeout=LIMIT).exports.quick() == 7  # and a new one is fine
 
 
 def test_a_call_that_finishes_is_not_disturbed(timed: wasmhost.Backend) -> None:
@@ -60,6 +78,8 @@ def test_a_call_that_finishes_is_not_disturbed(timed: wasmhost.Backend) -> None:
 
 def test_a_late_deadline_does_not_hit_the_next_call(timed: wasmhost.Backend) -> None:
     """A call that ends just as its time does must not leave a tick behind that stops the one after it."""
+    if timed.name == "wasm3":
+        pytest.skip("on wasm3 an instance that timed out can't run again")
     ex = _spinner(0.05).exports
     for _ in range(15):
         with pytest.raises(wasmhost.Timeout):
@@ -74,14 +94,17 @@ def test_a_batch_is_one_call(timed: wasmhost.Backend) -> None:
     batch.call(inst.exports.spin)
     with pytest.raises(wasmhost.Timeout):
         batch.run()
-    assert inst.exports.quick() == 7
+    if timed.name != "wasm3":  # there the instance is finished (see above)
+        assert inst.exports.quick() == 7
 
 
 def test_the_start_function_is_under_the_timeout(timed: wasmhost.Backend) -> None:
     module = wasmhost.Module(wb.spins_at_start())
     started = time.monotonic()
     with pytest.raises(wasmhost.Timeout):
-        wasmhost.Instance(module, timeout=LIMIT)
+        instance = wasmhost.Instance(module, timeout=LIMIT)
+        assert timed.name == "wasm3", "the start function ran and returned"  # only wasm3 doesn't run it yet...
+        instance.exports.quick()  # ...it does at the first call
     assert time.monotonic() - started < LIMIT + 3
 
 
@@ -92,6 +115,27 @@ def test_a_trap_in_the_start_function_is_a_trap(session: str) -> None:
     module = wasmhost.Module(wb.traps_at_start())
     with pytest.raises(wasmhost.Trap):
         wasmhost.Instance(module)
+
+
+def test_a_host_function_can_call_the_module_again_under_one_clock(timed: wasmhost.Backend) -> None:
+    """A call made from inside a host function is part of the call that made the host function: no second clock, and
+    nothing stops it early (on wasm3 it is a call inside a call, both in slices)."""
+    from test_imports import Host
+
+    if not timed.supports("imports"):
+        pytest.skip(f"the {timed.name} backend can't take imports")
+    box: dict[str, wasmhost.Instance] = {}
+
+    def plus(a: int, b: int) -> int:
+        if a == 100:  # from inside the host function: another export of the same instance
+            return int(box["inst"].exports.call_plus(1, 2)) + 1000
+        return a + b
+
+    imports = Host().imports()
+    imports["env"]["plus"] = plus
+    box["inst"] = wasmhost.Instance(wasmhost.Module(wb.callbacks()), imports, timeout=5)
+    assert box["inst"].exports.call_plus(100, 0) == 1003
+    assert box["inst"].exports.call_plus(2, 3) == 5
 
 
 def test_an_instance_without_a_timeout_is_not_timed(timed: wasmhost.Backend) -> None:

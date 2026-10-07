@@ -429,6 +429,12 @@ def _timeout(backend: Backend) -> str:
         pass
     else:
         raise AssertionError("an endless loop came back")
+    if backend.name == "wasm3":  # a call that paused can't be cancelled there: the instance is finished, and says so
+        try:
+            ex.quick()
+        except Trap:
+            return "an endless loop ended with a Timeout; wasm3 refuses the instance after it, as documented"
+        raise AssertionError("a wasm3 instance that timed out ran again")
     _expect((ex.quick(), ex.busy(1000)), (7, 1000))  # the instance is fine, and callable again
     return "an endless loop ended with a Timeout; the instance is fine"
 
