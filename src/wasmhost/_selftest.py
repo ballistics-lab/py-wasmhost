@@ -25,7 +25,7 @@ from ._api import compile as compile_async
 from ._api import instantiate as instantiate_async
 from ._backend import Backend
 from ._binary import FuncType, GlobalType, MemoryType, TableType, i32, i64
-from ._errors import CompileError, LinkError, Timeout, Trap
+from ._errors import CompileError, LinkError, OutOfFuel, Timeout, Trap
 from ._js import JSBackend
 from ._registry import AUTO_ORDER, BACKENDS
 
@@ -234,6 +234,7 @@ def _selftest_backend(backend: Backend, out: Callable[[str], object]) -> _Report
     step("memory: the maximum of an imported memory stops the module's grow", lambda: _memory_ceiling(backend))
     step("memory: Instance(max_memory=) is a ceiling for a memory the module makes", lambda: _max_memory(backend))
     step("timeout: Instance(timeout=) stops an endless loop, where the engine can", lambda: _timeout(backend))
+    step("fuel: Instance(fuel=) stops an endless loop, where the engine can count", lambda: _fuel(backend))
     step("table: made on its own, imported, shared", lambda: _table_on_its_own(backend))
     step("functions: one object per function, signature, a table entry", lambda: _functions(backend))
     step("async compile and instantiate, tasks at once", lambda: _async(backend))
@@ -437,6 +438,28 @@ def _timeout(backend: Backend) -> str:
         raise AssertionError("a wasm3 instance that timed out ran again")
     _expect((ex.quick(), ex.busy(1000)), (7, 1000))  # the instance is fine, and callable again
     return "an endless loop ended with a Timeout; the instance is fine"
+
+
+def _fuel(backend: Backend) -> str:
+    module = Module(SPINNER, backend=backend)
+    if not backend.supports("fuel"):  # never run the loop here: nothing would stop it
+        try:
+            Instance(module, fuel=1000)
+        except NotImplementedError:
+            return "not available on this backend, as documented"
+        raise AssertionError("an instance with fuel was made where nothing can count a call")
+    ex = Instance(module, fuel=20_000).exports
+    _expect(ex.quick(), 7)
+    try:
+        ex.spin()
+    except OutOfFuel:
+        pass
+    else:
+        raise AssertionError("an endless loop came back")
+    _expect(
+        (ex.quick(), ex.busy(100)), (7, 100)
+    )  # a trap of the engine's own: the instance is fine, and the fuel is back
+    return "an endless loop ended with an OutOfFuel; the instance is fine"
 
 
 def _table_on_its_own(backend: Backend) -> str:

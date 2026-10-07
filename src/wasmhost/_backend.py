@@ -186,7 +186,8 @@ class Backend:
     # What the runtime can't do is left out: "memory.grow" (Memory.grow from Python), "table.length", "imports"
     # (host functions: a Python callable the module calls). Not in the default set, so a backend has to say it:
     # "import.global" / "import.memory" / "import.table" (objects made on their own can be imported), "table.funcs"
-    # (Table.get / set / grow), "isolated", "timeout" (a call that runs too long is stopped).
+    # (Table.get / set / grow), "isolated", "timeout" (a call that runs too long is stopped), "fuel" (so is one that
+    # uses too much).
     features: frozenset[str] = frozenset({"memory.grow", "table.length"})
 
     def supports(self, feature: str) -> bool:
@@ -201,10 +202,10 @@ class Backend:
     def compile(self, data: bytes) -> Any:
         raise NotImplementedError
 
-    def compile_timed(self, data: bytes) -> Any | None:
-        """The module as an instance with a `timeout` needs it, when that is a compile of its own (wasmtime: for an
-        engine that counts epochs, which costs speed, so only an instance that asks gets it); None when the ordinary
-        module will do (only for a backend with the "timeout" feature)."""
+    def compile_limited(self, data: bytes, *, epochs: bool, fuel: bool) -> Any | None:
+        """The module as an instance with a `timeout` (`epochs`) and/or a `fuel` limit needs it, when that is a compile
+        of its own (wasmtime: for an engine that counts epochs or fuel, which costs speed, so only an instance that
+        asks gets it); None when the ordinary module will do (only for a backend with "timeout" or "fuel")."""
         return None
 
     def instantiate(
@@ -214,6 +215,7 @@ class Backend:
         *,
         isolated: bool = False,
         timeout: float | None = None,
+        fuel: int | None = None,
     ) -> Any:
         """A new instance. `imports` answers the module's imports, in the order it declares them: a HostFunction
         for a function, a HostObject for a memory, table or global (a backend without the "imports" feature is only
@@ -223,7 +225,9 @@ class Backend:
         away with it; see the "isolated" feature); it can't take a HostObject made outside it.
 
         `timeout` (seconds, only for a backend with the "timeout" feature) stops any call into the instance that runs
-        longer, with a `Timeout`; the module is the one `compile_timed` gave, if it gave one."""
+        longer, with a `Timeout`; `fuel` (only for a backend with the "fuel" feature) stops a call that uses more than
+        this many units of what the engine counts, with an `OutOfFuel`. The module is the one `compile_limited` gave, if
+        it gave one."""
         raise NotImplementedError
 
     def new_global(self, kind: str, value: int | float, mutable: bool) -> Any:

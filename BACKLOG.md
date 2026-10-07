@@ -53,7 +53,7 @@ the feature itself:
 ## Current state (2026-10-07; `examples/zigcc` was merged into `main` by the owner and deleted, work goes on in `claude/loving-hawking-u966j0`)
 
 **Done in the branch and verified** (pre-commit is green; the full `pytest` passes on wasmtime, jsc, node, bun, wasm3; CI is green on all platforms;
-the self-test has 33 steps on wasmtime/wasm3 and 39 on the JS engines): B-201 (steps 1-4: `Function`, `signature`, `type()`, identity, `elem`, the
+the self-test has 34 steps on wasmtime/wasm3 and 40 on the JS engines): B-201 (steps 1-4: `Function`, `signature`, `type()`, identity, `elem`, the
 safety net through `call_indirect`), B-202 (the initial value of a table), B-204 (multi-value in a batch), B-301 (`Memory.view`), B-302 (`bench`
 with buffer transfer), B-304 (a lock per backend, `await compile/instantiate`, threads only with `threaded=True`), B-507 (the `wasmhost` command),
 B-509 (`wasi_sh.py`, `--home`), fast buffers (a typed array through the C API on jsc/jscontext, base64 on node/bun), Bun as a backend in CI, tests for
@@ -69,7 +69,7 @@ decision, the history has two copies, about 21 MB: a squash would leave one); `t
 **Not covered by tests:** `examples/wasmclang.py`, `jslinux.py` (unavailable in the assistant's environment: `bellard.org` is blocked), `coremark.py`;
 the "Examples" step in CI runs only `basic.py` and `imports.py` (B-006). B-302a is only partly done (see its entry).
 
-**Next candidates:** B-203 (`externref`), a binary channel for node/bun (about 50 MB/s through the pipe and JSON now), phase 4 is done (B-401 the memory ceiling, B-402/B-403 the timeout and its tests, where an engine can: none on iOS); a fuel limit (wasmtime `consume_fuel`, wasm3 `gas_limit`) is B-404, an idea, not started. Fact (confirmed by the owner, matches the measurements): `jscontext` on iOS has **no JIT**, so for pure computation `wasm3` would be faster than
+**Next candidates:** B-203 (`externref`), a binary channel for node/bun (about 50 MB/s through the pipe and JSON now), phase 4 is done (B-401 the memory ceiling, B-402/B-403 the timeout and its tests, where an engine can: none on iOS); the fuel limit (wasmtime `consume_fuel`, wasm3 `gas_limit`) is B-404, implemented, waiting for the owner's word to close. Fact (confirmed by the owner, matches the measurements): `jscontext` on iOS has **no JIT**, so for pure computation `wasm3` would be faster than
 JavaScriptCore there, but `pywasm3` cannot be installed on iOS (a C extension).
 
 ## Order of work
@@ -392,17 +392,20 @@ Done when: transferring a buffer of megabytes is not copied on wasmtime and wasm
       instance is made, but at the first call (so there the start function is under the timeout at the first call).
 - [x] **B-403** (DONE 2026-10-07, with B-402: `tests/test_timeout.py`, 36 tests) Tests "a module with an infinite loop" on every backend that can do this:
       `wasmtime` and `node` stop it; the others are skipped with the reason, and `test_a_backend_that_cannot_says_so` checks that they refuse honestly.
-- [ ] **B-404** (added 2026-10-07 on the owner's word; an idea, not started) Fuel / gas: a limit on the instructions a call may run, not on time. Deterministic (the same
-      module and input stop at the same place on any machine, whatever the load) and needs no thread, so it also works where a time limit can't (wasm3: a call holds the GIL).
-      **Engines that can (checked 2026-10-07):** `wasmtime`: `Config.consume_fuel`, `Store.set_fuel` / `get_fuel`; like epochs it is counted in the code the engine makes, so it needs
-      the second engine and a store of its own that `timeout` already has (`_timed()`; the cost of fuel itself was not measured, epochs were about 3 times on a tight loop). `wasm3`
-      (pywasm3 as pinned): `Runtime.gas_limit` (setting it re-arms a full budget, 0 turns metering off), `gas_used`; an endless loop under a limit ends with `RuntimeError: [trap] out of gas`
-      and the runtime is fine afterwards; the unit is not an instruction (`busy(100)` used 6.6, and 5e6 units took 1.3 s for an endless loop), so a budget is not portable between engines.
-      **Engines that can't:** Node, Bun and the JavaScriptCore ones have nothing to count with; and **iOS has neither wasmtime nor wasm3, so this would not help in Pythonista.**
-      **To decide (the owner's):** the API (a guess: `Instance(module, fuel=N)`, beside `max_memory` and `timeout`, per call like `timeout`; `supports("fuel")`), the error (a `Trap` subclass such
-      as `OutOfFuel`, or the same `Timeout`), whether one budget is for each call or for the instance's whole life, and whether the number should mean the same on wasmtime and wasm3 (it can't
-      exactly: say "units of the engine"). Tests as in B-403: an endless loop stopped, the instance fine afterwards, the budget re-armed per call, a backend without it refusing.
-      Worth doing for untrusted code on a desktop (it gives wasm3 a limit at all); not worth it for iOS. Self-test: a step that never runs the loop where nothing can count.
+- [ ] **B-404** (IMPLEMENTED 2026-10-07 on the owner's word to start it, once the wasm3 timeout showed gas works; waiting for the owner's word to close; self-test step "fuel: Instance(fuel=) stops an endless loop, where the engine can count", `tests/test_fuel.py`)
+      Fuel / gas: `Instance(module, imports, fuel=n)`, also `instantiate` and `instantiate_sync`: a call that uses more than `n` units of what the engine counts ends with `wasmhost.OutOfFuel` (a `Trap`).
+      Deterministic (the same module and input stop at the same place on any machine, whatever the load) and needs no thread. **The owner left the decisions to the assistant; made as follows:**
+      per call (every call starts with the whole budget, a batch is one call, a call from a host function shares the outer one, the start function is under it: as `timeout`); `supports("fuel")`;
+      `OutOfFuel` apart from `Timeout`; the unit is the engine's own ("units"), so a number does not carry between engines (wasmtime: 8 for a turn of the test loop; wasm3: under 0.1).
+      **wasmtime:** `Config.consume_fuel`, `Store.set_fuel` before the call, `TrapCode.OUT_OF_FUEL`. Counted in the code the engine makes; measured on a tight loop, busy(1e8): plain 0.033 s, epochs 0.096 (x2.9), fuel
+      0.080 (x2.4), both 0.175 (x5.3), so there is an engine for each of (epochs, fuel) that an instance asks for (`_engine_for`, `Backend.compile_limited(data, epochs=, fuel=)`, `Module._variant(pages, epochs, fuel)`),
+      each instance with a limit in a store of its own. **wasm3:** `Runtime.gas_limit` set before the first `find_function` (the code is instrumented as it is found); out of gas is `RuntimeError: [trap] out of gas`,
+      turned into `OutOfFuel`, and the instance goes on (a trap leaves nothing paused). With a `timeout` too, the call is already in slices of gas, so the fuel is counted there (`remaining`); running out
+      then leaves a paused call that can't be cancelled, so the instance is finished, as after a `Timeout`. **Engines that can't:** Node, Bun and the JavaScriptCore ones have nothing to count with:
+      `NotImplementedError`; and **iOS has neither wasmtime nor wasm3, so this does not help in Pythonista.**
+      Not verified on macOS/Windows or a device by this item itself (CI will say); the wasmtime and wasm3 numbers are from one Linux machine.
+      Checked on the way, 2026-10-07: pywasm3's `request_suspend()` from another thread can not work, whatever a note said: a call holds the GIL, a `threading.Timer` never ran in 10 s, with `suspendable` and gas armed
+      before `find_function` (pywasm3 at 4c1334e); the documented way is from a host function. Snapshots (`save_snapshot` / `load_snapshot`) and `memory_limit` / `table_limit` / `continuation_limit` are there, unused.
 
 Risks: JSC has no interruption, so on iOS this is not guaranteed; a separate note is needed about what the sandbox does not
 promise.

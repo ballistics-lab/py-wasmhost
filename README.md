@@ -264,15 +264,15 @@ Python side that provides imports; what runs the module is the backend.)
 
 Not every backend can do everything; `backend.supports(...)` says:
 
-|             | `memory.grow` from Python                                      | `table.length` | host functions (`imports`)                                | Global, Memory, Table on their own (`import.*`) | table get/set/grow (`table.funcs`) | `isolated`   | `timeout`                          |
-| ----------- | -------------------------------------------------------------- | -------------- | --------------------------------------------------------- | ----------------------------------------------- | ---------------------------------- | ------------ | ---------------------------------- |
-| `wasmtime`  | yes                                                            | yes            | yes                                                       | yes                                             | yes                                | yes          | yes                                |
-| `wasm3`     | no (`NotImplementedError`; a module's own `memory.grow` works) | no             | yes                                                       | no                                              | no                                 | yes (always) | yes (an instance that timed out is finished) |
-| `jscontext` | yes                                                            | yes            | yes, through JavaScriptCore's C API (under either bridge) | yes                                             | yes                                | no           | no                                 |
-| `jsc`       | yes                                                            | yes            | yes                                                       | yes                                             | yes                                | no           | no                                 |
-| `gi-jsc`    | yes                                                            | yes            | no                                                        | yes                                             | yes                                | no           | no                                 |
-| `node`      | yes                                                            | yes            | yes                                                       | yes                                             | yes                                | no           | yes                                |
-| `bun`       | yes                                                            | yes            | yes                                                       | yes                                             | yes                                | no           | no (its wasm loop is not stopped)  |
+|             | `memory.grow` from Python                                      | `table.length` | host functions (`imports`)                                | Global, Memory, Table on their own (`import.*`) | table get/set/grow (`table.funcs`) | `isolated`   | `timeout`                          | `fuel` |
+| ----------- | -------------------------------------------------------------- | -------------- | --------------------------------------------------------- | ----------------------------------------------- | ---------------------------------- | ------------ | ---------------------------------- | ----- |
+| `wasmtime`  | yes                                                            | yes            | yes                                                       | yes                                             | yes                                | yes          | yes                                | yes |
+| `wasm3`     | no (`NotImplementedError`; a module's own `memory.grow` works) | no             | yes                                                       | no                                              | no                                 | yes (always) | yes (an instance that timed out is finished) | yes (a trap, the instance goes on) |
+| `jscontext` | yes                                                            | yes            | yes, through JavaScriptCore's C API (under either bridge) | yes                                             | yes                                | no           | no                                 | no |
+| `jsc`       | yes                                                            | yes            | yes                                                       | yes                                             | yes                                | no           | no                                 | no |
+| `gi-jsc`    | yes                                                            | yes            | no                                                        | yes                                             | yes                                | no           | no                                 | no |
+| `node`      | yes                                                            | yes            | yes                                                       | yes                                             | yes                                | no           | yes                                | no |
+| `bun`       | yes                                                            | yes            | yes                                                       | yes                                             | yes                                | no           | no (its wasm loop is not stopped)  | no |
 
 **PyGObject for `gi-jsc`.** The simplest way is the system's own `python3-gi` (with `gir1.2-javascriptcoregtk-4.1`) and the system's Python, as
 CI does. To have it in a venv instead, `pip install "wasmhost[gi-jsc]"` (or `uv sync --extra gi-jsc`) builds PyGObject from source, so the system needs
@@ -391,9 +391,14 @@ which it is meant to be done.
   under it too, on `wasm3` at the first call), host functions included. **Where the engine can't, `Instance(timeout=)` is a
   `NotImplementedError`** (`backend.supports("timeout")`): the JavaScriptCore ones (`jscontext`, `jsc`, `gi-jsc`: a script's time limit
   does not reach a wasm loop, checked with `JSContextGroupSetExecutionTimeLimit`) and `bun` (its `vm` timeout leaves a wasm loop
-  running). So on iOS there is no time limit: do not run untrusted code there expecting one. There is no fuel limit, though
-  `wasmtime` (`consume_fuel`) and `wasm3` (pywasm3's `gas_limit`, which ends a call with `[trap] out of gas`) could count
-  instructions (BACKLOG B-404).
+  running). So on iOS there is no time limit: do not run untrusted code there expecting one.
+  Work has a limit too, where the engine can count it: `Instance(module, fuel=n)` ends a call that uses more than `n` units with an
+  `OutOfFuel` (a `Trap`) in `wasmtime` (`consume_fuel`: that instance gets an engine that counts fuel, a tight loop about 2.4 times slower,
+  and a store of its own, like a timed one) and `wasm3` (pywasm3's gas: a trap, and the instance goes on; it can't when it also has a
+  `timeout`, which cuts the call into slices). The unit is the engine's own (a turn of a tight loop is 8 on `wasmtime` and under 0.1 on
+  `wasm3`), so a number does not carry from one to the other; it is deterministic, and the same on every machine. Each call starts with the
+  whole budget (a batch is one call, and a call from a host function shares the outer one). It can be given with a `timeout`, and
+  whichever runs out first ends the call. Node, Bun and the JavaScriptCore engines can't count: `NotImplementedError`, as on iOS.
 - **Threads.** A module built with `-pthread` (the WebAssembly threads proposal: a `shared` memory that the module
   imports, atomic instructions, threads made by the host as several instances of the module on one memory) does not
   run: `Memory(..., shared=True)` raises `NotImplementedError`, so it can not be given as an import. Build without

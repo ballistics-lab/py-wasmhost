@@ -26,7 +26,7 @@ from ._backend import (
     check_results,
 )
 from ._binary import FuncType, f32, f64, i32, i64
-from ._errors import CompileError, LinkError, Timeout, Trap
+from ._errors import CompileError, LinkError, OutOfFuel, Timeout, Trap
 
 __all__ = ("Wasm3Backend", "WasmtimeBackend")
 
@@ -59,14 +59,19 @@ class _Wasm3Global(NamedTuple):
 
 
 class _Wasm3Instance:
-    def __init__(self, runtime: Any, module: Any, timeout: float | None = None) -> None:
+    def __init__(self, runtime: Any, module: Any, timeout: float | None = None, fuel: int | None = None) -> None:
         self.runtime = runtime
         self.module = module
         self.functions: dict[str, Any] = {}
         self.memories: dict[str, Any] = {}
         self.timeout = timeout  # seconds for a call, or None
-        self.deadline: float | None = None  # of the call in progress (a call from a host function shares it)
-        self.stopped = False  # a call was stopped by the timeout: the paused call can't be cancelled, so it ends here
+        self.fuel = fuel  # gas for a call, or None
+        self.depth = 0  # how many calls are in progress (a host function may call the module again)
+        self.deadline: float | None = None  # of the outermost call in progress; a nested one shares it
+        self.remaining: int | None = None  # of the fuel, in the slices of a timed call; a nested one shares it
+        self.stopped = (
+            False  # a slicing call was stopped: the paused call can't be cancelled, so the instance ends here
+        )
 
     def function(self, name: str) -> Any:
         if (f := self.functions.get(name)) is None:
@@ -94,7 +99,8 @@ class Wasm3Backend(Backend):
     # It has no Memory.grow from Python (a module's own memory.grow works, and len(memory) follows) and no tables.
     # "timeout": a call is cut into slices of gas, and the clock is looked at between them (a thread can't stop a call,
     # which holds the GIL). The paused call can't be cancelled, so an instance that timed out can't run again.
-    features = frozenset({"imports", "isolated", "memory.view", "timeout"})
+    # "fuel": pywasm3's gas, which ends a call with a trap that leaves the instance fine (not with a timeout too).
+    features = frozenset({"imports", "isolated", "memory.view", "timeout", "fuel"})
     # wasm3's own value stack, separate from the module's shadow stack in linear memory.
     STACK_BYTES = 256 * 1024
     # Gas between two looks at the clock: about 5 ms of a tight loop, which cost about 8% in a measurement (a slice of
@@ -127,6 +133,7 @@ class Wasm3Backend(Backend):
         *,
         isolated: bool = False,
         timeout: float | None = None,
+        fuel: int | None = None,
     ) -> _Wasm3Instance:
         # `isolated` is what a wasm3 instance is anyway: it has its own runtime and shares nothing.
         runtime = self._env.new_runtime(self._stack)
@@ -135,45 +142,70 @@ class Wasm3Backend(Backend):
             # as it is found, and a function found earlier would run on, uncounted, for ever.
             runtime.suspendable = True
             runtime.gas_limit = self.SLICE_GAS
+        elif fuel is not None:
+            runtime.gas_limit = fuel  # counted, and a trap when spent (not paused: it isn't suspendable)
         parsed = self._env.parse_module(module)
         runtime.load(parsed)
         for host in imports:  # linked after loading, before the first call
             if isinstance(host, HostObject):
                 raise NotImplementedError(f"pywasm3 can't import a {host.kind}: only functions")
             parsed.link_function(host.module, host.name, _wasm3_signature(host.ftype), _wasm3_callable(host))
-        return _Wasm3Instance(runtime, parsed, timeout)
+        return _Wasm3Instance(runtime, parsed, timeout, fuel)
 
     def new_global(self, kind: str, value: int | float, mutable: bool) -> Any:
         raise NotImplementedError("pywasm3 can't make a global outside a module")
 
     @contextlib.contextmanager
-    def _deadline(self, instance: _Wasm3Instance) -> Generator[None]:
-        """Around anything that runs wasm in a timed instance: the clock starts at the outermost call, and a call made
-        from a host function while it runs is under the same one."""
-        if instance.timeout is None or instance.deadline is not None:
+    def _scope(self, instance: _Wasm3Instance) -> Generator[None]:
+        """Around anything that runs wasm in a limited instance: the outermost call starts the clock and the fuel, and a
+        call made from a host function while it runs is under the same ones."""
+        if instance.timeout is None and instance.fuel is None:
             yield
             return
-        instance.deadline = time.monotonic() + instance.timeout
+        outermost = instance.depth == 0
+        instance.depth += 1
+        if outermost:
+            if instance.timeout is not None:
+                instance.deadline = time.monotonic() + instance.timeout
+            instance.remaining = instance.fuel
         try:
             yield
         finally:
-            instance.deadline = None
+            instance.depth -= 1
+            if outermost:
+                instance.deadline = instance.remaining = None
+
+    def _slice(self, instance: _Wasm3Instance) -> int:
+        """The gas of the next slice: the usual, or what is left of the fuel if that is less."""
+        return self.SLICE_GAS if instance.remaining is None else min(self.SLICE_GAS, instance.remaining)
 
     def _run(self, instance: _Wasm3Instance, function: Any, args: Sequence[int | float]) -> Any:
-        """The call, in slices of gas if the instance has a timeout: it pauses when a slice is spent (the clock is
-        looked at there), and goes on from where it stopped until it ends or the time is up."""
-        if instance.timeout is None:
+        """The call. With `fuel` alone the gas is armed for it and a trap ends it. With a `timeout` it is cut into
+        slices of gas: it pauses when a slice is spent (the clock, and the fuel, are looked at there), and goes on from
+        where it stopped until it ends, the time is up or the fuel is."""
+        if instance.timeout is None and instance.fuel is None:
             return function(*args)
         if instance.stopped:
             raise Trap("this wasm3 instance was stopped by its timeout and can't run again: make a new one")
         runtime = instance.runtime
-        runtime.gas_limit = self.SLICE_GAS
+        if instance.timeout is None:
+            if instance.depth == 1:  # the outermost call arms it; one from a host function shares what is left
+                runtime.gas_limit = instance.fuel
+            return function(*args)
+        size = self._slice(instance)
+        runtime.gas_limit = size
         result = function(*args)
         while runtime.suspended:  # a call without results gives None whether it ended or paused: `suspended` says
+            if instance.remaining is not None:
+                instance.remaining -= size
+                if instance.remaining <= 0:
+                    instance.stopped = True  # the paused call stays paused: pywasm3 has no way to cancel it
+                    raise OutOfFuel(f"the call used more than {instance.fuel} units of fuel")
             if instance.deadline is not None and time.monotonic() >= instance.deadline:
-                instance.stopped = True  # the paused call stays paused: pywasm3 has no way to cancel it
+                instance.stopped = True
                 raise Timeout(f"the call ran longer than {instance.timeout:g} s")
-            runtime.gas_limit = self.SLICE_GAS
+            size = self._slice(instance)
+            runtime.gas_limit = size
             result = runtime.resume()
         return result
 
@@ -181,11 +213,13 @@ class Wasm3Backend(Backend):
         self, instance: _Wasm3Instance, name: str, args: Sequence[int | float], ftype: FuncType
     ) -> list[int | float]:
         try:
-            with self._deadline(instance):
+            with self._scope(instance):
                 result = self._run(instance, instance.function(name), args)
         except RuntimeError as exc:
-            if isinstance(exc, (Trap, Timeout)):
+            if isinstance(exc, (Trap, Timeout, OutOfFuel)):
                 raise
+            if "out of gas" in str(exc) and instance.fuel is not None:  # the count of a fuel-only instance ran out
+                raise OutOfFuel(f"the call used more than {instance.fuel} units of fuel") from None
             if "[trap]" in str(exc):
                 raise Trap(str(exc)) from None
             raise
@@ -194,7 +228,7 @@ class Wasm3Backend(Backend):
         return list(cast("Sequence[int | float]", result)) if isinstance(result, tuple) else [result]
 
     def run_batch(self, instance: _Wasm3Instance, steps: Sequence[Step]) -> BatchResult:
-        with self._deadline(instance):  # the whole batch is one call to the timeout
+        with self._scope(instance):  # the whole batch is one call to the limits
             return super().run_batch(instance, steps)
 
     def export_function(self, instance: _Wasm3Instance, name: str) -> _Wasm3Function:
@@ -322,7 +356,8 @@ class WasmtimeBackend(Backend):
             "import.memory",
             "import.table",
             "isolated",
-            "timeout",  # a second engine that counts epochs, for the instances that ask (it costs speed)
+            "timeout",  # an engine that counts epochs, for the instances that ask (it costs speed)
+            "fuel",  # and one that counts fuel
         }
     )
 
@@ -330,46 +365,61 @@ class WasmtimeBackend(Backend):
         self._wt: Any = importlib.import_module("wasmtime")  # ImportError here means "backend not available"
         self._engine: Any = self._wt.Engine()
         self._store: Any = None
-        self._timed_engine: Any = None
-        self._watchdog: _Watchdog | None = None
+        # Engines for the instances with a limit, by (counts epochs, counts fuel), each with the watchdog that ends its
+        # epoch: what is counted is counted in the code the engine makes (a tight loop runs about 3 times slower with
+        # epochs, 2.4 with fuel, 5 with both, measured), so an instance gets an engine that counts only what it asked.
+        self._limited: dict[tuple[bool, bool], tuple[Any, _Watchdog | None]] = {}
         self._timeouts: weakref.WeakKeyDictionary[Any, float] = weakref.WeakKeyDictionary()  # store -> seconds
-        self._armed = 0  # how deep in calls that a deadline is set for (a host function may call the module again)
+        self._fuels: weakref.WeakKeyDictionary[Any, int] = weakref.WeakKeyDictionary()  # store -> fuel for a call
+        self._armed = 0  # how deep in calls that a limit is set for (a host function may call the module again)
 
     def close(self) -> None:
-        if self._watchdog is not None:
-            self._watchdog.stop()
+        for _, watchdog in self._limited.values():
+            if watchdog is not None:
+                watchdog.stop()
 
-    def _timed(self) -> tuple[Any, _Watchdog]:
-        """The engine for instances with a `timeout` (epochs are counted in the code it makes: a tight loop runs about
-        three times slower, so the ordinary engine doesn't), and its watchdog; made when first needed."""
-        if self._timed_engine is None:
+    def _engine_for(self, epochs: bool, fuel: bool) -> tuple[Any, _Watchdog | None]:
+        """The engine for instances with a `timeout` (`epochs`) and/or a `fuel` limit, and the watchdog of its epochs;
+        made when first needed."""
+        key = (epochs, fuel)
+        if key not in self._limited:
             config = self._wt.Config()
-            config.epoch_interruption = True
-            self._timed_engine = self._wt.Engine(config)
-            self._watchdog = _Watchdog(self._timed_engine)
-        return self._timed_engine, cast("_Watchdog", self._watchdog)
+            config.epoch_interruption = epochs
+            config.consume_fuel = fuel
+            engine = self._wt.Engine(config)
+            self._limited[key] = (engine, _Watchdog(engine) if epochs else None)
+        return self._limited[key]
 
     @contextlib.contextmanager
     def _guard(self, store: Any) -> Generator[None]:
-        """Around anything that runs wasm in `store`: if its instance has a `timeout`, a deadline for it (the outermost
-        call sets it; a call from a host function inside is under the same one)."""
-        seconds = self._timeouts.get(store)
-        if seconds is None or self._armed:
+        """Around anything that runs wasm in `store`: if its instance has a `timeout`, a deadline for it, and if it has
+        `fuel`, the fuel for the call (the outermost call sets them; a call from a host function inside is under the
+        same ones)."""
+        seconds, fuel = self._timeouts.get(store), self._fuels.get(store)
+        if (seconds is None and fuel is None) or self._armed:
             yield
             return
-        _, watchdog = self._timed()
         self._armed += 1
-        store.set_epoch_deadline(1)  # one tick from now: the watchdog's `increment_epoch` is that tick
-        token = watchdog.arm(seconds)
+        watchdog, token = None, 0
+        if fuel is not None:
+            store.set_fuel(fuel)
+        if seconds is not None:
+            watchdog = self._engine_for(True, fuel is not None)[1]
+            store.set_epoch_deadline(1)  # one tick from now: the watchdog's `increment_epoch` is that tick
+            token = cast("_Watchdog", watchdog).arm(seconds)
         try:
             yield
         finally:
-            watchdog.disarm(token)
+            if watchdog is not None:
+                watchdog.disarm(token)
             self._armed -= 1
 
     def _trap(self, exc: Any, store: Any) -> Trap:
-        if getattr(exc, "trap_code", None) == self._wt.TrapCode.INTERRUPT and store in self._timeouts:
+        code = getattr(exc, "trap_code", None)
+        if code == self._wt.TrapCode.INTERRUPT and store in self._timeouts:
             return Timeout(f"the call ran longer than {self._timeouts[store]:g} s")
+        if code == self._wt.TrapCode.OUT_OF_FUEL and store in self._fuels:
+            return OutOfFuel(f"the call used more than {self._fuels[store]} units of fuel")
         return Trap(str(exc))
 
     def validate(self, data: bytes) -> bool:
@@ -385,9 +435,9 @@ class WasmtimeBackend(Backend):
         except self._wt.WasmtimeError as exc:
             raise CompileError(str(exc)) from None
 
-    def compile_timed(self, data: bytes) -> Any:
+    def compile_limited(self, data: bytes, *, epochs: bool, fuel: bool) -> Any:
         try:
-            return self._wt.Module(self._timed()[0], data)
+            return self._wt.Module(self._engine_for(epochs, fuel)[0], data)
         except self._wt.WasmtimeError as exc:
             raise CompileError(str(exc)) from None
 
@@ -405,10 +455,14 @@ class WasmtimeBackend(Backend):
         *,
         isolated: bool = False,
         timeout: float | None = None,
+        fuel: int | None = None,
     ) -> _WasmtimeInstance:
-        if timeout is not None:  # a store of its own, on the engine that counts epochs (its module is of that engine)
-            store = self._wt.Store(self._timed()[0])
-            self._timeouts[store] = timeout
+        if timeout is not None or fuel is not None:  # a store of its own, on the engine that counts what it asked
+            store = self._wt.Store(self._engine_for(timeout is not None, fuel is not None)[0])
+            if timeout is not None:
+                self._timeouts[store] = timeout
+            if fuel is not None:
+                self._fuels[store] = fuel
         else:
             store = self._wt.Store(self._engine) if isolated else self.store
         externs: list[Any] = []

@@ -382,7 +382,10 @@ class JSBackend(Backend):
         *,
         isolated: bool = False,
         timeout: float | None = None,
+        fuel: int | None = None,
     ) -> int:
+        if fuel is not None:
+            raise NotImplementedError(f"the {self.name} backend can't count what a call runs")
         if isolated:
             raise NotImplementedError(f"the {self.name} backend has one store for everything: no isolated instances")
         if timeout is not None and not self.supports("timeout"):

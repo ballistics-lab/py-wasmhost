@@ -148,13 +148,13 @@ def test_an_instance_without_a_timeout_is_not_timed(timed: wasmhost.Backend) -> 
 def test_the_module_for_stopping_is_made_once(timed: wasmhost.Backend, monkeypatch: pytest.MonkeyPatch) -> None:
     module = wasmhost.Module(wb.spinner())
     made: list[int] = []
-    original = timed.compile_timed
+    original = timed.compile_limited
 
-    def spy(data: bytes) -> object:
+    def spy(data: bytes, *, epochs: bool, fuel: bool) -> object:
         made.append(len(data))
-        return original(data)
+        return original(data, epochs=epochs, fuel=fuel)
 
-    monkeypatch.setattr(timed, "compile_timed", spy)
+    monkeypatch.setattr(timed, "compile_limited", spy)
     for _ in range(3):
         wasmhost.Instance(module, timeout=LIMIT)
     assert len(made) == 1  # the first instance that asked paid for it
