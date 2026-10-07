@@ -304,7 +304,8 @@ documented`) and counts as passed. If something fails, send the whole output. On
 `python -m wasmhost self test --all` runs it on every backend that starts. Installed with pip, the same commands are
 there as `wasmhost self test` and `wasmhost bench`.
 
-`python -m wasmhost bench [--backend NAME] [--no-jit]` times a call, a batch of three and the engine itself (a recursive
+`python -m wasmhost bench [--backend NAME] [--no-jit] [--buffer KIB]` times a call, a batch of three, moving a buffer in and
+out of memory (MB/s) and the engine itself (a recursive
 `fib`, a loop) on each backend that starts, to choose one. `--no-jit` takes the JIT off JavaScriptCore
 (`JSC_useJIT=false`): where there is none, an interpreter such as `wasm3` can be several times faster.
 

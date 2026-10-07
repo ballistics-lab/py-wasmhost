@@ -18,3 +18,10 @@ def test_bench_prints_a_row(capsys: pytest.CaptureFixture[str], session: str) ->
     assert _cli.main(args) == 0
     out = capsys.readouterr().out
     assert out.splitlines()[0].startswith("backend") and session in out.splitlines()[1]
+
+
+def test_memory_transfer_is_measured(session: str) -> None:
+    ex = wasmhost.Instance(wasmhost.Module(_bench.MEMORY_MODULE)).exports
+    assert len(ex.memory) == 256 * 65536  # the module of the measurement is a memory of 16 MiB
+    written, read = _bench.measure_memory(wasmhost.get_backend(), 64, 1)
+    assert written > 0 and read > 0
