@@ -65,7 +65,7 @@ iOS 26, `jscontext`): self-test 38/38 (before the fuel step), buffers intact fro
 **To do first, if the owner has not said otherwise:**
 1. A device re-run of `wasmhost self test` (a fresh wheel: `git fetch --tags`, then `uv build --wheel`; the version comes from git tags): 40/40 expected on `jscontext`, where the
    timeout and fuel steps say "not supported" instead of failing. Add a row to README "Where it has been run" when the owner reports it.
-2. B-405 when upstream merges pywasm3's two PRs (#13, #14); B-406 is decided as "leave it" (option b) but its mark is the owner's to set.
+2. B-405 when upstream merges pywasm3's two PRs (#13, #14); B-406 is closed (option b: leave it, documented).
 3. Then the owner picks: B-203 (`externref`), a binary channel for node/bun (about 50 MB/s through the pipe and JSON now), B-303 (batch `read/write`), B-006 (CI for examples).
 
 **Deferred by owner decision:** B-304a (examples on asyncio), WASI in the library (phase 5), Deno (B-701b: a bug in Deno itself). **Waiting for the owner:** the branch name and tidying
@@ -266,9 +266,8 @@ Done when: `instance.exports.table.get(0)(1, 2)` works where the engine allows i
 - [x] **B-301** (DONE 2026-10-07: `Memory.view` on wasmtime and wasm3, `supports("memory.view")`, the view is reset on a module call, batch, grow and instance creation, so there is no stale address; `tests/test_memory_view.py`, a step in the self-test. The gain is small (a 6 MB frame is ~6 ms of copying), the main bottleneck on the JS engines remains: encoding, see B-302) Memory without copying on the native backends (wasmtime, wasm3): a `memoryview` over the engine's buffer,
       with an honest rule: the view becomes invalid after `grow`. On the JS backends a copy remains.
 - [x] **B-302** (DONE 2026-10-07: `examples/coremark.py` already existed; the transfer of buffers is measured by `wasmhost bench --buffer KIB`, `_bench.measure_memory`, a test in `test_bench.py`; results below) A benchmark: `examples/coremark.py` plus a measurement of the transfer of large buffers (a frame, megabytes) before and after.
-- [ ] **B-302a** (PARTLY DONE 2026-10-07: the `bench` command, the measurements below and the buffer measurement of B-302 are done; still open: the
-      `AUTO_ORDER` comment about the missing JIT on `jscontext` (the README says it already), the rows of other iPhones, and what is listed as
-      not measured at the end) The results of comparing the backends (measured 2026-10-06, Linux, CPython 3.11; the best of three series) and what to
+- [x] **B-302a** (DONE 2026-10-07, on the owner's word: the `bench` command, the measurements below, the buffer measurement of B-302 and the `AUTO_ORDER` comment about the missing JIT on `jscontext`; the owner has no other iPhone, so no more device rows will come, and what is listed as
+      not measured at the end stays unmeasured) The results of comparing the backends (measured 2026-10-06, Linux, CPython 3.11; the best of three series) and what to
       do about them. Packaged as the command `python -m wasmhost bench [--backend] [--no-jit]` (`_bench.py`, `tests/test_bench.py`).
       **Transfer of a 1 MiB buffer into and out of memory (MB/s, Linux, CPython 3.11, `wasmhost bench --buffer 1024`, the best of three):**
       write / read: `wasmtime` ~5800 / ~1000; `wasm3` ~10000 / ~1350; `jsc` 43 / 29; `node` 15 / 11; `bun` 18 / 26.
@@ -410,7 +409,7 @@ Done when: transferring a buffer of megabytes is not copied on wasmtime and wasm
       When they are merged: take the SHA of `main`, change `rev` and its comment in `pyproject.toml`, `uv lock` (only pywasm3 should change in the lock), `uv sync`, the wasm3 tests
       (`uv run pytest --wasm-backend wasm3`: 174 passed, 76 skipped now) and the self-test, the whole pre-commit, then CI on every platform (it builds pywasm3 from git, with a C compiler, on each).
       Not needed before: with the fix branch the same 174 tests pass (see B-404), so nothing waits on it.
-- [ ] **B-406** (added 2026-10-07, found when CI went red; open) wasm3: at most 128 live runtimes, and an `Instance` is freed only by the cyclic collector.
+- [x] **B-406** (added 2026-10-07, found when CI went red; CLOSED 2026-10-07 on the owner's word, as option (b): left as it is, documented) wasm3: at most 128 live runtimes, and an `Instance` is freed only by the cyclic collector.
       **CI went red twice on `3.14t` (the free-threaded build):** run 37633049533 (2f40e8e, `windows-latest / 3.14t`, `test_the_module_for_stopping_is_made_once[wasm3]`) and run 37634050575 (47c409e,
       `ubuntu-latest / 3.14t`, `test_an_instance_without_a_timeout_is_not_timed[wasm3]`): `RuntimeError: memory allocation failed` in `runtime.load()`, in different tests, a plain instance too.
       **Cause (measured here, 2026-10-07):** pywasm3's guarded memory takes a slot of one process-wide arena at every `Runtime.load` and gives it back when the runtime is freed; there are **128**: with runtimes
@@ -422,7 +421,7 @@ Done when: transferring a buffer of megabytes is not copied on wasmtime and wasm
       **Not fixed in the library, the owner decides:** (a) break the cycle: the lazy export holding the instance through a weak reference, and `_Exports` not keeping the `Function` it made (the backend's weak cache
       keeps `exports.add is exports.add`; cost: a cache lookup on each `exports.name`, to be measured on the hot path of a call); (b) leave it and say so, as the README now does ("room for 128 live instances");
       (c) both. A user who makes hundreds of wasm3 instances in a loop on a free-threaded build is the one this touches.
-      **Owner's answer (2026-10-07), read as option (b): leave the library as it is and say so** (README: "room for 128 live instances"); the cycle is not broken. The status mark is the owner's to set.
+      **Owner's answer (2026-10-07), read as option (b): leave the library as it is and say so** (README: "room for 128 live instances"); the cycle is not broken. Closed by the owner the same day.
 
 Risks: JSC has no interruption, so on iOS this is not guaranteed; a separate note is needed about what the sandbox does not
 promise.
