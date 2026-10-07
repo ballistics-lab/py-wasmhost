@@ -22,6 +22,17 @@ def uleb(n: int) -> bytes:
             return bytes(out)
 
 
+def sleb(n: int) -> bytes:
+    out = bytearray()
+    while True:
+        b = n & 0x7F
+        n >>= 7
+        if (n == 0 and not b & 0x40) or (n == -1 and b & 0x40):
+            out.append(b)
+            return bytes(out)
+        out.append(b | 0x80)
+
+
 def vec(items: list[bytes]) -> bytes:
     return uleb(len(items)) + b"".join(items)
 
@@ -54,6 +65,7 @@ def module(
     imports: list[bytes] | None = None,
     memory_limits: bytes | None = None,
     start: int | None = None,
+    data: list[tuple[int, bytes]] | None = None,
 ) -> bytes:
     out = b"\0asm\x01\x00\x00\x00" + section(1, vec(types))
     if imports:
@@ -69,6 +81,8 @@ def module(
     if start is not None:
         out += section(8, uleb(start))  # the function that runs when the instance is made
     out += section(10, vec([body(f[1], f[2]) if len(f) == 3 else body(f[1]) for f in funcs]))
+    if data:  # active segments of memory 0: (offset, bytes)
+        out += section(11, vec([b"\x00\x41" + sleb(at) + b"\x0b" + uleb(len(raw)) + raw for at, raw in data]))
     return out
 
 
@@ -328,3 +342,48 @@ def exceptions(final: bool) -> bytes:
     out += section(7, vec([name("caught") + b"\x00" + uleb(0), name("uncaught") + b"\x00" + uleb(1)]))
     out += section(10, vec([body(handler(0)), body(handler(1))]))
     return out
+
+
+def wasi_hello() -> bytes:
+    """A WASI command (`wasi_snapshot_preview1`): `_start` counts its arguments, writes "hello, wasi\\n" to stdout,
+    makes the file `note.txt` in the first preopened directory (fd 3) with the same text, and exits with the number
+    of arguments as its code."""
+    types = [
+        functype([I32, I32], [I32]),  # 0: args_sizes_get
+        functype([I32, I32, I32, I32], [I32]),  # 1: fd_write
+        functype([I32, I32, I32, I32, I32, I64, I64, I32, I32], [I32]),  # 2: path_open
+        functype([I32], [I32]),  # 3: fd_close
+        functype([I32], []),  # 4: proc_exit
+        functype([], []),  # 5: _start
+    ]
+    wasi = name("wasi_snapshot_preview1")
+    imports = [
+        wasi + name("args_sizes_get") + b"\x00" + uleb(0),
+        wasi + name("fd_write") + b"\x00" + uleb(1),
+        wasi + name("path_open") + b"\x00" + uleb(2),
+        wasi + name("fd_close") + b"\x00" + uleb(3),
+        wasi + name("proc_exit") + b"\x00" + uleb(4),
+    ]
+
+    def const(n: int) -> bytes:
+        return b"\x41" + sleb(n)
+
+    call, drop, load = b"\x10", b"\x1a", b"\x28\x02\x00"
+    code = (
+        const(0) + const(4) + call + uleb(0) + drop  # args_sizes_get(0, 4): argc at 0
+        + const(1) + const(16) + const(1) + const(24) + call + uleb(1) + drop  # fd_write(1, iovec at 16, 1, 24)
+        + const(3) + const(1) + const(64) + const(8) + const(1) + b"\x42\x7f\x42\x7f" + const(0) + const(100)
+        + call + uleb(2) + drop  # path_open(3, follow, "note.txt", create, all rights, 0, fd at 100)
+        + const(100) + load + const(16) + const(1) + const(24) + call + uleb(1) + drop  # fd_write(that fd, ...)
+        + const(100) + load + call + uleb(3) + drop  # fd_close
+        + const(0) + load + call + uleb(4)  # proc_exit(argc)
+    )  # fmt: skip
+    iovec = (32).to_bytes(4, "little") + (12).to_bytes(4, "little")  # the text at 32, 12 bytes
+    return module(
+        types,
+        [(5, code)],
+        [("memory", 2, 0), ("_start", 0, 5)],
+        memory_limits=b"\x00\x01",
+        imports=imports,
+        data=[(16, iovec + bytes(8) + b"hello, wasi\n"), (64, b"note.txt")],
+    )

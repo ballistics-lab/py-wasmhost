@@ -356,6 +356,37 @@ budget (a batch is one call; a call from a host function shares the outer one).
 `timeout` and `fuel` can be given together; whichever runs out first ends the call (on `wasmtime` that instance pays for both
 engines, about 5 times slower on a tight loop).
 
+## WASI
+
+`wasmhost.wasi1` is a host for `wasi_snapshot_preview1` (WASI 0.1), the interface that Rust (`wasm32-wasip1`), wasi-sdk, Zig and
+most "command line" modules are built against: all 46 functions of the specification, in plain Python, standard library only.
+It is checked against the specification's own `witx` files (names, signatures, the numbers of errors and flags, the layout of
+the records), and its self-test step runs a small WASI program on every backend.
+
+```python
+import sys
+from wasmhost import Module
+from wasmhost.wasi1 import Wasi
+
+wasi = Wasi(
+    args=["prog", "-v"],
+    env={"HOME": "/"},
+    preopens={"/": "some/folder"},
+    stdin=b"input",
+    stdout=sys.stdout.buffer.write,
+)
+code = wasi.run(Module(open("prog.wasm", "rb").read()))  # the exit code: what `proc_exit` was given, else 0
+```
+
+`preopens` maps the name the program sees to a folder of the host; several can be given, and a name that leaves its folder
+(`..`, an absolute name, a link that points out) is refused with `ENOTCAPABLE`. The check and the open are two steps, so
+another process changing the folder in between can still get past it. `stdin` is bytes or an object with `read(n)` (default:
+empty, there is no interactive input); `stdout` and `stderr` are callables that take bytes, or objects with `write` (default:
+the interpreter's own streams). To give options to the instance, or to make it yourself, use `wasi.instantiate(module, timeout=5)`
+and `wasi.start(instance)`, or `wasi.imports()` with `wasi.bind(instance)`. Sockets are not supported (`ENOTSOCK`), nor are
+signals (`ENOSYS`); the older `wasi_unstable` is not provided yet. A host function that sleeps (`poll_oneoff`) is outside what
+`timeout` and `fuel` can stop.
+
 ## Try it on a device
 
 The package carries a self-test, since nothing else can be run in Pythonista/Python IDE to see whether this works there:
@@ -368,7 +399,7 @@ wasmhost.selftest()  # or, from a shell: python -m wasmhost self test [--backend
 
 It prints one line per check, then `N/M passed`: the Objective-C bridge in use (and, if the C API is not used, why:
 `C API  not used: ...`), `WebAssembly` and `BigInt` in the engine, bytes in and out (`via C API` or `via hex`), calls,
-`i64`, memory, globals, traps, batches, host functions, globals made on their own and shared between instances, an
+`i64`, memory, globals, traps, batches, host functions, a WASI program, globals made on their own and shared between instances, an
 isolated instance, which encodings of WebAssembly exceptions the engine takes (`final (try_table): yes, older
 (try/catch): no`: a module built with C++ exceptions, such as bclibc's `bclibc_wasm.wasm` from wasi-sdk, needs the final one),
 and the cost of a call. A check the backend can't do says so (`not available on this backend, as

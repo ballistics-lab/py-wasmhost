@@ -43,6 +43,7 @@ def test_module_constants_are_the_test_modules() -> None:
     assert _selftest.TABLE_ELEM_START == test_elem_signatures.module(start=True)
     assert _selftest.EXCEPTIONS_FINAL == wb.exceptions(final=True)
     assert _selftest.EXCEPTIONS_LEGACY == wb.exceptions(final=False)
+    assert _selftest.WASI_HELLO == wb.wasi_hello()
 
 
 def test_main(capsys: pytest.CaptureFixture[str], session: str) -> None:
