@@ -50,28 +50,34 @@ the feature itself:
 - **Sub-agents:** a worktree starts from `main`, which has no `BACKLOG.md` and none of this branch; give an agent a copy of the files it needs (or a
   commit to fast-forward to), and ask it to verify its own work with a script. Check an agent's result yourself before bringing it into the branch.
 
-## Current state (2026-10-07; `examples/zigcc` was merged into `main` by the owner and deleted, work goes on in `claude/loving-hawking-u966j0`)
+## Current state (2026-10-07, written as a handoff to the next session)
 
-**Done in the branch and verified** (pre-commit is green; the full `pytest` passes on wasmtime, jsc, node, bun, wasm3; CI is green on all platforms; the
-self-test has 34 steps on wasmtime/wasm3 and 40 on the JS engines): phases 1 to 4 except what is listed as open below. In short: B-201 (`Function`, `signature`,
-`type()`, identity, `elem`, the safety net through `call_indirect`), B-202, B-204, B-301 (`Memory.view`), B-302 (`bench`), B-304 (a lock per backend, `await
-compile/instantiate`, threads only with `threaded=True`), B-507, B-509, fast buffers (a typed array through the C API on jsc/jscontext, base64 on node/bun), Bun in CI,
-and **phase 4, limits for untrusted code: B-401 (memory ceiling), B-402/B-403 (timeout), B-404 (fuel)**; the README has them in one section, "Limits for untrusted
-code". **Verified by the owner on the device (Pythonista, iPhone 16, iOS 26, `jscontext`):** self-test 38/38 (before the fuel step; 40 expected now: a device re-run is
-pending), buffers intact from 1 byte to 8 MiB at 5400/12700 MB/s (1 MiB write/read), `await compile/instantiate`, multi-value in a batch, `wasi_sh --home`, `bench`.
+**Where things are.** Branch `claude/loving-hawking-u966j0` (the only one to work in; never create a PR, the owner does). CI of `3b9a35a` (the fix for the red
+`3.14t` jobs) was green on every job but one still finishing when checked (`macos-latest / pypy3.11`, every step already success; that job is the known flake, see "Known flaky CI failures");
+the commit after it is docs only. Look at CI of the newest commit first. Pre-commit is green; the full `pytest` passes on wasmtime, jsc, node, bun, wasm3; the self-test has
+34 steps on wasmtime/wasm3 and 40 on the JS engines.
 
-**Deferred by owner decision:** B-304a (examples on asyncio; the shape of the `pyodide.py` API is not settled), WASI in the library itself (phase 5), Deno (B-701b: a bug in Deno itself).
+**Done** (phases 1 to 4): B-201 (`Function`, `signature`, `type()`, identity, `elem`, the safety net through `call_indirect`), B-202, B-204, B-301 (`Memory.view`), B-302 (`bench`),
+B-304 (a lock per backend, `await compile/instantiate`, threads only with `threaded=True`), B-507, B-509, fast buffers, Bun in CI, and **phase 4: B-401 (memory ceiling), B-402/B-403
+(timeout), B-404 (fuel)**, closed by the owner. The README has the limits in one section, "Limits for untrusted code". **Verified on the device by the owner** (Pythonista, iPhone 16,
+iOS 26, `jscontext`): self-test 38/38 (before the fuel step), buffers intact from 1 byte to 8 MiB, `await compile/instantiate`, multi-value in a batch, `wasi_sh --home`, `bench`.
 
-**Waiting for the owner or upstream:** the branch name and tidying (B-003), the release (B-801); `coreutils.wasm` stays in git (B-004, owner decision, the history has two
-copies, about 21 MB: a squash would leave one); `tiny-bclibc-wasm` (B-803); B-405 (re-pin pywasm3 after its two open PRs are merged); B-406 (whether to break the `Instance`
-reference cycle in the library: wasm3 has 128 runtime slots per process).
+**To do first, if the owner has not said otherwise:**
+1. A device re-run of `wasmhost self test` (a fresh wheel: `git fetch --tags`, then `uv build --wheel`; the version comes from git tags): 40/40 expected on `jscontext`, where the
+   timeout and fuel steps say "not supported" instead of failing. Add a row to README "Where it has been run" when the owner reports it.
+2. B-405 when upstream merges pywasm3's two PRs (#13, #14); B-406 is decided as "leave it" (option b) but its mark is the owner's to set.
+3. Then the owner picks: B-203 (`externref`), a binary channel for node/bun (about 50 MB/s through the pipe and JSON now), B-303 (batch `read/write`), B-006 (CI for examples).
 
-**Not covered by tests:** `examples/wasmclang.py`, `jslinux.py` (unavailable in the assistant's environment: `bellard.org` is blocked), `coremark.py`; the "Examples" step
-in CI runs only `basic.py` and `imports.py` (B-006). B-302a is only partly done (see its entry).
+**Deferred by owner decision:** B-304a (examples on asyncio), WASI in the library (phase 5), Deno (B-701b: a bug in Deno itself). **Waiting for the owner:** the branch name and tidying
+(B-003), the release (B-801), `coreutils.wasm` stays in git (B-004), `tiny-bclibc-wasm` (B-803). **Not covered by tests:** `examples/wasmclang.py`, `jslinux.py` (`bellard.org` is blocked
+in the assistant's environment), `coremark.py`; the "Examples" step in CI runs only `basic.py` and `imports.py` (B-006).
 
-**Next candidates:** B-203 (`externref`), a binary channel for node/bun (about 50 MB/s through the pipe and JSON now), B-303 (batch `read/write`). Phase 4 has nothing open
-except B-405/B-406 above. Fact (confirmed by the owner, matches the measurements): `jscontext` on iOS has **no JIT**, so for pure computation `wasm3` would be faster than
-JavaScriptCore there, but `pywasm3` cannot be installed on iOS (a C extension), and neither timeout nor fuel exists on iOS.
+**Things that bit this session (read before touching the same code):**
+- wasm3: 128 live runtimes per process at most, and an `Instance` is in a reference cycle, so only the cyclic collector frees it (B-406); the `session` fixture in `tests/conftest.py`
+  calls `gc.collect()` for that reason. `suspendable` and `gas_limit` must be set **before** the first `find_function`. An instance that timed out is finished.
+- A pre-commit "Failed" on pytest can be only the hook seeing a tracked file edited while it ran: do not edit files during a run, and re-run before believing it.
+- Run one pre-commit at a time. `git fetch` and `git pull --ff-only` before each commit; look at CI after each push.
+- Facts: `jscontext` on iOS has **no JIT**, no wasmtime or wasm3 there, and neither timeout nor fuel; the owner works in Ukrainian, this file stays in English.
 
 ## Order of work
 
