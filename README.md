@@ -102,6 +102,19 @@ The `wasm3` backend has no extra: pywasm3's PyPI release is years behind the API
 The ordinary wheel: it is pure Python (`py3-none-any`). In StaSh (Pythonista) or PythonIDE's pip,
 `pip install wasmhost`, then run the self-test (see [Try it on a device](#try-it-on-a-device)).
 
+### iSH-AOK (iOS)
+
+iSH-AOK is a fork of the iSH app: a Linux shell on iOS (here `Linux 5.10.0-ish_aok`, `aarch64`) with ordinary CPython. There is
+no `objc_util`, no JavaScriptCore and no Node, so without an engine the self-test ends with `no backend could start`
+and says what to install. `wasmtime` installs there and works:
+
+```shell
+uv tool install wasmhost --prerelease=allow --with wasmtime
+wasmhost self test
+```
+
+(`--prerelease=allow`: the current version, 0.1.0b2, is a beta.) Run once by the owner, see [Where it has been run](#where-it-has-been-run).
+
 ## Host functions
 
 `Instance(module, imports)` takes the import object for the module's function imports (`Module.imports(module)`
@@ -422,6 +435,7 @@ out of memory (MB/s) and the engine itself (a recursive
 | Pythonista 3, Python 3.10.4, iPhone 16 (iPhone17,3), iOS 26 (Darwin 25.6) | `jscontext` (`objc_util`) | **36/36**, a 1 MiB buffer moves at 5400 MB/s in and 12700 MB/s out (a typed array through the C API; through hex it was about 40) (wasmhost 0.0.4.dev84) | 36 / 84 us |
 | Pythonista 3, Python 3.10.4, iPhone 16 (iPhone17,3), iOS 26 (Darwin 25.6) | `jscontext` (`objc_util`) | **38/38**, a memory held by the maximum of an imported `Memory` and by `Instance(max_memory=)` (wasmhost 0.1.0b2.dev3)                       | 36 / 83 us            |
 | PythonIDE, Python 3.14.7, `ios-13.0-arm64-iphoneos`                       | `jscontext` (`objc_util`) | **25/25**, bytes `via C API`, host functions (wasmhost 0.0.2b1)                                                                           | 39 / 77 us            |
+| iSH-AOK 1.3 (557), a fork of iSH, Linux 5.10.0-ish_aok aarch64, CPython 3.14.8 | `wasmtime` | **34/34** (wasmhost 0.1.0b2, `uv tool install wasmhost --prerelease=allow --with wasmtime`; without `wasmtime` no backend starts there and the self-test says so) | 1615 / 5500 us |
 | Linux, CPython 3.14t                                                      | `jsc`                     | 35/35                                                                                                                                     | 32 / 102 us           |
 | Linux, CPython 3.14t                                                      | `gi-jsc`                  | 27/27 (host functions: not available, as documented)                                                                                      | 35 / 62 us            |
 | Ubuntu 26.04, CPython 3.10.20, PyGObject 3.58.0 (`pip`, built from source) | `gi-jsc`                  | **38/38** (host functions: not available, as documented)                                                                                  | 32 / 74 us            |
