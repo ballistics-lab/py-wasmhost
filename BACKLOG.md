@@ -69,7 +69,7 @@ decision, the history has two copies, about 21 MB: a squash would leave one); `t
 **Not covered by tests:** `examples/wasmclang.py`, `jslinux.py` (unavailable in the assistant's environment: `bellard.org` is blocked), `coremark.py`;
 the "Examples" step in CI runs only `basic.py` and `imports.py` (B-006). B-302a is only partly done (see its entry).
 
-**Next candidates:** B-203 (`externref`), a binary channel for node/bun (about 50 MB/s through the pipe and JSON now), phase 4 is done (B-401 the memory ceiling, B-402/B-403 the timeout and its tests, where an engine can: none on iOS); the fuel limit (wasmtime `consume_fuel`, wasm3 `gas_limit`) is B-404, implemented, waiting for the owner's word to close. Fact (confirmed by the owner, matches the measurements): `jscontext` on iOS has **no JIT**, so for pure computation `wasm3` would be faster than
+**Next candidates:** B-203 (`externref`), a binary channel for node/bun (about 50 MB/s through the pipe and JSON now), phase 4 is done (B-401 the memory ceiling, B-402/B-403 the timeout and its tests, where an engine can: none on iOS); the fuel limit (wasmtime `consume_fuel`, wasm3 `gas_limit`) is B-404, done. Nothing open in phase 4. Fact (confirmed by the owner, matches the measurements): `jscontext` on iOS has **no JIT**, so for pure computation `wasm3` would be faster than
 JavaScriptCore there, but `pywasm3` cannot be installed on iOS (a C extension).
 
 ## Order of work
@@ -392,7 +392,7 @@ Done when: transferring a buffer of megabytes is not copied on wasmtime and wasm
       instance is made, but at the first call (so there the start function is under the timeout at the first call).
 - [x] **B-403** (DONE 2026-10-07, with B-402: `tests/test_timeout.py`, 36 tests) Tests "a module with an infinite loop" on every backend that can do this:
       `wasmtime` and `node` stop it; the others are skipped with the reason, and `test_a_backend_that_cannot_says_so` checks that they refuse honestly.
-- [ ] **B-404** (IMPLEMENTED 2026-10-07 on the owner's word to start it, once the wasm3 timeout showed gas works; waiting for the owner's word to close; self-test step "fuel: Instance(fuel=) stops an endless loop, where the engine can count", `tests/test_fuel.py`)
+- [x] **B-404** (DONE 2026-10-07, on the owner's word ("if implemented, close it"); CI of 47c409e was still running when it was closed, a check was set for after; started on the owner's word once the wasm3 timeout showed gas works; self-test step "fuel: Instance(fuel=) stops an endless loop, where the engine can count", `tests/test_fuel.py`)
       Fuel / gas: `Instance(module, imports, fuel=n)`, also `instantiate` and `instantiate_sync`: a call that uses more than `n` units of what the engine counts ends with `wasmhost.OutOfFuel` (a `Trap`).
       Deterministic (the same module and input stop at the same place on any machine, whatever the load) and needs no thread. **The owner left the decisions to the assistant; made as follows:**
       per call (every call starts with the whole budget, a batch is one call, a call from a host function shares the outer one, the start function is under it: as `timeout`); `supports("fuel")`;
@@ -406,6 +406,35 @@ Done when: transferring a buffer of megabytes is not copied on wasmtime and wasm
       Not verified on macOS/Windows or a device by this item itself (CI will say); the wasmtime and wasm3 numbers are from one Linux machine.
       Checked on the way, 2026-10-07: pywasm3's `request_suspend()` from another thread can not work, whatever a note said: a call holds the GIL, a `threading.Timer` never ran in 10 s, with `suspendable` and gas armed
       before `find_function` (pywasm3 at 4c1334e); the documented way is from a host function. Snapshots (`save_snapshot` / `load_snapshot`) and `memory_limit` / `table_limit` / `continuation_limit` are there, unused.
+      **The open pywasm3 PR #14 (2026-10-07, the owner's, branch `fix/gil-env-lock` of o-murphy/pywasm3, 7562b12, "Serialize calls into a shared Environment on GIL builds too"), checked: not needed for this item.**
+      What it fixes: on a GIL build the lock of an `Environment` existed only on free-threaded builds, so a host function that gives up the GIL (sleep, I/O, a memory read) let another thread start a call on
+      the same runtime on top of the first one's stack (a flaky `[trap] stack overflow` in pywasm3's `test_shared_runtime`); the fix is a recursive `PyThread` lock, taken without the GIL while waiting
+      (read in the C diff: `env_lock` / `env_unlock`, a lock made with the environment). Tried here, without touching the pin: built from that commit in a scratch venv, `wasmhost` on wasm3 gives
+      **174 passed, 76 skipped, the same as on the pinned `main` (4c1334e)**, including `test_timeout.py` and `test_fuel.py`; pywasm3's own `tests/test_threads.py` passes there (6 passed, 1 skipped).
+      Why we are not exposed: every public method of a backend takes its lock (`Backend._lock`, one per backend instance, reentrant), so one call at a time per backend, and a call from a host function is the same thread;
+      a `Wasm3Backend` owns its `Environment`, so two backends never share a runtime; the slices of a timed call are inside one locked call. It does not change the timeout either: a call still holds the GIL
+      between imports (the `threading.Timer` probe was run on the pinned `main` only, where the timer never ran during a wasm loop; not tried on the branch, but its C diff has nothing that releases the GIL while wasm runs).
+      So: no need to wait for it (it is hardening for anyone who calls one pywasm3 runtime from several threads without a lock of their own). **Owner's decision (2026-10-07): B-404 stays closed; the re-pin is B-405.**
+- [ ] **B-405** (added 2026-10-07 on the owner's word; waiting for upstream, nothing to do here until then) Re-pin `pywasm3` (`[tool.uv.sources]` in `pyproject.toml`, and `uv.lock`) when upstream merges its two open PRs.
+      Now pinned to `4c1334e` (main of 2026-09-28: the exception handling API, wasm3 0.9.2, on top of suspendable runs, snapshots, gas and the resource caps). The two PRs, both the owner's, both of 2026-10-07
+      (named from the PR heads on `wasm3/pywasm3`, read through git; whether they are still open was not checked, the GitHub API does not reach that repository from here, the owner says two are open):
+      **#14** `fix/gil-env-lock` (7562b12): a lock of an `Environment` on GIL builds too (see B-404: hardening, not needed by us because every backend call holds `Backend._lock`);
+      **#13** `python315` (da5d132): "build: add Python 3.15 and 3.15t support" (not read; a build matter: CI here runs 3.10, 3.14 and 3.14t, no 3.15).
+      When they are merged: take the SHA of `main`, change `rev` and its comment in `pyproject.toml`, `uv lock` (only pywasm3 should change in the lock), `uv sync`, the wasm3 tests
+      (`uv run pytest --wasm-backend wasm3`: 174 passed, 76 skipped now) and the self-test, the whole pre-commit, then CI on every platform (it builds pywasm3 from git, with a C compiler, on each).
+      Not needed before: with the fix branch the same 174 tests pass (see B-404), so nothing waits on it.
+- [ ] **B-406** (added 2026-10-07, found when CI went red; open) wasm3: at most 128 live runtimes, and an `Instance` is freed only by the cyclic collector.
+      **CI went red twice on `3.14t` (the free-threaded build):** run 37633049533 (2f40e8e, `windows-latest / 3.14t`, `test_the_module_for_stopping_is_made_once[wasm3]`) and run 37634050575 (47c409e,
+      `ubuntu-latest / 3.14t`, `test_an_instance_without_a_timeout_is_not_timed[wasm3]`): `RuntimeError: memory allocation failed` in `runtime.load()`, in different tests, a plain instance too.
+      **Cause (measured here, 2026-10-07):** pywasm3's guarded memory takes a slot of one process-wide arena at every `Runtime.load` and gives it back when the runtime is freed; there are **128**: with runtimes
+      kept in a list the 129th fails, with or without a memory in the module, and after they are freed a new one loads (`_wasm3.c` says so: "Guarded memory hands out slots of a single arena for the whole process").
+      And `wasmhost`'s `Instance` is in a reference cycle (`Instance.exports` -> `_LazyFunction.make`, a partial of the bound `_export_function` -> `Instance`; once an export is used, `Function.instance` and the exports
+      cache close it again), so it is not freed by counting references: with the collector off, `Instance(module)` made and dropped at once fails at #129, with a timeout or with fuel too. CPython collects often enough
+      that this never showed; a free-threaded build does not, and the timeout and fuel tests make many wasm3 instances.
+      **Fixed for the tests only:** the `session` fixture calls `gc.collect()` when a test ends (checked with the collector switched off: before, many failures; after, 174 passed on wasm3; and with it on, 174 passed).
+      **Not fixed in the library, the owner decides:** (a) break the cycle: the lazy export holding the instance through a weak reference, and `_Exports` not keeping the `Function` it made (the backend's weak cache
+      keeps `exports.add is exports.add`; cost: a cache lookup on each `exports.name`, to be measured on the hot path of a call); (b) leave it and say so, as the README now does ("room for 128 live instances");
+      (c) both. A user who makes hundreds of wasm3 instances in a loop on a free-threaded build is the one this touches.
 
 Risks: JSC has no interruption, so on iOS this is not guaranteed; a separate note is needed about what the sandbox does not
 promise.

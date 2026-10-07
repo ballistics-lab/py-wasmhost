@@ -274,6 +274,12 @@ Not every backend can do everything; `backend.supports(...)` says:
 | `node`      | yes                                                            | yes            | yes                                                       | yes                                             | yes                                | no           | yes                                | no |
 | `bun`       | yes                                                            | yes            | yes                                                       | yes                                             | yes                                | no           | no (its wasm loop is not stopped)  | no |
 
+**`wasm3` has room for 128 live instances in a process.** Its guarded memory hands out slots of one arena, a module loaded takes
+one and a runtime freed gives it back, so the 129th instance alive at once is `RuntimeError: memory allocation failed` (measured,
+and the same whether the module has a memory or not). An `Instance` is in a reference cycle (it holds its exports, which hold it), so
+one is freed only when Python's cyclic collector gets to it: in a loop that makes many of them, on a build whose collector runs rarely
+(the free-threaded `3.14t` did, in CI), call `gc.collect()` now and then, or keep them few. The other backends have no such limit.
+
 **PyGObject for `gi-jsc`.** The simplest way is the system's own `python3-gi` (with `gir1.2-javascriptcoregtk-4.1`) and the system's Python, as
 CI does. To have it in a venv instead, `pip install "wasmhost[gi-jsc]"` (or `uv sync --extra gi-jsc`) builds PyGObject from source, so the system needs
 its development files first, and which ones depends on the PyGObject that gets built: **3.52 and later need `girepository-2.0`** (GLib 2.80+: Ubuntu 24.04
