@@ -56,8 +56,9 @@ it works in Pythonista.
 `examples/coreutils.py` is a small shell over uutils coreutils (Rust, built to WASI, in `examples/wasm/`): `ls`, `cat`,
 `sort`, `cp`, `seq`, `wc` and the rest, and `lua`, with pipes and redirects, over a directory of the real file system.
 The WASI host for the modules is `wasmhost.wasi1` (see [WASI](#wasi)); the example only gives it a directory and a limit on what a
-pipe may carry. `wasmclang.py` and `wasi_sh.py` keep hosts of their own: the first answers the WASI calls with a file system that is
-itself a WebAssembly module, the second has a file system in a Python dict, pipes and hooks of its own, and `wasi1` works over real folders.
+pipe may carry. `wasmclang.py` takes the calls that are not about files from `wasi1` and leaves the file calls to `memfs.wasm`, a file system that is
+itself a WebAssembly module; `wasi_sh.py` keeps a host of its own (a file system in a Python dict, pipes and hooks), because `wasi1` is the
+specification's calls over real folders and nothing more.
 
 `examples/wasi_sh.py` is a real POSIX shell, BusyBox `ash` with about fifty utilities (the wasi-sh project's
 `busybox.wasm`, downloaded once from npm), with pipes, `$(...)`, here-documents and functions, over a file system that is
@@ -508,7 +509,7 @@ which it is meant to be done.
   encodings of exceptions an engine takes), SIMD, `memory64`, multi-memory, GC types.
   Whether a module that uses them runs is up to the engine.
 - **WASI** is provided for `wasi_snapshot_preview1` by `wasmhost.wasi1` (see [WASI](#wasi)); not yet: sockets, a read-only mode for a folder, and a safe open through
-  `openat` (the check of a name and the open are two steps now). `examples/coreutils.py` uses it; `wasmclang.py` and `wasi_sh.py` keep hosts of their own (file systems that are not a folder).
+  `openat` (the check of a name and the open are two steps now). `examples/coreutils.py` uses it and `examples/wasmclang.py` uses it for the calls that are not about files; `wasi_sh.py` keeps a host of its own (a file system that is not a folder, pipes).
 
 ## Test
 

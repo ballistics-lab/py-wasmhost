@@ -70,7 +70,7 @@ iOS 26, `jscontext`): self-test 41/41 on 2026-10-07 (with the WASI step; PythonI
 from the start, so three memory steps fail; cause unknown, the owner suspects iSH's i386 emulator and will look when an issue is filed; see B-505 and the README).
 
 **To do first, if the owner has not said otherwise:**
-1. **B-502** (part done: `coreutils.py`; the owner's order, 2026-10-07: refresh BACKLOG and README first, then B-502): move the examples to `wasmhost.wasi1` with a thin wrapper in each. Only `examples/coreutils.py` has a host of the
+1. **B-502** (done in the scope of its entry, waiting for the owner to close it: `coreutils.py` and `wasmclang.py`; the owner's order, 2026-10-07: refresh BACKLOG and README first, then B-502): move the examples to `wasmhost.wasi1` with a thin wrapper in each. Only `examples/coreutils.py` has a host of the
    kind `wasi1` is (programs over a real folder, both snapshots): it is moved. `examples/wasmclang.py` answers the WASI calls with `memfs.wasm`, a file system that is itself a WebAssembly module, and `examples/wasi_sh.py` has
    a file system in a Python dict (`Vfs`), pipes without `fork` and nine `env.__host_*` hooks: neither fits `wasi1`, which works over real folders only. Moving them would need a file-system abstraction in `wasi1`
    (not planned; the owner decides).
@@ -471,12 +471,12 @@ official `wasi_snapshot_preview1` (branch `wasi-0.1` of WebAssembly/WASI), not t
         `LICENSE.md`); `tests/test_wasi1.py` tests each call over a plain bytearray; `tests/test_wasi1_run.py` runs a program of each snapshot on every backend. The self-test has a WASI step (a program of each snapshot).
       - Not done: a read-only mode (B-504), `openat` (B-503); not run on a device. CI: `Tests` green at `c5aaf86` (all of `wasi_snapshot_preview1`); the run for `9ce13e0`, which added `wasi_unstable`, was still going when this was closed: look at it.
 - [ ] **B-502** Update all WASI examples and tests to use `wasmhost.wasi1` instead of carrying a copy of `Wasi` in each example. The example-side API should stay thin: `Wasi(args=…, preopens={"/": dir}, stdin=…, stdout=…)` is a convenience wrapper around the common module, not the implementation itself.
-      **Done in part 2026-10-07 (not closed): `examples/coreutils.py` uses `wasmhost.wasi1`** (its own 430-line `Wasi` class is gone; `Wasi()` is now 15 lines that give the library a folder as `/` and `.` and turn the
-      pipe limit into a `BrokenPipeError` of the stdout sink); `tests/test_coreutils_example.py` passes on wasmtime, wasm3, node and bun, and a run by hand of Lua (`wasi_unstable`), `yes | head` and `cat ../x` gives the same
-      as before. **Not moved, and why:** `examples/wasmclang.py` answers the WASI calls with `memfs.wasm`, a file system that is a WebAssembly module of the wasm-clang project; `examples/wasi_sh.py` has a file system in a
-      Python dict (`Vfs`; its tests check that nothing real is touched), pipes and `dup` through `env.__host_*` hooks, and an in-memory `Vfs` mode. `wasi1` works over real folders and has no pipes or `dup`. Options for the owner:
-      (a) leave them as examples of a host of one's own (what the README now says); (b) a pluggable file system in `wasi1` (a bigger change: the interface of a `Vfs`, and hooks beside the calls); (c) `wasmclang.py` on a real
-      temporary folder instead of `memfs.wasm` (a redesign of the example, not tried).
+      **Done in the scope below 2026-10-07 (the owner closes it).** `examples/coreutils.py` uses `wasmhost.wasi1` (its own 430-line `Wasi` class is gone; `Wasi()` is now 15 lines that give the library a folder as `/` and `.` and turn the
+      pipe limit into a `BrokenPipeError` of the stdout sink); `tests/test_coreutils_example.py` passes on wasmtime, wasm3, node and bun, and a run by hand of Lua (`wasi_unstable`), `yes | head` and `cat ../x` gives the same as before.
+      **`examples/wasmclang.py` uses `wasi1` for the seven calls that are not about files** (`proc_exit`, `args_*`, `environ_*`, `random_get`, `clock_time_get`; of the first snapshot) and leaves the file calls to `memfs.wasm`, whose
+      exports *are* the WASI functions (they work on the memory of the other module); `poll_oneoff` stays ENOSYS. Run for real on wasmtime before and after: the same output (clang C -> wasm, a WASI program with `argc=3`, C++ with
+      `std::vector`/`std::map`); the file is 46 lines shorter. **Owner decision 2026-10-07: `wasi1` matches the official specification and nothing else; what is specific to an example stays in the example.** So `examples/wasi_sh.py`
+      keeps its host (a file system in a Python dict, pipes and `dup` through `env.__host_*`, an in-memory mode), and a pluggable file system (`wasmhost.vfs`, a `MemVfs`) is **deferred**: not planned, no entry yet.
 - [ ] **B-503** A sandbox through `openat` with `dir_fd`, to remove the gap between checking the path and opening
       (right now `resolve()` checks, then `os.open`).
 - [ ] **B-504** Several preopen folders and a "read-only" mode.
