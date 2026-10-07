@@ -45,7 +45,7 @@ jobs:
           cd /tmp && WASMHOST_BACKEND=node /tmp/smoke/bin/python -c "
           import wasmhost as wh
           wasm = bytes.fromhex('0061736d0100000001070160027f7f017f03020100070701036164640000' '0a09010700200020016a0b')
-          assert wh.instantiate(wasm).instance.exports.add(2, 3) == 5
+          assert wh.instantiate_sync(wasm).instance.exports.add(2, 3) == 5
           print('ok on', wh.get_backend().name)
           "
 
