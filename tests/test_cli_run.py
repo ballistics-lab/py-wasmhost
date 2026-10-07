@@ -57,7 +57,7 @@ def test_errors_are_a_message_and_a_code(capsys: pytest.CaptureFixture[str], ses
     for line, text in (
         (["--invoke", "nope", arith], "no function named `nope`"),
         (["--invoke", "add", arith, "1"], "takes 2 argument(s)"),
-        (["--invoke", "add", arith, "1", "x"], "invalid literal"),
+        (["--invoke", "add", arith, "1", "x"], "invalid digit"),
         (["--invoke", "add", arith, "4294967295", "0"], "number too large"),
         (
             ["/no/such/file.wasm"],
@@ -117,3 +117,20 @@ def test_a_module_without_a_start_function_exits_quietly(
     """As `wasmtime m.wasm` does (checked against wasmtime 48.0.5): no output, exit code 0."""
     assert _cli.main(["run", "--backend", session, arith]) == 0
     assert capsys.readouterr() == ("", "")
+
+
+def test_arguments_are_read_as_wasmtime_reads_them() -> None:
+    assert _run.parse_value("i32", "+5") == 5
+    assert _run.parse_value("i32", "0X7fffffff") == 2147483647
+    assert _run.parse_value("i64", "-9223372036854775808") == -(1 << 63)
+    assert _run.parse_value("f64", ".5") == 0.5
+    assert _run.parse_value("f32", "-inf") == float("-inf")
+    for kind, text in (("i32", "1_0"), ("i32", "0b1"), ("i32", "0o7"), ("i32", "0x"), ("i32", " 1"), ("i32", "-0x10")):
+        with pytest.raises(ValueError, match="invalid digit"):
+            _run.parse_value(kind, text)
+    for kind, text in (("f64", "1_0"), ("f64", "0x10"), ("f64", " 1"), ("f32", ""), ("f64", "e5")):
+        with pytest.raises(ValueError, match="invalid float"):
+            _run.parse_value(kind, text)
+    for kind, text in (("i32", "2147483648"), ("i32", "0xffffffff"), ("i64", "9223372036854775808")):
+        with pytest.raises(ValueError, match="too large"):
+            _run.parse_value(kind, text)

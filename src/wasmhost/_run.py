@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import argparse
 import os
+import re
 import struct
 import sys
 from collections.abc import Sequence
@@ -23,7 +24,7 @@ from .wasi.preview1 import WasiExit, Wasip1
 # The options that take a value: the command line is split before argparse sees it, to find the module.
 VALUE_OPTIONS = frozenset({"--argv0", "--backend", "--dir", "--env", "--invoke", "--max-memory", "--timeout", "--fuel"})
 INFO_OPTIONS = frozenset({"-h", "--help"})
-TRAP_EXIT = 134  # what wasmtime exits with on a trap
+TRAP_EXIT = 3 if os.name == "nt" else 134  # what wasmtime exits with on a trap (abort(): SIGABRT, or 3 on Windows)
 
 
 def split_command(argv: Sequence[str]) -> tuple[list[str], str, list[str]] | None:
@@ -66,13 +67,29 @@ def build_parser() -> argparse.ArgumentParser:
     return parser
 
 
+_DECIMAL = re.compile(r"[+-]?[0-9]+")
+_HEX = re.compile(r"[0-9a-fA-F]+")
+_FLOAT = re.compile(r"[+-]?(?:inf|infinity|nan|(?:[0-9]+\.?[0-9]*|\.[0-9]+)(?:[eE][+-]?[0-9]+)?)", re.IGNORECASE)
+
+
 def parse_value(kind: str, text: str) -> int | float:
+    """An argument as `wasmtime` reads it (run.rs): decimal or `0x` hexadecimal for an integer, which must fit the type
+    (no wrapping), the text of a Rust float for a float."""
     if kind in ("i32", "i64"):
-        number = int(text, 0)
         bits = 32 if kind == "i32" else 64
-        if not -(1 << (bits - 1)) <= number < (1 << (bits - 1)):  # as wasmtime: no wrapping, an error
+        if text[:2] in ("0x", "0X"):
+            if not _HEX.fullmatch(text[2:]):
+                raise ValueError("invalid digit found in string")
+            number = int(text[2:], 16)
+        elif _DECIMAL.fullmatch(text):
+            number = int(text)
+        else:
+            raise ValueError("invalid digit found in string")
+        if not -(1 << (bits - 1)) <= number < (1 << (bits - 1)):
             raise ValueError("number too large to fit in target type")
         return number
+    if not _FLOAT.fullmatch(text):
+        raise ValueError("invalid float literal")
     return float(text)
 
 
@@ -147,6 +164,20 @@ def _invoke(instance: Instance, module: Module, name: str, words: Sequence[str])
     return [format_value(kind, item) for kind, item in zip(kinds_out, items, strict=True)]
 
 
+def _start(wasi: Wasip1, instance: Instance) -> int:
+    """As run.rs: `_initialize` (a reactor) first if there is one, then `_start`; a module with neither exits 0."""
+    try:
+        initialize = getattr(instance.exports, "_initialize", None)
+        if initialize is not None:
+            initialize()
+        start = getattr(instance.exports, "_start", None)
+        if start is not None:
+            start()
+    except WasiExit as exit_:
+        return exit_.code
+    return 0
+
+
 def run(host_args: Sequence[str], path: str, program_args: Sequence[str]) -> int:
     args = build_parser().parse_args(host_args)
     try:
@@ -167,7 +198,7 @@ def run(host_args: Sequence[str], path: str, program_args: Sequence[str]) -> int
             get_backend()
         module = Module(wasm)
         wasi = Wasip1(
-            args=[args.argv0 if args.argv0 is not None else path, *([] if args.invoke else program_args)],
+            args=[args.argv0 if args.argv0 is not None else os.path.basename(path), *program_args],
             env=_environment(args.env),
             preopens=_preopens(args.dir),
             stdin=sys.stdin.buffer,
@@ -189,9 +220,7 @@ def run(host_args: Sequence[str], path: str, program_args: Sequence[str]) -> int
                 for line in lines:
                     print(line)
                 return 0
-            if not hasattr(instance.exports, "_start") and not hasattr(instance.exports, "_initialize"):
-                return 0  # wasmtime runs a module without a start function and exits 0
-            return wasi.start(instance)
+            return _start(wasi, instance)
     except Trap as exc:
         print(f"Error: {exc}", file=sys.stderr)
         return TRAP_EXIT
