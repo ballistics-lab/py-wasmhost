@@ -55,8 +55,9 @@ it works in Pythonista.
 
 `examples/coreutils.py` is a small shell over uutils coreutils (Rust, built to WASI, in `examples/wasm/`): `ls`, `cat`,
 `sort`, `cp`, `seq`, `wc` and the rest, and `lua`, with pipes and redirects, over a directory of the real file system.
-The WASI host for the modules is written in Python, on wasmhost; it is also a model of how to write one. (It is the example's own copy; the library's is `wasmhost.wasi1`, see [WASI](#wasi),
-and the examples are to move to it.)
+The WASI host for the modules is `wasmhost.wasi1` (see [WASI](#wasi)); the example only gives it a directory and a limit on what a
+pipe may carry. `wasmclang.py` and `wasi_sh.py` keep hosts of their own: the first answers the WASI calls with a file system that is
+itself a WebAssembly module, the second has a file system in a Python dict, pipes and hooks of its own, and `wasi1` works over real folders.
 
 `examples/wasi_sh.py` is a real POSIX shell, BusyBox `ash` with about fifty utilities (the wasi-sh project's
 `busybox.wasm`, downloaded once from npm), with pipes, `$(...)`, here-documents and functions, over a file system that is
@@ -505,7 +506,7 @@ which it is meant to be done.
   encodings of exceptions an engine takes), SIMD, `memory64`, multi-memory, GC types.
   Whether a module that uses them runs is up to the engine.
 - **WASI** is provided for `wasi_snapshot_preview1` by `wasmhost.wasi1` (see [WASI](#wasi)); not yet: sockets, a read-only mode for a folder, and a safe open through
-  `openat` (the check of a name and the open are two steps now). The examples still carry hosts of their own.
+  `openat` (the check of a name and the open are two steps now). `examples/coreutils.py` uses it; `wasmclang.py` and `wasi_sh.py` keep hosts of their own (file systems that are not a folder).
 
 ## Test
 
