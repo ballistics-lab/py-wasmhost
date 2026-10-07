@@ -39,11 +39,11 @@ class Memory:
 class Host:
     """A Wasi with a memory, and the helpers a test needs to put things in it and read results out."""
 
-    def __init__(self, **options: Any) -> None:
+    def __init__(self, snapshot: str = wasi1.SNAPSHOT, **options: Any) -> None:
         self.wasi = Wasi(**options)
         self.mem = Memory()
         self.wasi.memory = self.mem
-        self.calls = self.wasi.imports()[wasi1.SNAPSHOT]
+        self.calls = self.wasi.imports()[snapshot]
         self.top = 4096  # scratch space is handed out from here
 
     def __call__(self, name: str, *args: int) -> int:
@@ -756,3 +756,110 @@ def test_context_manager_closes(root: Path) -> None:
     with Wasi(preopens={"/": root}) as wasi:
         assert wasi.imports()
     assert not wasi._fds  # pyright: ignore[reportPrivateUsage]
+
+
+# --- wasi_unstable, the first snapshot: the four things in which it differs
+
+
+@pytest.fixture
+def old(root: Path) -> Host:
+    return Host(preopens={"/": root}, snapshot=wasi1.UNSTABLE)
+
+
+def test_both_snapshots_are_offered(host: Host) -> None:
+    modules = host.wasi.imports()
+    assert set(modules) == {wasi1.SNAPSHOT, wasi1.UNSTABLE}
+    assert len(modules[wasi1.SNAPSHOT]) == 46 and len(modules[wasi1.UNSTABLE]) == 45
+    assert "sock_accept" not in modules[wasi1.UNSTABLE]
+
+
+def test_the_functions_that_do_not_differ_are_the_same_functions(old: Host, root: Path) -> None:
+    (root / "a").write_text("hello")
+    _, fd = old.open("a")
+    assert old.read_fd(fd, 5) == b"hello"
+    assert old.write_fd(1, b"x") == 1
+
+
+def test_whence_has_its_own_numbers(old: Host, host: Host, root: Path) -> None:
+    (root / "a").write_bytes(b"0123456789")
+    _, fd = old.open("a")
+    pos = old.alloc(8)
+    old.ok("fd_seek", fd, 4, 2, pos)  # set is 2 in the first snapshot
+    assert old.u64(pos) == 4
+    old.ok("fd_seek", fd, 3, 0, pos)  # cur is 0
+    assert old.u64(pos) == 7
+    old.ok("fd_seek", fd, (-2) & ALL, 1, pos)  # end is 1
+    assert old.u64(pos) == 8
+    assert old("fd_seek", fd, 0, 3, pos) == Errno.inval
+    _, fd = host.open("a")
+    host.ok("fd_seek", fd, 4, 2, host.alloc(8))  # the same number is `end` in the later one
+    pos = host.alloc(8)
+    host.ok("fd_seek", fd, 0, 1, pos)
+    assert host.u64(pos) == 14
+
+
+def test_tell_through_seek_needs_the_right_in_either_numbering(old: Host, root: Path) -> None:
+    (root / "a").write_text("x")
+    _, fd = old.open("a", rights=Rights.fd_tell)
+    pos = old.alloc(8)
+    old.ok("fd_seek", fd, 0, 0, pos)  # cur, by 0 bytes, is a tell
+    assert old("fd_seek", fd, 0, 2, pos) == Errno.notcapable  # set is not
+
+
+def test_filestat_has_a_32_bit_link_count_and_its_own_layout(old: Host, root: Path) -> None:
+    (root / "a").write_bytes(b"12345")
+    _, fd = old.open("a")
+    out = old.alloc(64)
+    old.mem.write(out, b"\xaa" * 64)
+    old.ok("fd_filestat_get", fd, out)
+    raw = old.mem.read(out, 64)
+    st = (root / "a").stat()
+    assert raw[16] == Filetype.regular_file
+    assert struct.unpack_from("<I", raw, 20)[0] == 1  # nlink
+    assert struct.unpack_from("<Q", raw, 24)[0] == 5  # size
+    assert struct.unpack_from("<Q", raw, 40)[0] == st.st_mtime_ns
+    assert raw[56:] == b"\xaa" * 8  # the record is 56 bytes
+    ptr, size = old.text("a")
+    out = old.alloc(64)
+    old.mem.write(out, b"\xaa" * 64)
+    old.ok("path_filestat_get", 3, FOLLOW, ptr, size, out)
+    assert old.mem.read(out, 64)[:56] == raw[:56] or struct.unpack_from("<Q", old.mem.read(out, 64), 24)[0] == 5
+    old.mem.write(out, b"\xaa" * 64)
+    old.ok("fd_filestat_get", 1, out)  # standard output
+    assert (old.mem.read(out, 64)[16], struct.unpack_from("<I", old.mem.read(out, 64), 20)[0]) == (2, 1)
+
+
+def test_rights_stop_before_sock_accept(old: Host, host: Host) -> None:
+    for h, expected in ((old, wasi1.UNSTABLE_ALL_RIGHTS), (host, wasi1.ALL_RIGHTS)):
+        out = h.alloc(24)
+        h.ok("fd_fdstat_get", 3, out)
+        base, inheriting = struct.unpack_from("<QQ", h.mem.read(out, 24), 8)
+        assert base == inheriting == expected
+
+
+def sub_clock_old(userdata: int, timeout: int, identifier: int = 0xABCD, clock: int = 1) -> bytes:
+    """A subscription of the first snapshot: 56 bytes, a clock starts with its identifier."""
+    head = struct.pack("<QB7x", userdata, 0)
+    return head + wasi1._SUB_CLOCK_UNSTABLE.pack(identifier, clock, timeout, 0, 0)  # pyright: ignore[reportPrivateUsage]
+
+
+def sub_fd_old(userdata: int, kind: int, fd: int) -> bytes:
+    return struct.pack("<QB7xI", userdata, kind, fd).ljust(56, b"\0")
+
+
+def poll_old(host: Host, *subs: bytes) -> list[tuple[int, ...]]:
+    src, out, n = host.put(b"".join(subs)), host.alloc(32 * len(subs)), host.alloc(4)
+    host.ok("poll_oneoff", src, out, len(subs), n)
+    return [wasi1.STRUCTS["event"].unpack(host.mem.read(out + 32 * i, 32)) for i in range(host.u32(n))]
+
+
+def test_subscriptions_are_56_bytes_in_the_first_snapshot(old: Host) -> None:
+    import time
+
+    started = time.monotonic()
+    assert poll_old(old, sub_clock_old(42, 30_000_000)) == [(42, 0, 0, 0, 0)]
+    assert time.monotonic() - started >= 0.025
+    # the second subscription is found only if the stride is 56
+    events = poll_old(old, sub_clock_old(1, 5_000_000_000), sub_fd_old(2, 2, 1))
+    assert events == [(2, 0, 2, 0, 0)]
+    assert poll_old(old, sub_clock_old(3, 0, clock=9))[0][1] == Errno.inval

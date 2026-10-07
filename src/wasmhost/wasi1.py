@@ -3,7 +3,8 @@
 The 46 functions of the specification (the `legacy/preview1` witx files of the WebAssembly/WASI repository, branch
 `wasi-0.1`), over directories of the real file system, with standard streams, arguments, an environment, clocks and
 random bytes. Sockets, threads and signals are not supported: those calls answer as the specification allows
-(`ENOTSOCK`, `ENOSYS`). Standard library only.
+(`ENOTSOCK`, `ENOSYS`). The first snapshot, `wasi_unstable` (what older toolchains still produce), is offered too,
+from the same object: see UNSTABLE below for the four things in which it differs. Standard library only.
 
     wasi = Wasi(args=["prog", "-v"], preopens={"/": "some/dir"}, stdout=sys.stdout.buffer.write)
     code = wasi.run(module)           # the exit code of `_start`
@@ -24,6 +25,7 @@ steps, so this is not proof against another process that changes the directory i
 from __future__ import annotations
 
 import errno as _errno
+import functools
 import os
 import stat
 import struct
@@ -128,6 +130,23 @@ STRUCTS: dict[str, struct.Struct] = {
 }
 _SUB_CLOCK = struct.Struct("<I4xQQH6x")  # id, timeout, precision, flags
 _SUB_FD = struct.Struct("<I")
+
+# `wasi_unstable`, the first snapshot (`preview0/witx` of the same branch of the specification): the same functions
+# but `sock_accept`, and four differences, all kept here: `whence` is in the order cur, end, set; there is one right
+# less (the last, sock_accept); `filestat` has a 32-bit link count, which moves its fields; and a clock subscription
+# has an extra `identifier` in front, which makes a subscription 56 bytes. The tests compare these with the preview0
+# witx files.
+UNSTABLE = "wasi_unstable"
+UNSTABLE_TABLES: dict[str, tuple[str, ...]] = {"whence": ("cur", "end", "set"), "rights": TABLES["rights"][:-1]}
+UNSTABLE_ALL_RIGHTS = (1 << len(UNSTABLE_TABLES["rights"])) - 1
+UNSTABLE_STRUCTS: dict[str, struct.Struct] = {
+    "filestat": struct.Struct("<QQB3xIQQQQ"),  # dev, ino, filetype, nlink (32 bits), size, atim, mtim, ctim
+    "subscription": struct.Struct("<QB7x40x"),  # userdata, the tag, then the union (see _SUB_CLOCK_UNSTABLE, _SUB_FD)
+}
+_SUB_CLOCK_UNSTABLE = struct.Struct("<QI4xQQH6x")  # identifier, id, timeout, precision, flags
+_NOT_IN_UNSTABLE = frozenset({"sock_accept"})
+# The calls that read or write something that differs, and so take `legacy=True` when offered as `wasi_unstable`.
+_SNAPSHOT_AWARE = frozenset({"fd_seek", "fd_fdstat_get", "fd_filestat_get", "path_filestat_get", "poll_oneoff"})
 
 # The wasm signature of each function: the parameters (the specification's results other than the errno are
 # pointers, added at the end) and the results. The tests compare this table with the witx file.
@@ -292,8 +311,12 @@ class Wasi:
     # --- running
 
     def imports(self) -> dict[str, dict[str, Callable[..., int | None]]]:
-        """The import object: every function of the snapshot, to give to `Instance(module, wasi.imports())`."""
-        return {SNAPSHOT: {name: self._bind_call(name, params) for name, (params, _) in SIGNATURES.items()}}
+        """The import object: every function of both snapshots, `wasi_snapshot_preview1` and `wasi_unstable`, to give to
+        `Instance(module, wasi.imports())`; the engine links the ones the module imports."""
+        return {
+            SNAPSHOT: {name: self._bind_call(name, params, False) for name, (params, _) in SIGNATURES.items()},
+            UNSTABLE: {name: self._bind_call(name, params, True) for name, (params, _) in UNSTABLE_SIGNATURES.items()},
+        }
 
     def bind(self, instance: Instance) -> None:
         """Give the host the memory of the instance (it is needed by every call that reads or writes the program's
@@ -345,8 +368,10 @@ class Wasi:
     def __exit__(self, *exc: object) -> None:
         self.close()
 
-    def _bind_call(self, name: str, params: tuple[str, ...]) -> Callable[..., int | None]:
+    def _bind_call(self, name: str, params: tuple[str, ...], legacy: bool) -> Callable[..., int | None]:
         method = getattr(self, name)
+        if legacy and name in _SNAPSHOT_AWARE:
+            method = functools.partial(method, legacy=True)
         masks = tuple(MASK32 if p == I32 else MASK64 for p in params)
 
         def call(*args: int) -> int | None:
@@ -526,17 +551,21 @@ class Wasi:
         raise _Fail(Errno.nosys)  # there are no signals to raise here
 
     @_call(I32, I32, I32, I32)
-    def poll_oneoff(self, in_ptr: int, out_ptr: int, count: int, nevents: int) -> None:
+    def poll_oneoff(self, in_ptr: int, out_ptr: int, count: int, nevents: int, legacy: bool = False) -> None:
         if count == 0:
             raise _Fail(Errno.inval)
-        raw = self._read(in_ptr, 48 * count)
+        stride = (UNSTABLE_STRUCTS if legacy else STRUCTS)["subscription"].size
+        raw = self._read(in_ptr, stride * count)
         events: list[bytes] = []
         deadlines: list[tuple[int, int, int]] = []  # (wake-up in ns from now, userdata, error)
         pack = STRUCTS["event"].pack
         for i in range(count):
-            userdata, tag = struct.unpack_from("<QB", raw, 48 * i)
+            userdata, tag = struct.unpack_from("<QB", raw, stride * i)
             if tag == Eventtype.clock:
-                clock_id, timeout, _, flags = _SUB_CLOCK.unpack_from(raw, 48 * i + 16)
+                if legacy:
+                    _, clock_id, timeout, _, flags = _SUB_CLOCK_UNSTABLE.unpack_from(raw, stride * i + 16)
+                else:
+                    clock_id, timeout, _, flags = _SUB_CLOCK.unpack_from(raw, stride * i + 16)
                 if clock_id not in self._CLOCKS:
                     events.append(pack(userdata, Errno.inval, Eventtype.clock, 0, 0))
                     continue
@@ -547,7 +576,7 @@ class Wasi:
                 )
                 deadlines.append((max(0, wait), userdata, 0))
             elif tag in (Eventtype.fd_read, Eventtype.fd_write):
-                (fd,) = _SUB_FD.unpack_from(raw, 48 * i + 16)
+                (fd,) = _SUB_FD.unpack_from(raw, stride * i + 16)
                 entry = self._fds.get(fd)
                 if entry is None:
                     events.append(pack(userdata, Errno.badf, tag, 0, 0))
@@ -662,18 +691,19 @@ class Wasi:
         return len(data)
 
     @_call(I32, I64, I32, I32)
-    def fd_seek(self, fd: int, offset: int, whence: int, ptr: int) -> None:
+    def fd_seek(self, fd: int, offset: int, whence: int, ptr: int, legacy: bool = False) -> None:
         entry = self._file(fd)
-        if whence >= len(TABLES["whence"]):
+        names = UNSTABLE_TABLES["whence"] if legacy else TABLES["whence"]
+        if whence >= len(names):
             raise _Fail(Errno.inval)
         if entry.kind != "file":
             raise _Fail(Errno.spipe)
         offset = _s64(offset)
         if not entry.rights & Rights.fd_seek and not (
-            offset == 0 and whence == Whence.cur and entry.rights & Rights.fd_tell
+            offset == 0 and names[whence] == "cur" and entry.rights & Rights.fd_tell
         ):
             raise _Fail(Errno.notcapable)
-        how = {Whence.set: os.SEEK_SET, Whence.cur: os.SEEK_CUR, Whence.end: os.SEEK_END}[whence]
+        how = {"set": os.SEEK_SET, "cur": os.SEEK_CUR, "end": os.SEEK_END}[names[whence]]
         self._put(ptr, "<Q", os.lseek(entry.osfd, offset, how))
 
     @_call(I32, I32)
@@ -739,9 +769,12 @@ class Wasi:
     # --- descriptors' own state
 
     @_call(I32, I32)
-    def fd_fdstat_get(self, fd: int, ptr: int) -> None:
+    def fd_fdstat_get(self, fd: int, ptr: int, legacy: bool = False) -> None:
         entry = self._entry(fd)
-        self._put(ptr, STRUCTS["fdstat"].format, entry.filetype, entry.flags, entry.rights, entry.inheriting)
+        keep = UNSTABLE_ALL_RIGHTS if legacy else ALL_RIGHTS  # the first snapshot has no right for sock_accept
+        self._put(
+            ptr, STRUCTS["fdstat"].format, entry.filetype, entry.flags, entry.rights & keep, entry.inheriting & keep
+        )
 
     @_call(I32, I32)
     def fd_fdstat_set_flags(self, fd: int, flags: int) -> None:
@@ -758,19 +791,19 @@ class Wasi:
         entry.rights, entry.inheriting = base, inheriting
 
     @_call(I32, I32)
-    def fd_filestat_get(self, fd: int, ptr: int) -> None:
+    def fd_filestat_get(self, fd: int, ptr: int, legacy: bool = False) -> None:
         entry = self._entry(fd, Rights.fd_filestat_get)
         if entry.kind == "file":
-            self._put_stat(ptr, os.fstat(entry.osfd))
+            self._put_stat(ptr, os.fstat(entry.osfd), legacy)
         elif entry.kind == "dir":
-            self._put_stat(ptr, os.stat(entry.host_path))
+            self._put_stat(ptr, os.stat(entry.host_path), legacy)
         else:
-            self._put(ptr, STRUCTS["filestat"].format, 0, 0, Filetype.character_device, 1, 0, 0, 0, 0)
+            self._put_filestat(ptr, legacy, 0, 0, Filetype.character_device, 1, 0, 0, 0, 0)
 
-    def _put_stat(self, ptr: int, st: os.stat_result) -> None:
-        self._put(
+    def _put_stat(self, ptr: int, st: os.stat_result, legacy: bool) -> None:
+        self._put_filestat(
             ptr,
-            STRUCTS["filestat"].format,
+            legacy,
             st.st_dev & MASK64,
             st.st_ino & MASK64,
             _filetype_of(st.st_mode),
@@ -780,6 +813,10 @@ class Wasi:
             st.st_mtime_ns,
             st.st_ctime_ns,
         )
+
+    def _put_filestat(self, ptr: int, legacy: bool, *fields: int) -> None:
+        # the first snapshot counts links in 32 bits, and its record is laid out differently
+        self._put(ptr, (UNSTABLE_STRUCTS if legacy else STRUCTS)["filestat"].format, *fields)
 
     @_call(I32, I64)
     def fd_filestat_set_size(self, fd: int, size: int) -> None:
@@ -864,10 +901,10 @@ class Wasi:
         os.mkdir(path)
 
     @_call(I32, I32, I32, I32, I32)
-    def path_filestat_get(self, fd: int, flags: int, ptr: int, size: int, out: int) -> None:
+    def path_filestat_get(self, fd: int, flags: int, ptr: int, size: int, out: int, legacy: bool = False) -> None:
         follow = bool(flags & Lookupflags.symlink_follow)
         _, path = self._resolve(fd, Rights.path_filestat_get, ptr, size, follow)
-        self._put_stat(out, os.stat(path) if follow else os.lstat(path))
+        self._put_stat(out, os.stat(path) if follow else os.lstat(path), legacy)
 
     @_call(I32, I32, I32, I32, I64, I64, I32)
     def path_filestat_set_times(self, fd: int, flags: int, ptr: int, size: int, atim: int, mtim: int, fst: int) -> None:
@@ -996,3 +1033,7 @@ class Wasi:
     def _socket(self, fd: int) -> None:
         self._entry(fd)
         raise _Fail(Errno.notsock)
+
+
+# The functions of `wasi_unstable`: those of the snapshot but sock_accept (complete only here, once all are registered).
+UNSTABLE_SIGNATURES = {name: sig for name, sig in SIGNATURES.items() if name not in _NOT_IN_UNSTABLE}

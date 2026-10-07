@@ -411,8 +411,13 @@ another process changing the folder in between can still get past it. `stdin` is
 empty, there is no interactive input); `stdout` and `stderr` are callables that take bytes, or objects with `write` (default:
 the interpreter's own streams). To give options to the instance, or to make it yourself, use `wasi.instantiate(module, timeout=5)`
 and `wasi.start(instance)`, or `wasi.imports()` with `wasi.bind(instance)`. Sockets are not supported (`ENOTSOCK`), nor are
-signals (`ENOSYS`); the older `wasi_unstable` is not provided yet. A host function that sleeps (`poll_oneoff`) is outside what
+signals (`ENOSYS`). A host function that sleeps (`poll_oneoff`) is outside what
 `timeout` and `fuel` can stop.
+
+`wasi_unstable`, the first snapshot of WASI, which older toolchains (wasienv, wasm-clang) still produce, and which the Lua build of
+`examples/coreutils.py` imports from, is offered by the same object: `wasi.imports()` has both modules, and the engine links the one a module asks for.
+It is the same calls with four differences (the order of `whence`, one right less, a 32-bit link count in `filestat`, and a
+clock subscription with an extra field), all checked against the specification's own `preview0` witx files; it has no `sock_accept`.
 
 ## Try it on a device
 
@@ -499,7 +504,7 @@ which it is meant to be done.
 - **Newer proposals**: no API for `WebAssembly.Tag` and `WebAssembly.Exception` (the self-test only reports which
   encodings of exceptions an engine takes), SIMD, `memory64`, multi-memory, GC types.
   Whether a module that uses them runs is up to the engine.
-- **WASI** is provided for `wasi_snapshot_preview1` by `wasmhost.wasi1` (see [WASI](#wasi)); not yet: the older `wasi_unstable`, sockets, a read-only mode for a folder, and a safe open through
+- **WASI** is provided for `wasi_snapshot_preview1` by `wasmhost.wasi1` (see [WASI](#wasi)); not yet: sockets, a read-only mode for a folder, and a safe open through
   `openat` (the check of a name and the open are two steps now). The examples still carry hosts of their own.
 
 ## Test

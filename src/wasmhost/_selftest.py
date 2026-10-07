@@ -160,6 +160,16 @@ WASI_HELLO = bytes.fromhex(  # a WASI command: writes "hello, wasi\n" to stdout 
     "00000c000000000000000000000068656c6c6f2c20776173690a0041c0000b086e6f74652e747874"
 )
 
+WASI_HELLO_UNSTABLE = bytes.fromhex(  # the same program, importing from wasi_unstable (the first snapshot)
+    "0061736d0100000001280660027f7f017f60047f7f7f7f017f60097f7f7f7f7f7e7e7f7f017f60017f017f60017f00600000"
+    "028601050d776173695f756e737461626c650e617267735f73697a65735f67657400000d776173695f756e737461626c6508"
+    "66645f777269746500010d776173695f756e737461626c6509706174685f6f70656e00020d776173695f756e737461626c65"
+    "0866645f636c6f736500030d776173695f756e737461626c650970726f635f65786974000403020105050301000107130206"
+    "6d656d6f72790200065f737461727400050a4c014a004100410410001a410141104101411810011a4103410141c000410841"
+    "01427f427f410041e40010021a41e40028020041104101411810011a41e40028020010031a410028020010040b0b30020041"
+    "100b1c200000000c000000000000000000000068656c6c6f2c20776173690a0041c0000b086e6f74652e747874"
+)
+
 
 class _Report:
     def __init__(self, out: Callable[[str], object]) -> None:
@@ -243,7 +253,7 @@ def _selftest_backend(backend: Backend, out: Callable[[str], object]) -> _Report
     step("batch: chained steps", lambda: _batch(box["i"]))
     step("batch: an error keeps the earlier results", lambda: _batch_error(box["i"]))
     step("host functions (Python called from the module)", lambda: _host_functions(backend))
-    step("WASI preview1: a program with arguments, stdout, a file and an exit code", lambda: _wasi(backend))
+    step("WASI: a program of each snapshot, with arguments, stdout, a file and an exit code", lambda: _wasi(backend))
     step("globals: made on their own, imported, shared", lambda: _globals_on_their_own(backend))
     step("memory: made on its own, imported, shared", lambda: _memory_on_its_own(backend))
     step("memory: the maximum of an imported memory stops the module's grow", lambda: _memory_ceiling(backend))
@@ -316,22 +326,24 @@ def _host_functions(backend: Backend) -> str:
 
 
 def _wasi(backend: Backend) -> str:
-    """A WASI command through `wasmhost.wasi1`: its arguments, standard output, a file made in a folder of the host,
-    and its exit code, which comes out of the program as an exception of the host function and must cross the engine."""
+    """A WASI command through `wasmhost.wasi1`, once from each snapshot (`wasi_snapshot_preview1` and the first,
+    `wasi_unstable`): its arguments, standard output, a file made in a folder of the host, and its exit code, which
+    comes out of the program as an exception of the host function and must cross the engine."""
     if not backend.supports("imports"):
         try:
             Instance(Module(WASI_HELLO, backend=backend), Wasi().imports())
         except NotImplementedError:
             return "not available on this backend, as documented"
         raise AssertionError("should be NotImplementedError")
-    out: list[bytes] = []
-    with tempfile.TemporaryDirectory() as folder:
-        wasi = Wasi(args=["selftest", "x"], preopens={"/": folder}, stdout=out.append)
-        _expect(wasi.run(Module(WASI_HELLO, backend=backend)), 2)  # proc_exit(argc)
-        _expect(b"".join(out), b"hello, wasi\n")
-        with open(os.path.join(folder, "note.txt"), "rb") as note:
-            _expect(note.read(), b"hello, wasi\n")
-    return "arguments, stdout, a file in a temporary folder, the exit code"
+    for wasm in (WASI_HELLO, WASI_HELLO_UNSTABLE):
+        out: list[bytes] = []
+        with tempfile.TemporaryDirectory() as folder:
+            wasi = Wasi(args=["selftest", "x"], preopens={"/": folder}, stdout=out.append)
+            _expect(wasi.run(Module(wasm, backend=backend)), 2)  # proc_exit(argc)
+            _expect(b"".join(out), b"hello, wasi\n")
+            with open(os.path.join(folder, "note.txt"), "rb") as note:
+                _expect(note.read(), b"hello, wasi\n")
+    return "arguments, stdout, a file in a temporary folder, the exit code; both snapshots"
 
 
 def _imports(calls: list[str]) -> dict[str, dict[str, Any]]:

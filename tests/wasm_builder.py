@@ -344,10 +344,10 @@ def exceptions(final: bool) -> bytes:
     return out
 
 
-def wasi_hello() -> bytes:
-    """A WASI command (`wasi_snapshot_preview1`): `_start` counts its arguments, writes "hello, wasi\\n" to stdout,
-    makes the file `note.txt` in the first preopened directory (fd 3) with the same text, and exits with the number
-    of arguments as its code."""
+def wasi_hello(snapshot: str = "wasi_snapshot_preview1") -> bytes:
+    """A WASI command: `_start` counts its arguments, writes "hello, wasi\\n" to stdout, makes the file `note.txt` in
+    the first preopened directory (fd 3) with the same text, and exits with the number of arguments as its code.
+    It imports from the module `snapshot`: `wasi_snapshot_preview1`, or `wasi_unstable`, the first snapshot."""
     types = [
         functype([I32, I32], [I32]),  # 0: args_sizes_get
         functype([I32, I32, I32, I32], [I32]),  # 1: fd_write
@@ -356,7 +356,7 @@ def wasi_hello() -> bytes:
         functype([I32], []),  # 4: proc_exit
         functype([], []),  # 5: _start
     ]
-    wasi = name("wasi_snapshot_preview1")
+    wasi = name(snapshot)  # the module the functions are imported from: wasi_snapshot_preview1, or wasi_unstable
     imports = [
         wasi + name("args_sizes_get") + b"\x00" + uleb(0),
         wasi + name("fd_write") + b"\x00" + uleb(1),

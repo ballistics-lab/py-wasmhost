@@ -67,7 +67,7 @@ from the start, so three memory steps fail; cause unknown, the owner suspects iS
 
 **To do first, if the owner has not said otherwise:**
 1. **B-502** (the owner's order, 2026-10-07: refresh BACKLOG and README first, then B-502): move the examples and their tests to `wasmhost.wasi1`, leaving a thin `Wasi(args=, preopens=, stdin=, stdout=)` in each. The
-   examples carry their own hosts today (`examples/coreutils.py`, `wasmclang.py`, `wasi_sh.py`), two of them for `wasi_unstable` as well, which `wasi1` does not provide yet: decide that first.
+   examples carry their own hosts today (`examples/coreutils.py`, `wasmclang.py`, `wasi_sh.py`), two of them for `wasi_unstable` as well, which `wasi1` now provides (B-501.1), so they can all move.
 2. A device re-run of `wasmhost self test` (a fresh wheel: `git fetch --tags`, then `uv build --wheel`; the version comes from git tags): 41/41 expected on `jscontext` (35 on wasmtime and wasm3), where the
    timeout and fuel steps say "not supported" instead of failing, and the WASI step should pass. Add a row to README "Where it has been run" when the owner reports it.
 3. B-405 when upstream merges pywasm3's two PRs (#13, #14); B-406 is closed (option b: leave it, documented).
@@ -458,8 +458,10 @@ official `wasi_snapshot_preview1` (branch `wasi-0.1` of WebAssembly/WASI), not t
 - [ ] **B-501** Provide a reusable Python module `wasmhost.wasi1` with a full WASI1-compatible host API, not just the subset used in one example. The public surface should cover the ~50 WASI1 functions and be usable across backends that support it.
       Work done 2026-10-07 in branch `claude/kind-goldberg-3dsi27`, **status not changed (the owner closes it)**: `src/wasmhost/wasi1.py` has all 46 functions of `wasi_snapshot_preview1`
       (the specification: branch `wasi-0.1` of WebAssembly/WASI, `preview1/witx`), written from the witx files and not from `examples/coreutils.py`; `tests/test_wasi1_spec.py` compares it with a copy of those files
-      (`tests/data/wasi`), `tests/test_wasi1.py` tests each call, `tests/test_wasi1_run.py` runs a program on every backend, and the self-test has a WASI step. Not done: `wasi_unstable` (the first snapshot),
-      sockets (they answer `ENOTSOCK`), a read-only mode (B-504), `openat` (B-503); not run on a device. `Tests` green in CI on `c5aaf86`; the self-test step passes on wasmtime, wasm3, node and bun here.
+      (`tests/data/wasi`), `tests/test_wasi1.py` tests each call, `tests/test_wasi1_run.py` runs a program on every backend, and the self-test has a WASI step. Not done: sockets (they answer `ENOTSOCK`), a read-only mode (B-504), `openat` (B-503); not run on a device. `Tests` green in CI on `c5aaf86`; the self-test step passes on wasmtime, wasm3, node and bun here.
+      **B-501.1, `wasi_unstable` (the first snapshot), added on the owner's word 2026-10-07** (not closed either): the same `Wasi` offers both modules (`imports()` has `wasi_snapshot_preview1` and `wasi_unstable`); the four differences
+      from the specification's `preview0/witx` (`whence` order, one right less, 32-bit `nlink` in `filestat`, an `identifier` in a clock subscription) live in `UNSTABLE_TABLES`/`UNSTABLE_STRUCTS` and a `legacy` flag of five
+      functions; `tests/test_wasi1_unstable_spec.py` compares it with a copy of the preview0 files (and `tests/data/wasi/LICENSE.md`), the behaviour is in `tests/test_wasi1.py`, the self-test step runs a program of each snapshot.
 - [ ] **B-502** Update all WASI examples and tests to use `wasmhost.wasi1` instead of carrying a copy of `Wasi` in each example. The example-side API should stay thin: `Wasi(args=…, preopens={"/": dir}, stdin=…, stdout=…)` is a convenience wrapper around the common module, not the implementation itself.
 - [ ] **B-503** A sandbox through `openat` with `dir_fd`, to remove the gap between checking the path and opening
       (right now `resolve()` checks, then `os.open`).

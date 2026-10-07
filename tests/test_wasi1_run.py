@@ -52,6 +52,16 @@ def test_options_of_the_instance_go_through(session: str, tmp_path: Path) -> Non
     assert wasi.run(Module(wb.wasi_hello(), backend=session), max_memory=4) == 1
 
 
+def test_a_program_of_the_first_snapshot(session: str, tmp_path: Path) -> None:
+    """The same program, importing from `wasi_unstable` (what older toolchains produce), through the same host."""
+    need_imports()
+    out: list[bytes] = []
+    wasi = wasi1.Wasi(args=["prog", "one"], preopens={"/": tmp_path}, stdout=out.append)
+    assert wasi.run(Module(wb.wasi_hello(wasi1.UNSTABLE), backend=session)) == 2
+    assert b"".join(out) == TEXT
+    assert (tmp_path / "note.txt").read_bytes() == TEXT
+
+
 def test_a_module_that_is_not_a_program(session: str) -> None:
     wasi = wasi1.Wasi()
     with pytest.raises(TypeError, match="_start"):
