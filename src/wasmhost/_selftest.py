@@ -215,6 +215,7 @@ def _selftest_backend(backend: Backend, out: Callable[[str], object]) -> _Report
     step("functions: one object per function, signature, a table entry", lambda: _functions(backend))
     step("async compile and instantiate, tasks at once", lambda: _async(backend))
     step("threads: one backend, several threads, one call at a time", lambda: _threads(backend))
+    step("memory view: the engine's memory without a copy", lambda: _memory_view(backend, box["i"]))
     step("custom sections", lambda: _custom_sections(backend))
     step("type reflection: type() of a function, memory, table and global", lambda: _types(backend))
     step("an isolated instance", lambda: _isolated(backend))
@@ -444,6 +445,26 @@ def _functions(backend: Backend) -> str:
         _expect(unknown(1, 2), 3)
         checked = "a wrong signature refused by the engine"
     return f"identity, equality, signature rules, a function of an elem segment, {checked}; a table entry called"
+
+
+def _memory_view(backend: Backend, instance: Instance) -> str:
+    """`Memory.view` is the memory itself, and is unusable (a ValueError) once the module may have run."""
+    if not backend.supports("memory.view"):
+        try:
+            instance.exports.memory.view()
+        except NotImplementedError:
+            return "not available on this backend (a JavaScript engine's memory is not in this process), as documented"
+        raise AssertionError("a view of the memory was given where there is none")
+    memory = instance.exports.memory
+    view = memory.view(100, 4)
+    view[:] = b"view"
+    _expect(memory.read(100, 4), b"view")  # written through the view, read through the engine
+    instance.exports.add(1, 2)
+    try:
+        view[0]
+    except ValueError:
+        return "writes through to the memory; released when the module runs, so never a stale address"
+    raise AssertionError("a view of the memory survived a call into the module")
 
 
 def _threads(backend: Backend) -> str:

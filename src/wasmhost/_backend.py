@@ -242,6 +242,11 @@ class Backend:
     def memory_read(self, memory: Any, offset: int, length: int) -> bytes:
         raise NotImplementedError
 
+    def memory_view(self, memory: Any, offset: int, length: int) -> memoryview:
+        """A writable `memoryview` over `length` bytes of the engine's own memory, with no copy: only for a backend
+        with the "memory.view" feature. It is good until the module may have run (the memory may be moved)."""
+        raise NotImplementedError
+
     def memory_write(self, memory: Any, offset: int, data: bytes) -> None:
         raise NotImplementedError
 

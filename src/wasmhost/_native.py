@@ -78,7 +78,7 @@ class Wasm3Backend(Backend):
 
     name = "wasm3"
     # It has no Memory.grow from Python (a module's own memory.grow works, and len(memory) follows) and no tables.
-    features = frozenset({"imports", "isolated"})
+    features = frozenset({"imports", "isolated", "memory.view"})
     # wasm3's own value stack, separate from the module's shadow stack in linear memory.
     STACK_BYTES = 256 * 1024
 
@@ -158,6 +158,10 @@ class Wasm3Backend(Backend):
         _check_range(offset, length, len(memory))
         return bytes(memory[offset : offset + length])
 
+    def memory_view(self, memory: Any, offset: int, length: int) -> memoryview:
+        _check_range(offset, length, len(memory))
+        return memoryview(memory)[offset : offset + length]
+
     def memory_write(self, memory: Any, offset: int, data: bytes) -> None:
         _check_range(offset, len(data), len(memory))
         memory[offset : offset + len(data)] = data
@@ -195,6 +199,7 @@ class WasmtimeBackend(Backend):
     features = frozenset(
         {
             "memory.grow",
+            "memory.view",
             "table.length",
             "table.funcs",
             "threads",  # not tied to the thread that made it: calls may come from others, one at a time
@@ -364,6 +369,10 @@ class WasmtimeBackend(Backend):
     def memory_read(self, memory: _WasmtimeObject, offset: int, length: int) -> bytes:
         _check_range(offset, length, int(memory.obj.data_len(memory.store)))
         return bytes(memory.obj.read(memory.store, offset, offset + length))
+
+    def memory_view(self, memory: _WasmtimeObject, offset: int, length: int) -> memoryview:
+        _check_range(offset, length, int(memory.obj.data_len(memory.store)))
+        return memoryview(memory.obj.get_buffer_ptr(memory.store, length, offset)).cast("B")
 
     def memory_write(self, memory: _WasmtimeObject, offset: int, data: bytes) -> None:
         _check_range(offset, len(data), int(memory.obj.data_len(memory.store)))

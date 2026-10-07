@@ -222,6 +222,7 @@ class Function:
         return self.type()
 
     def __call__(self, *args: object) -> Any:
+        _release_views(self._backend)
         ftype = self.type()
         if len(args) != len(ftype.parameters):
             raise TypeError(
@@ -278,6 +279,26 @@ def _function(
     else:
         found._adopt(instance, name, signature)
     return found
+
+
+def _views(backend: Backend) -> list[memoryview]:
+    """The views of memory handed out by `Memory.view` and not released yet, for this backend."""
+    return cast("list[memoryview]", backend.__dict__.setdefault("_memory_views", []))
+
+
+def _release_views(backend: Backend) -> None:
+    """Make every view of memory unusable: the module is about to run, or the memory about to grow, and either may
+    move the memory. A view that something else holds a slice of can't be released (`BufferError`): it is left, and
+    the documentation says not to keep them."""
+    views = backend.__dict__.get("_memory_views")
+    if not views:
+        return
+    for view in views:
+        try:
+            view.release()
+        except BufferError:
+            pass
+    views.clear()
 
 
 def _limits(initial: object, maximum: object, what: str) -> None:
@@ -360,7 +381,28 @@ class Memory:
         """`WebAssembly.Memory.grow`: add `pages` 64 KiB pages and return the previous size in pages.
 
         Not on every backend (wasm3 has no such call from Python): `NotImplementedError` there."""
+        _release_views(self._backend)  # a grow may move the memory
         return self._backend.memory_grow(self._handle, int(pages))
+
+    def view(self, offset: int = 0, length: int | None = None) -> memoryview:
+        """A writable `memoryview` of the memory itself, with no copy (where the engine's memory is in this process:
+        `wasmtime`, `wasm3`; `NotImplementedError` elsewhere, use `read`/`write`). It is released, and so unusable, as
+        soon as the module may have run or the memory may have moved: on the next call of an exported function, a
+        batch, a `grow`, or an instantiation (a use after that is a `ValueError`, never a wrong address). Use it at
+        once and let go of it; a copy made from it (`bytes(view)`) is yours for good. A view taken inside a host
+        function is good until that function returns."""
+        if not self._backend.supports("memory.view"):
+            raise NotImplementedError(
+                f"the {self._backend.name} backend can't give a view of its memory: use read/write"
+            )
+        total = len(self)
+        offset = int(offset)
+        length = total - offset if length is None else int(length)
+        if offset < 0 or length < 0 or offset + length > total:
+            raise IndexError("memory access out of bounds")
+        view = self._backend.memory_view(self._handle, offset, length)
+        _views(self._backend).append(view)
+        return view
 
     def read(self, offset: int, length: int) -> bytes:
         if offset < 0 or length < 0 or offset + length > len(self):
@@ -592,6 +634,7 @@ class Batch:
         if self._ran:
             raise RuntimeError("this batch has already run")
         self._ran = True
+        _release_views(self._instance._backend)
         result = self._instance._backend.run_batch(self._instance._handle, self._steps)
         for ref in self._refs:
             if ref._index in result.values:
@@ -862,6 +905,7 @@ class Instance:
         if isolated and not backend.supports("isolated"):
             raise NotImplementedError(f"the {backend.name} backend has one store for everything: no isolated instances")
         self._backend = backend
+        _release_views(backend)  # a start function may run
         self._handle = backend.instantiate(module._handle, hosts, isolated=isolated)
         items: dict[str, Export | _LazyFunction] = {}
         for e in module._info.exports:

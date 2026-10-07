@@ -350,7 +350,9 @@ which it is meant to be done.
 
 - **Tables and references.** the signature of a table entry is not told by a JavaScript engine (set it by hand; wasmtime finds it); no `externref` (tables, globals or
   values); no start value for `Table(...)`; no `v128`.
-- **Memory is copied** on every read and write (no view onto the engine's own buffer), which costs on large buffers.
+- **Memory is copied** on `read` and `write`. `Memory.view(offset, length)` gives the engine's own memory as a `memoryview`, with no copy, on `wasmtime` and `wasm3`
+  (not on a JavaScript engine, whose memory lives in another place); it is released when the module may have run (a call, a batch, a `grow`), so it is
+  for use at once. On a JavaScript engine the cost of moving a buffer is in the encoding, not the copy: see `wasmhost bench`.
 - **Limits on untrusted code**: no ceiling on memory other than a memory's own maximum, and no time or fuel limit.
 - **Threads.** A module built with `-pthread` (the WebAssembly threads proposal: a `shared` memory that the module
   imports, atomic instructions, threads made by the host as several instances of the module on one memory) does not
