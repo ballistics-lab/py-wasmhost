@@ -358,6 +358,11 @@ not more. `wasmclang.py` on Bun stops with `panic: abort() called` and Bun's own
 WASI program); the file as it was before 2026-10-07 does the same. Pyodide's own `pyodide.asm.wasm` does not link on `wasm3` in any case: it imports
 280 globals, which our `wasm3` backend can't give, and uses `externref`. `jslinux.py` needs a server that the assistant's environment cannot reach.
 
+CoreMark built natively (C, `-O2`, not through wasmhost), as a baseline for the devices where iSH emulates the processor: **3169** (GCC 15.2.0, 60000
+iterations, 18.9 s, "Correct operation validated") on iSH-AOK 1.3 (557), Linux 5.10.0-ish_aok aarch64; **1590** (GCC 12.2.1, 20000 iterations, 12.6 s,
+also validated) on the original iSH, Linux 4.20.69-ish i686. No `wasmhost` score is measured on either yet, so none is put in the table above; the
+two numbers are not comparable with the table's either (another machine, another build of the benchmark).
+
 ## Limits for untrusted code
 
 Three limits, each an extension outside the JavaScript API except the first road of the memory ceiling.
