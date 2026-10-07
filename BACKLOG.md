@@ -421,12 +421,12 @@ shared memory, memory64 (і GC), кожен із `supports(...)`.
 
 ## Приклади: оболонка для Pythonista (досліджено 2026-10-06)
 
-- [x] **B-509** (ЗРОБЛЕНО: власник підтвердив, що працює в Pythonista; `examples/wasi_sh.py` і тест у гілці `examples/zigcc`; режими: пам'ять за замовчуванням, `--home`, `--root DIR`, `--readonly`) Оболонка для Pythonista на wasmhost з in-memory VFS. Агент зробив `examples/wasi_sh.py` (BusyBox ash з
-      проєкту `alganet/wasi-sh` v0.11.0, `busybox.wasm` 376 КБ з npm-тарболу, GPL-2.0 у бінарнику, ISC в обв'язці;
-      SHA-256 перевіряється; `class Wasi` на 27 викликів preview1 + 9 `env.__host_*`, `class Vfs` на словнику) і
-      `tests/test_wasi_sh_example.py` (7 тестів). Додано в гілку `examples/zigcc` (коміти з тестом), власник підтвердив на Pythonista, зокрема `--home`. Не перевірено на пристрої: `input()` з хост-функції `jscontext`
-      під час роботи wasm, придушення ехо рядка, кольори консолі, wasm exception handling на старших iOS, мережа
-      до `registry.npmjs.org`.
+- [x] **B-509** (ЗРОБЛЕНО 2026-10-07) Оболонка для Pythonista на wasmhost: `examples/wasi_sh.py` і `tests/test_wasi_sh_example.py`
+      (12 тестів) у гілці `examples/zigcc`. Власник підтвердив, що працює в Pythonista, зокрема режим `--home`.
+      Це BusyBox `ash` з проєкту `alganet/wasi-sh` v0.11.0 (`busybox.wasm` 376 КБ з npm-тарболу, SHA-256 перевіряється;
+      GPL-2.0 у бінарнику, ISC в обв'язці): `class Wasi` на 27 викликів preview1 і 9 `env.__host_*`, файлова система
+      `Vfs` на словнику (за замовчуванням) або `RealVfs` над справжньою текою; прапорці `--home`, `--root DIR`,
+      `--readonly`. На Windows немає `os.pread`/`pwrite`: там читання й запис ідуть через `lseek`.
       Обмеження самої оболонки: нема `( ... )`, `&`, `sleep`, `tee`, `yes`, `ln`, `chmod`; вкладений `sh FILE` завершує
       сесію (`. FILE`); `ls` без сортування (скрипт розвертає порядок `fd_readdir`).
       Відхилено після перевірки: **dash-реактор** (`aperturerobotics/go-dash-wasi-reactor`, експорти `dash_init`,
