@@ -250,7 +250,12 @@ def test_names_with_spaces_and_non_ascii_letters(session: str, tmp_path: Path) -
 
 def test_home_makes_the_real_home_the_root(session: str, tmp_path: Path) -> None:
     shell_for()  # (skips when there is no busybox.wasm)
-    env = {**os.environ, "HOME": str(tmp_path), "WASMHOST_BACKEND": session}
+    env = {
+        **os.environ,
+        "HOME": str(tmp_path),
+        "USERPROFILE": str(tmp_path),
+        "WASMHOST_BACKEND": session,
+    }  # (Windows: USERPROFILE)
     cmd = "echo hi > made.txt; ls; cat /../../etc/passwd; echo st=$?"
     done = subprocess.run(
         [sys.executable, str(EXAMPLES / "wasi_sh.py"), "--home", "-c", cmd], env=env, capture_output=True, text=True

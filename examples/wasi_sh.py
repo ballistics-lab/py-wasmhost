@@ -370,13 +370,20 @@ class RealHandle(Handle):
         self.osfd = osfd
 
     def read(self, offset: int, size: int) -> bytes:
-        return os.pread(self.osfd, size, offset)
+        if hasattr(os, "pread"):
+            return os.pread(self.osfd, size, offset)
+        os.lseek(self.osfd, offset, os.SEEK_SET)  # Windows has no pread
+        return os.read(self.osfd, size)
 
     def write(self, offset: int | None, data: bytes) -> int:
         start = os.fstat(self.osfd).st_size if offset is None else offset
         done = 0
         while done < len(data):
-            done += os.pwrite(self.osfd, data[done:], start + done)
+            if hasattr(os, "pwrite"):
+                done += os.pwrite(self.osfd, data[done:], start + done)
+            else:  # Windows has no pwrite
+                os.lseek(self.osfd, start + done, os.SEEK_SET)
+                done += os.write(self.osfd, data[done:])
         return start + done
 
     def size(self) -> int:
@@ -452,7 +459,7 @@ class RealVfs:
         if write or oflags & 8:
             self.changing()
         flags = os.O_RDWR if read and write else os.O_WRONLY if write else os.O_RDONLY
-        flags |= getattr(os, "O_CLOEXEC", 0)
+        flags |= getattr(os, "O_CLOEXEC", 0) | getattr(os, "O_BINARY", 0)  # O_BINARY: Windows would change newlines
         flags |= (
             (os.O_CREAT if oflags & 1 else 0) | (os.O_EXCL if oflags & 4 else 0) | (os.O_TRUNC if oflags & 8 else 0)
         )
