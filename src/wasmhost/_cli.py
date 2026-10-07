@@ -53,8 +53,9 @@ def build_parser() -> argparse.ArgumentParser:
 
     self_command = commands.add_parser("self", help=SELF_DESCRIPTION, description=SELF_DESCRIPTION)
 
-    def run_self_usage(_args: argparse.Namespace) -> str:
-        return self_command.format_usage()
+    def run_self_usage(_args: argparse.Namespace) -> int:
+        self_command.print_usage(sys.stderr)  # no subcommand: the same as no command at all
+        return 2
 
     self_command.set_defaults(run=run_self_usage)
 
@@ -91,7 +92,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         parser.print_help(sys.stderr)
         return 2
     result = command(args)
-    if isinstance(result, str):  # `version`, `help`, `self`: a text to show, then success
+    if isinstance(result, str):  # `version`, `help`: a text that was asked for, then success
         print(result)
         return 0
     return result
