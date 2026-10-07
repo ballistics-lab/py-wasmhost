@@ -479,8 +479,8 @@ there as `wasmhost self test` and `wasmhost bench`.
 command (`wasmhost.wasi.Wasip1`) and its exit code is the command's; `--invoke FUNCTION` calls an exported function
 instead, the words after the module being its arguments (`wasmhost run --invoke add m.wasm 2 3` prints `5`; one result
 per line, a float as Rust prints it: `0.5`, `NaN`, `inf`). Options: `--backend`, `--dir HOST[::GUEST]` (repeatable),
-`--readonly`, `--env NAME[=VALUE]`, `--argv0 NAME`, `--max-memory PAGES`, `--timeout SECONDS`, `--fuel UNITS`. A trap exits with 134, as in
-wasmtime; any other error with 1. Everything after the module belongs to the program.
+`--readonly`, `--env NAME[=VALUE]`, `--argv0 NAME` (the default is the module's file name), `--max-memory PAGES`, `--timeout SECONDS`, `--fuel UNITS`. `--runtime NAME` is `--backend NAME`. A trap exits with 134, as in
+wasmtime; any other error with 1. Everything after the module belongs to the program. Only the WASI functions are provided: a module that imports others (`examples/coremark.py`'s `env.clock_ms`) does not link, as in `wasmtime`; programs like that are run from Python, as the examples do.
 
 `python -m wasmhost bench [--backend NAME] [--no-jit] [--buffer KIB]` times a call, a batch of three, moving a buffer in and
 out of memory (MB/s) and the engine itself (a recursive
