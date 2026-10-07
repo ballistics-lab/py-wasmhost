@@ -69,7 +69,7 @@ iOS 26, `jscontext`): self-test 38/38 (before the fuel step), buffers intact fro
 3. Then the owner picks: B-203 (`externref`), a binary channel for node/bun (about 50 MB/s through the pipe and JSON now), B-006 (CI for examples).
 
 **Deferred by owner decision:** B-303 (until it is really needed), B-304a (examples on asyncio), WASI in the library (phase 5), Deno (B-701b: a bug in Deno itself). **Waiting for the owner:** the branch name and tidying
-(B-003), the release (B-801), `coreutils.wasm` stays in git (B-004), `tiny-bclibc-wasm` (B-803). **Not covered by tests:** `examples/wasmclang.py`, `jslinux.py` (`bellard.org` is blocked
+(B-003), `coreutils.wasm` stays in git (B-004), `tiny-bclibc-wasm` (B-803). **Not covered by tests:** `examples/wasmclang.py`, `jslinux.py` (`bellard.org` is blocked
 in the assistant's environment), `coremark.py`; the "Examples" step in CI runs only `basic.py` and `imports.py` (B-006).
 
 **Things that bit this session (read before touching the same code):**
@@ -440,22 +440,22 @@ Self-test: the steps "memory limit" and "interruption of an infinite loop" with 
 
 Done when: an infinite loop is interrupted with a `Trap`-like error where the engine supports it.
 
-## Phase 5. WASI (deferred by owner decision, L)
+## Phase 5. WASI1 (deferred by owner decision, L)
 
-Decision: "WASI for later". Touch nothing without a command. Preparatory material already exists in the branch `examples/zigcc`:
+Decision: "WASI1 for later". Touch nothing without a command. Preparatory material already exists in the branch `examples/zigcc`:
 the class `Wasi` in `examples/coreutils.py` (over 40 calls, both snapshots `wasi_snapshot_preview1` and `wasi_unstable`,
 files in a real folder, stdio, arguments, a clock, `sleep`), tests on wasmtime and node.
 
-- [ ] **B-501** Decide the form: an optional module `wasmhost.wasi` or a separate package `wasmhost-wasi`.
-- [ ] **B-502** Move `Wasi` from the example, with an API along the lines of `Wasi(args=…, preopens={"/": dir}, stdin=…, stdout=…)`.
+- [ ] **B-501** Provide a reusable Python module `wasmhost.wasi1` with a full WASI1-compatible host API, not just the subset used in one example. The public surface should cover the ~50 WASI1 functions and be usable across backends that support it.
+- [ ] **B-502** Update all WASI examples and tests to use `wasmhost.wasi1` instead of carrying a copy of `Wasi` in each example. The example-side API should stay thin: `Wasi(args=…, preopens={"/": dir}, stdin=…, stdout=…)` is a convenience wrapper around the common module, not the implementation itself.
 - [ ] **B-503** A sandbox through `openat` with `dir_fd`, to remove the gap between checking the path and opening
       (right now `resolve()` checks, then `os.open`).
 - [ ] **B-504** Several preopen folders and a "read-only" mode.
-- [ ] **B-505** Tests on all backends. **Correction (2026-10-07): an earlier note here said `wasm3` does not take Rust builds (multi-value, reference types, bulk memory); that was wrong and unchecked.**
+- [ ] **B-505** Tests on all backends. **Correction (2026-10-07): `wasm3` is confirmed to run Rust/WASI1 programs; the older note that it does not take Rust builds was wrong and unchecked.**
       Checked: a `std` program built with `rustc 1.97.0` for `wasm32-wasip1` (HashMap, `format!`, `u128`, arguments; 2.1 MB, uses `memory.copy` / `memory.fill`) and a `no_std` `wasm32-unknown-unknown` library
       run on `wasm3` with the same output as on `wasmtime`; and `tests/test_coreutils_example.py` (3 tests) passes on `wasm3` with its skip taken off (the skip is now removed). What `wasm3` does not take is
       still unmeasured as a list: Pyodide's `pyodide.asm.wasm` (not WASI-only: 280 imported globals, which our `wasm3` backend can't give (`supports("import.global")` is false), and `externref` in 149 function types) does not link.
-      So `supports` needs no "Rust" entry; what is left of this item is the tests themselves and the table of what each backend can run (see the WASI notes above).
+      So `supports` needs no "Rust" entry; the remaining work is the collection of backend capability checks and the table of what each backend can run (see the WASI notes above).
 - [ ] **B-506** A command to run a module along the lines of `wasmtime myapp.wasm -- arg1 arg2 --verbose`. The grammar:
       `wasmhost [ОПЦІЇ ХОСТА] myapp.wasm [-- АРГУМЕНТИ ПРОГРАМИ]`: the options before the module belong to the host (`--backend`,
       `--dir ХОСТ::ГІСТЬ`, `--env K=V`), everything after the module (and after `--`) goes unparsed to the program through
@@ -530,7 +530,7 @@ shared memory, memory64 (and GC), each with `supports(...)`.
 
 ## Phase 8. Release and ecosystem
 
-- [ ] **B-801** Merge the PR with the examples (see B-003), release the next version.
+- [x] **B-801** (DONE 2026-10-07, after merge and publication) The example PR is merged and the next version is released; the repository is on tag `v0.1.0b2`.
 - [x] **B-802** `tiny-bclibc-wasm` was verified and works (per the owner, outside this repository).
 - [ ] **B-803** The rest around `tiny-bclibc-wasm`: the jsc runner (branch `jsc-runner`), coverage in `tiny`, documentation.
       The state is not verified.
