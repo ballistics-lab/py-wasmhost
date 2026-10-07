@@ -59,7 +59,10 @@ def test_errors_are_a_message_and_a_code(capsys: pytest.CaptureFixture[str], ses
         (["--invoke", "add", arith, "1"], "takes 2 argument(s)"),
         (["--invoke", "add", arith, "1", "x"], "invalid literal"),
         ([arith], "_start"),
-        (["/no/such/file.wasm"], "can't read"),
+        (
+            ["/no/such/file.wasm"],
+            'failed to open wasm module "/no/such/file.wasm"\n\nCaused by:\n    No such file or directory (os error 2)',
+        ),
     ):
         assert _cli.main(["run", "--backend", session, *line]) == 1
         assert text in capsys.readouterr().err
