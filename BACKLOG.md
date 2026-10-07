@@ -70,9 +70,12 @@ here; `jsc`, `gi-jsc` and `jscontext` only in CI); on Python 3.15.0rc3 the whole
 **Run on devices by the owner.** Pythonista (iPhone 16, iOS 26, Python 3.10.4) and PythonIDE (Python 3.14.7), `jscontext`: **41/41** with the WASI step (wheel `0.1.0b3.dev14+gc14888b9c`, before the rename), earlier 38/38, buffers intact from 1 byte to
 8 MiB, `await compile/instantiate`, `wasi_sh --home`, `bench`. iSH-AOK (aarch64, wasmhost 0.1.0b2): `wasmtime` and `wasm3`, both 34/34. The original iSH (i686, `wasm3` only): 31/34, a memory declared 1..4 pages is 4 pages from the start so three memory
 steps fail; cause unknown, the owner suspects iSH's i386 emulator and will look when an issue is filed (B-505, README "Backends"). The rows are in README "Where it has been run".
+**Examples on the device (Pythonista, `jscontext`, the repo at `62f5f39`, wasmhost `0.1.0b3.dev23+g62f5f397d`, 2026-10-07):** `coreutils.py` works (it runs on `wasmhost.wasi.preview1` now), `coremark.py` works (score 1951.5, last pass
+15.4 s), `imports.py` works (host functions: nested calls, `i64`, several results, an exception out of a host function). `wasmclang.py` failed in `add_tar` (Pythonista's `tarfile` object needs the size in `read()`), fixed in
+`03ca1f6`; not yet confirmed on the device, and its new hybrid host (`preview1.Wasip1` for the calls that are not about files) has not run there at all.
 
 **To do first, if the owner has not said otherwise:**
-1. A wheel for the device after the rename (`git fetch --tags`, then `uv build --wheel`; the version comes from git tags) and a re-run of `wasmhost self test`: 41/41 expected on `jscontext` (timeout and fuel say "not available"). Add rows to README when
+1. On the device: `wasmclang.py` at `03ca1f6` or newer (the first run after the hybrid host), and the self-test of a wheel after the rename (`git fetch --tags`, then `uv build --wheel`; the version comes from git tags): 41/41 expected on `jscontext` (timeout and fuel say "not available"). Add rows to README when
    the owner reports. Check the wheel has `wasmhost/wasi/preview1.py`: `pyproject.toml` lists the packages by hand (`wasmhost`, `wasmhost.wasi`), a new subpackage has to be added there.
 2. The CI of the newest commit, and the macOS/PyPy flake (below): it has now come back three times in the eleven runs 124 to 134 on this branch, so "seen once" is out of date; the owner chose to treat it as a flake, but it may be worth the guesses in its entry.
 3. The first CI run after Python 3.15 is released (the matrix is unpinned).
