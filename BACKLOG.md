@@ -50,10 +50,10 @@ the feature itself:
 - **Sub-agents:** a worktree starts from `main`, which has no `BACKLOG.md` and none of this branch; give an agent a copy of the files it needs (or a
   commit to fast-forward to), and ask it to verify its own work with a script. Check an agent's result yourself before bringing it into the branch.
 
-## Current state (2026-10-07, branch `examples/zigcc`)
+## Current state (2026-10-07; `examples/zigcc` was merged into `main` by the owner and deleted, work goes on in `claude/loving-hawking-u966j0`)
 
 **Done in the branch and verified** (pre-commit is green; the full `pytest` passes on wasmtime, jsc, node, bun, wasm3; CI is green on all platforms;
-the self-test has 30 steps on wasmtime/wasm3 and 36 on the JS engines): B-201 (steps 1-4: `Function`, `signature`, `type()`, identity, `elem`, the
+the self-test has 32 steps on wasmtime/wasm3 and 38 on the JS engines): B-201 (steps 1-4: `Function`, `signature`, `type()`, identity, `elem`, the
 safety net through `call_indirect`), B-202 (the initial value of a table), B-204 (multi-value in a batch), B-301 (`Memory.view`), B-302 (`bench`
 with buffer transfer), B-304 (a lock per backend, `await compile/instantiate`, threads only with `threaded=True`), B-507 (the `wasmhost` command),
 B-509 (`wasi_sh.py`, `--home`), fast buffers (a typed array through the C API on jsc/jscontext, base64 on node/bun), Bun as a backend in CI, tests for
@@ -69,8 +69,7 @@ decision, the history has two copies, about 21 MB: a squash would leave one); `t
 **Not covered by tests:** `examples/wasmclang.py`, `jslinux.py` (unavailable in the assistant's environment: `bellard.org` is blocked), `coremark.py`;
 the "Examples" step in CI runs only `basic.py` and `imports.py` (B-006). B-302a is only partly done (see its entry).
 
-**Next candidates:** B-203 (`externref`), a binary channel for node/bun (about 50 MB/s through the pipe and JSON now), phase 4 (limits for untrusted
-code). Fact (confirmed by the owner, matches the measurements): `jscontext` on iOS has **no JIT**, so for pure computation `wasm3` would be faster than
+**Next candidates:** B-203 (`externref`), a binary channel for node/bun (about 50 MB/s through the pipe and JSON now), phase 4: B-402 (time or fuel) and B-403 (infinite-loop tests); B-401, the memory ceiling, is done. Fact (confirmed by the owner, matches the measurements): `jscontext` on iOS has **no JIT**, so for pure computation `wasm3` would be faster than
 JavaScriptCore there, but `pywasm3` cannot be installed on iOS (a C extension).
 
 ## Order of work
@@ -348,8 +347,20 @@ Done when: transferring a buffer of megabytes is not copied on wasmtime and wasm
 
 ## Phase 4. Limits for untrusted code (L)
 
-- [ ] **B-401** A memory limit: use `maximum` from B-101 and the engine's limits; a check that `grow` beyond the limit
-      returns -1 and does not bring the process down.
+- [x] **B-401** (DONE 2026-10-07, on the owner's word; two roads, the self-test has the steps "memory: the maximum of an imported memory stops the module's grow" and "memory: Instance(max_memory=) is a ceiling for a memory the module makes")
+      A memory limit: `grow` beyond the limit returns -1 and does not bring the process down.
+      **A module that imports its memory** (Emscripten `IMPORTED_MEMORY`, `--import-memory`): as in JavaScript, the maximum of the `Memory`
+      the host gives is the ceiling; nothing new in `src/`, pinned by tests on every backend with `import.memory`
+      (`test_memory_table.py`), a self-test step, the README.
+      **A memory the module makes itself, with no maximum** (the JavaScript API has no way to cap it, so this is an extension): `Instance(module,
+      imports, max_memory=pages)`, also in `instantiate` and `instantiate_sync` (the owner chose `Instance`, not `Module`, and asked for a
+      cache). `_binary.limit_memory` writes the ceiling into the memory section (no maximum gets it, a larger one is lowered, a smaller one stays;
+      a module that starts above it is a `ValueError`; a custom page size is refused), so it is the same on every engine, `wasm3` included.
+      `Module` keeps its bytes and `Module._held_to(pages)` compiles the changed copy once per ceiling (a module that needs no change is the module
+      itself, nothing is compiled); `type()` of an exported memory says the maximum that holds. A memory the module imports is checked against the
+      ceiling: no maximum, or a larger one, is a `LinkError`. Tests: `tests/test_max_memory.py`.
+      Limits of this: only memories; no time or fuel (B-402); a bigger-than-needed ceiling costs nothing, but a module compiled with a custom page
+      size is not supported. Not verified: JSC on a device (CI covers `jsc`, `gi-jsc`, `jscontext` through the fakes).
 - [ ] **B-402** A timeout or execution fuel: `fuel`/`epoch` on wasmtime, a `gas` analogue on wasm3, interruption on Node
       (a separate process). `supports("timeout")` will be `False` on JSC: it is honest to write this in the README.
 - [ ] **B-403** Tests "a module with an infinite loop" on every backend that can do this.

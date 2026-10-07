@@ -52,12 +52,15 @@ def module(
     memory: bool = False,
     globals_: list[bytes] | None = None,
     imports: list[bytes] | None = None,
+    memory_limits: bytes | None = None,
 ) -> bytes:
     out = b"\0asm\x01\x00\x00\x00" + section(1, vec(types))
     if imports:
         out += section(2, vec(imports))
     out += section(3, vec([uleb(f[0]) for f in funcs]))
-    if memory:
+    if memory_limits is not None:
+        out += section(5, vec([memory_limits]))  # the limits as they are written: flags, minimum, maybe maximum
+    elif memory:
         out += section(5, vec([b"\x01\x01\x04"]))  # min 1 page, max 4
     if globals_:
         out += section(6, vec(globals_))
@@ -171,6 +174,15 @@ def grows_memory() -> bytes:
         (1, b"\x3f\x00"),  # size: memory.size
     ]
     return module(types, funcs, [("grow", 0, 0), ("size", 0, 1)], imports=imports)
+
+
+def owns_memory(initial: int = 1, maximum: int | None = None) -> bytes:
+    """A module that makes its own memory (`initial` pages, a `maximum` or none) and exports it as "memory", with
+    grow(pages) -> i32 (memory.grow: the old size, or -1 past the maximum) and size() -> i32 (memory.size)."""
+    types = [functype([I32], [I32]), functype([], [I32])]
+    funcs: list[Func] = [(0, b"\x20\x00\x40\x00"), (1, b"\x3f\x00")]
+    limits = (b"\x00" + uleb(initial)) if maximum is None else (b"\x01" + uleb(initial) + uleb(maximum))
+    return module(types, funcs, [("grow", 0, 0), ("size", 0, 1), ("memory", 2, 0)], memory_limits=limits)
 
 
 def spinner() -> bytes:

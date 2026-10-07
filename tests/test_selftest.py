@@ -35,6 +35,7 @@ def test_module_constants_are_the_test_modules() -> None:
     assert _selftest.GLOBAL_IMPORT == wb.imports_global()
     assert _selftest.MEMORY_USER == wb.uses_memory()
     assert _selftest.GROWS_MEMORY == wb.grows_memory()
+    assert _selftest.OWNS_MEMORY == wb.owns_memory()
     assert _selftest.TABLE_OWN == wb.tables(imported=False)
     assert _selftest.TABLE_IMPORT == wb.tables(imported=True)
     assert _selftest.TABLE_ELEM == test_elem_signatures.module()

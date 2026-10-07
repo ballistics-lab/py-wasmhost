@@ -354,10 +354,13 @@ which it is meant to be done.
 - **Memory is copied** on `read` and `write`. `Memory.view(offset, length)` gives the engine's own memory as a `memoryview`, with no copy, on `wasmtime` and `wasm3`
   (not on a JavaScript engine, whose memory lives in another place); it is released when the module may have run (a call, a batch, a `grow`), so it is
   for use at once. On a JavaScript engine the cost of moving a buffer is in the encoding, not the copy: see `wasmhost bench`.
-- **Limits on untrusted code**: no time or fuel limit, and no ceiling on a memory that the module makes itself and
-  declares without a maximum. A module that *imports* its memory (Emscripten `IMPORTED_MEMORY`, `wasm-ld
-  --import-memory`) can be held to a ceiling as in JavaScript: give it `Memory(initial, maximum)`; its own
-  `memory.grow` past the maximum answers `-1` and nothing else changes (not on `wasm3`, which has no imported memory).
+- **Limits on untrusted code**: no time or fuel limit. Memory has a ceiling, by two roads. A module that *imports* its
+  memory (Emscripten `IMPORTED_MEMORY`, `wasm-ld --import-memory`) is held as in JavaScript: give it `Memory(initial,
+  maximum)`. A memory the module makes itself, with no maximum, is held by `Instance(module, max_memory=pages)` (also
+  in `instantiate` and `instantiate_sync`), which is not in the JavaScript API: the maximum is written into a copy of
+  the module, so it works the same on every engine, and the copy for a given ceiling is compiled once and kept. Either
+  way `memory.grow` past the ceiling answers `-1` and nothing else changes (on `wasm3`, which has no imported memory,
+  only the second road).
 - **Threads.** A module built with `-pthread` (the WebAssembly threads proposal: a `shared` memory that the module
   imports, atomic instructions, threads made by the host as several instances of the module on one memory) does not
   run: `Memory(..., shared=True)` raises `NotImplementedError`, so it can not be given as an import. Build without

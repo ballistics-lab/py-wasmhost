@@ -88,6 +88,13 @@ GROWS_MEMORY = bytes.fromhex(
     "7700000473697a6500010a0d020600200040000b04003f000b"
 )
 
+# A module that makes its own memory (1 page, no maximum) and exports it as "memory", with grow(pages) -> i32
+# (memory.grow: the old size, or -1 past the maximum) and size() -> i32.
+OWNS_MEMORY = bytes.fromhex(
+    "0061736d01000000010a0260017f017f6000017f030302000105030100010718030467726f7700000473697a650001066d"
+    "656d6f727902000a0d020600200040000b04003f000b"
+)
+
 # A module with a table of two funcref entries that it exports as "table", and add(a, b), mul(a, b) and
 # call(a, b, index) = table[index](a, b) (call_indirect).
 TABLE_OWN = bytes.fromhex(
@@ -219,6 +226,7 @@ def _selftest_backend(backend: Backend, out: Callable[[str], object]) -> _Report
     step("globals: made on their own, imported, shared", lambda: _globals_on_their_own(backend))
     step("memory: made on its own, imported, shared", lambda: _memory_on_its_own(backend))
     step("memory: the maximum of an imported memory stops the module's grow", lambda: _memory_ceiling(backend))
+    step("memory: Instance(max_memory=) is a ceiling for a memory the module makes", lambda: _max_memory(backend))
     step("table: made on its own, imported, shared", lambda: _table_on_its_own(backend))
     step("functions: one object per function, signature, a table entry", lambda: _functions(backend))
     step("async compile and instantiate, tasks at once", lambda: _async(backend))
@@ -380,6 +388,22 @@ def _memory_ceiling(backend: Backend) -> str:
     mem.write(3 * 65536 - 1, b"\x07")
     _expect(mem.read(3 * 65536 - 1, 1), b"\x07")
     return "grow past the maximum answers -1; the memory and the instance are fine"
+
+
+def _max_memory(backend: Backend) -> str:
+    module = Module(OWNS_MEMORY, backend=backend)
+    ex = Instance(module, max_memory=3).exports
+    _expect((ex.grow(2), ex.size()), (1, 3))  # no maximum of its own: the ceiling is one, and it is reached
+    _expect((ex.grow(1), ex.grow(65536), ex.size(), len(ex.memory)), (-1, -1, 3, 3 * 65536))  # past it: -1, as is
+    _expect(ex.memory.type().maximum, 3)
+    _expect(Instance(module).exports.grow(5), 1)  # the module itself has no ceiling, whatever an instance was given
+    try:
+        Instance(module, max_memory=0)  # it starts at 1 page
+    except ValueError:
+        pass
+    else:
+        raise AssertionError("a module that starts over the ceiling was taken")
+    return "grow past max_memory answers -1; type() says the maximum that holds; the module is unchanged"
 
 
 def _table_on_its_own(backend: Backend) -> str:

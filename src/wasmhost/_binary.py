@@ -28,6 +28,7 @@ __all__ = (
     "f64",
     "i32",
     "i64",
+    "limit_memory",
     "parse",
 )
 
@@ -320,3 +321,55 @@ def parse(wasm: bytes) -> ModuleInfo:
     elems = tuple((t, s, types[func_types[f]], g) for t, s, f, g in raw_elems if f < len(func_types))
     table_exports = tuple((n, i) for n, k, i in raw_exports if k == 1)
     return ModuleInfo(tuple(imports), tuple(exports), tuple(custom), elems, table_exports, has_start)
+
+
+def _uleb(n: int) -> bytes:
+    out = bytearray()
+    while True:
+        b = n & 0x7F
+        n >>= 7
+        if n:
+            out.append(b | 0x80)
+        else:
+            out.append(b)
+            return bytes(out)
+
+
+def limit_memory(wasm: bytes, pages: int) -> bytes:
+    """`wasm` with the memories the module defines itself held to `pages` 64 KiB pages: a memory without a maximum gets
+    this one, a larger maximum is lowered to it, a smaller one stays. Its `memory.grow` past the maximum then answers
+    -1, as the specification has it, on every engine. A memory the module imports is not touched (the host gives it,
+    with its own maximum). A memory that starts above `pages`, or counts in pages of another size, is a ValueError.
+    `wasm` must be a valid module as far as `parse` can tell."""
+    r = _Reader(wasm)
+    r.pos = 8
+    out = wasm[:8]
+    try:
+        while r.pos < len(wasm):
+            start = r.pos
+            section_id = r.byte()
+            size = r.u32()
+            payload = r.pos
+            end = payload + size
+            if section_id != 5:
+                out += wasm[start:end]
+                r.pos = end
+                continue
+            memories: list[bytes] = []
+            for _ in range(r.u32()):
+                flags = r.u32()
+                if flags & 8:
+                    raise ValueError("a memory with a page size of its own can't be held to a number of 64 KiB pages")
+                minimum = r.u32()
+                maximum = r.u32() if flags & 1 else None
+                if minimum > pages:
+                    raise ValueError(f"a memory of the module starts at {minimum} pages, over the limit of {pages}")
+                memories.append(
+                    _uleb(flags | 1) + _uleb(minimum) + _uleb(pages if maximum is None else min(maximum, pages))
+                )
+            body = _uleb(len(memories)) + b"".join(memories)
+            out += bytes([5]) + _uleb(len(body)) + body
+            r.pos = end
+    except IndexError as exc:
+        raise ValueError("truncated WebAssembly binary") from exc
+    return out
