@@ -1,10 +1,7 @@
-"""The command line: `python -m wasmhost COMMAND ...`.
+"""The command line: `wasmhost COMMAND ...`.
 
-Each command is a subcommand, so that the first positional argument stays free. It is where the module to run
-will go, as in `wasmtime myapp.wasm -- arg1 arg2 --verbose`: the options before the module are the host's, and
-everything after it (after `--` too) belongs to the program, which is not to look at it. That command is not here
-yet (it needs WASI for the program's arguments, see BACKLOG.md); when it comes, the names of the commands are
-tried first, and anything else is a module.
+`wasmhost run [OPTIONS] module.wasm [-- ARGUMENTS]` runs a module as `wasmtime run` does (`_run.py`): the options
+before the module are the host's, everything after it (after `--` too) goes to the program unparsed.
 """
 
 from __future__ import annotations
@@ -15,7 +12,7 @@ from collections.abc import Sequence
 from importlib.metadata import PackageNotFoundError, version
 from typing import Any, Protocol
 
-from . import _bench
+from . import _bench, _run
 from ._selftest import DESCRIPTION as SELFTEST_DESCRIPTION
 from ._selftest import add_arguments as add_selftest_arguments
 from ._selftest import run as run_selftest
@@ -74,6 +71,11 @@ def build_parser() -> argparse.ArgumentParser:
     add_selftest_arguments(selftest)
     selftest.set_defaults(run=run_selftest)
 
+    run = commands.add_parser(
+        "run", help="run a module: a WASI command, or a function with --invoke", add_help=False
+    )  # parsed by _run, which splits the line at the module; here for the help only
+    run.set_defaults(run=None)
+
     bench = commands.add_parser(
         "bench", help="time the backends: a call, a batch, the engine", description=_bench.DESCRIPTION
     )
@@ -94,7 +96,14 @@ def build_parser() -> argparse.ArgumentParser:
 
 def main(argv: Sequence[str] | None = None) -> int:
     parser = build_parser()
-    args = parser.parse_args(argv)
+    line = list(sys.argv[1:] if argv is None else argv)
+    if line[:1] == ["run"]:  # the line is split at the module, so argparse never sees the program's arguments
+        running = _run.split_command(line[1:])
+        if running is None:
+            _run.build_parser().print_help(sys.stderr if len(line) == 1 else sys.stdout)
+            return 2 if len(line) == 1 else 0
+        return _run.run(*running)
+    args = parser.parse_args(line)
     command = getattr(args, "run", None)
     if command is None:  # no command
         parser.print_help(sys.stderr)

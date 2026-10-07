@@ -82,7 +82,7 @@ it works on the device with its hybrid host: clang and lld compiled C and C++ in
 2. The CI of the newest commit, and the macOS/PyPy flake (below): it has now come back three times in the eleven runs 124 to 134 on this branch, so "seen once" is out of date; the owner chose to treat it as a flake, but it may be worth the guesses in its entry.
 3. The first CI run after Python 3.15 is released (the matrix is unpinned).
 4. B-405 when upstream merges pywasm3's two PRs (#13, #14); B-406 is closed (option b: leave it, documented).
-5. Then the owner picks: B-203 (`externref`), a binary channel for node/bun (about 50 MB/s through the pipe and JSON now), B-006 (CI for examples), or the rest of phase 5 (B-503 `openat` sandbox, B-506/B-508 the command line to run a module).
+5. Then the owner picks: B-203 (`externref`), a binary channel for node/bun (about 50 MB/s through the pipe and JSON now), B-006 (CI for examples), or the rest of phase 5 (B-503 `openat` sandbox).
 
 **Deferred by owner decision:** B-303 (until it is really needed), B-304a (examples on asyncio), the rest of phase 5 (it waits for a command), `wasmhost.vfs`, Deno (B-701b: a bug in Deno itself). **Waiting for the owner:** the branch name and
 tidying (B-003), `coreutils.wasm` stays in git (B-004), `tiny-bclibc-wasm` (B-803). **Not covered by tests:** `examples/wasmclang.py` (run by hand on wasmtime and node on 2026-10-07: the same output before and after the change), `jslinux.py`
@@ -105,7 +105,7 @@ tidying (B-003), `coreutils.wasm` stays in git (B-004), `tiny-bclibc-wasm` (B-80
 
 Owner decision: everything is done in the current branch (the owner opens the PR and tidies the branch). Each step comes with tests, a step in the
 self-test and a green pre-commit, and is a separate commit. Done so far, in order: B-201 (steps 1-4), B-304, B-204, B-507, B-509, B-202, B-301, B-302,
-then phase 4 (B-401 to B-404), then B-501, B-502, B-504 and B-505 (done 2026-10-07). The detail of each is in its own entry below. Open: B-203, B-303, B-304a, B-006, phase 5 (B-503, B-506, B-508) and phase 6.
+then phase 4 (B-401 to B-404), then B-501, B-502, B-504 and B-505 (done 2026-10-07). The detail of each is in its own entry below. Open: B-203, B-303, B-304a, B-006, phase 5 (B-503) and phase 6.
 
 ## Accepted API decisions
 
@@ -509,7 +509,7 @@ official `wasi_snapshot_preview1` (branch `wasi-0.1` of WebAssembly/WASI), not t
       Seen 2026-10-07 on the original iSH (i686, CPython 3.11.12, `wasm3` only; reported by the owner, not reproduced here): a memory declared 1..4 pages is 4 pages from the start, so 3 self-test
       steps fail (31/34): the module's own `memory.grow`, `Instance(max_memory=)`, `type()` of a memory. Cause not known and not investigated: the owner suspects iSH's i386 emulator, not 32-bit as such; he will look when an issue is filed. (pywasm3's publish.yml builds i686 under QEMU and runs its own tests on wasm3, but they only use memories without a declared maximum, so they do not settle it); open
       for the owner: make those steps tolerant of it, fix it in the backend, or document it (README "Backends" says what was seen).
-- [ ] **B-506** A command to run a module along the lines of `wasmtime myapp.wasm -- arg1 arg2 --verbose`. The grammar:
+- [x] **B-506** (DONE 2026-10-08 as `wasmhost run`, the owner's word: the running is behind a subcommand, so no word is reserved and nothing like `./self` is needed; `src/wasmhost/_run.py`, `tests/test_cli_run.py`; the options are the ones below plus `--readonly`, `--max-memory`, `--timeout`, `--fuel`) A command to run a module along the lines of `wasmtime myapp.wasm -- arg1 arg2 --verbose`. The grammar:
       `wasmhost [ОПЦІЇ ХОСТА] myapp.wasm [-- АРГУМЕНТИ ПРОГРАМИ]`: the options before the module belong to the host (`--backend`,
       `--dir ХОСТ::ГІСТЬ`, `--env K=V`), everything after the module (and after `--`) goes unparsed to the program through
       `args_get`. The command names (`self`/`test`) are checked first, everything else is treated as a module file; a file with
@@ -517,7 +517,7 @@ official `wasi_snapshot_preview1` (branch `wasi-0.1` of WebAssembly/WASI), not t
 - [x] **B-507** (DONE: `[project.scripts]`, `tests/test_cli_entry.py`; we will extend it when running a module appears, B-506) The entry point `wasmhost`: `[project.scripts] wasmhost = "wasmhost._cli:main"` in `pyproject.toml`, so that one can
       write `wasmhost myapp.wasm` and `wasmhost self test`, and not `python -m wasmhost`. Right now there is no such command.
       Check `uv lock --check` and the wheels.
-- [ ] **B-508** (rewritten 2026-10-07 on the owner's word; **part of the B-506 design**, deferred with phase 5; the form is **not decided**) Calling an exported function of a module without WASI
+- [x] **B-508** (DONE 2026-10-08: form (b), `wasmhost run --invoke add m.wasm 2 3`; results one per line as `wasmtime run --invoke` prints them (from memory: the wasmtime docs were not reachable, check against a real `wasmtime`); a module without `_start` and without `--invoke` is an error, as in wasmtime) (rewritten 2026-10-07 on the owner's word; **part of the B-506 design**, deferred with phase 5; the form is **not decided**) Calling an exported function of a module without WASI
       (like our `fib` and `sum`: no `_start`, no arguments) from the command line. It does not need WASI itself, but it shares the command line with B-506, so the two are designed together.
       **Two forms, neither chosen:** (a) a subcommand, `wasmhost call myapp.wasm add 2 3`: one more reserved word next to `self`/`test`, and it looks like the WASI form, where everything after the module
       goes to the program; a module file named `call` would have to be run as `./call`; (b) an option of the host, as `wasmtime --invoke` has: `wasmhost --invoke add myapp.wasm 2 3`: no new reserved word,

@@ -468,6 +468,13 @@ documented`) and counts as passed. If something fails, send the whole output. On
 `python -m wasmhost self test --all` runs it on every backend that starts. Installed with pip, the same commands are
 there as `wasmhost self test` and `wasmhost bench`.
 
+`wasmhost run [OPTIONS] module.wasm [-- ARGUMENTS]` runs a module as `wasmtime run` does. A module with `_start` is a WASI
+command (`wasmhost.wasi.Wasip1`) and its exit code is the command's; `--invoke FUNCTION` calls an exported function
+instead, the words after the module being its arguments (`wasmhost run --invoke add m.wasm 2 3` prints `5`; one result
+per line, a float as Rust prints it: `0.5`, `NaN`, `inf`). Options: `--backend`, `--dir HOST[::GUEST]` (repeatable),
+`--readonly`, `--env NAME[=VALUE]`, `--max-memory PAGES`, `--timeout SECONDS`, `--fuel UNITS`. A trap exits with 134, as in
+wasmtime; any other error with 1. Everything after the module belongs to the program.
+
 `python -m wasmhost bench [--backend NAME] [--no-jit] [--buffer KIB]` times a call, a batch of three, moving a buffer in and
 out of memory (MB/s) and the engine itself (a recursive
 `fib`, a loop) on each backend that starts, to choose one. `--no-jit` takes the JIT off JavaScriptCore
