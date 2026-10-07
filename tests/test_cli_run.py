@@ -150,3 +150,52 @@ def test_runtime_is_the_backend_option_and_the_environment_variable(
     assert capsys.readouterr().out == "5\n"
     for line in (["bench", "--runtime", session], ["self", "test", "--runtime", session]):
         assert _cli.build_parser().parse_args(line).backend == session
+
+
+EXAMPLES = Path(__file__).resolve().parent.parent / "examples" / "wasm"
+
+
+def need_imports() -> None:
+    if not wasmhost.get_backend().supports("imports"):
+        pytest.skip(f"the {wasmhost.get_backend().name} backend can't take imports")
+
+
+def test_a_limit_the_backend_cannot_keep_is_an_error_not_a_traceback(
+    capsys: pytest.CaptureFixture[str], session: str, arith: str
+) -> None:
+    backend = wasmhost.get_backend(session)
+    for option, value, feature in (("--fuel", "1000000", "fuel"), ("--timeout", "5", "timeout")):
+        code = _cli.main(["run", "--backend", session, option, value, "--invoke", "add", arith, "2", "3"])
+        captured = capsys.readouterr()
+        if backend.supports(feature):
+            assert (code, captured.out) == (0, "5\n")
+        else:
+            assert code == 1
+            assert captured.err.startswith("Error:")
+
+
+def test_a_real_program_with_a_folder(capsys: pytest.CaptureFixture[str], session: str, tmp_path: Path) -> None:
+    """coreutils (uutils, in Rust) through the command: arguments, a folder, a file read, a read-only folder."""
+    need_imports()
+    (tmp_path / "a.txt").write_text("hello from host\n", encoding="utf-8")
+    base = ["run", "--backend", session, "--argv0", "coreutils", "--dir", f"{tmp_path}::/data"]
+    program = str(EXAMPLES / "coreutils.wasm")
+    assert _cli.main([*base, program, "cat", "/data/a.txt"]) == 0
+    assert capsys.readouterr().out == "hello from host\n"
+    assert _cli.main([*base, "--readonly", program, "touch", "/data/new.txt"]) == 1
+    assert "Capabilities insufficient" in capsys.readouterr().err
+    assert not (tmp_path / "new.txt").exists()
+    assert _cli.main([*base, program, "touch", "/data/new.txt"]) == 0
+    assert (tmp_path / "new.txt").exists()
+    assert _cli.main(["run", "--backend", session, "--argv0", "coreutils", program, "false"]) == 1
+
+
+def test_a_real_program_with_variables_and_an_exit_code(capsys: pytest.CaptureFixture[str], session: str) -> None:
+    """Lua: what follows the module is the program's (`-e` is not a host option), `--env`, the exit code."""
+    need_imports()
+    lua = str(EXAMPLES / "lua.wasm")
+    assert (
+        _cli.main(["run", "--backend", session, "--env", "FOO=bar", lua, "-e", "print(os.getenv('FOO'), arg[0])"]) == 0
+    )
+    assert capsys.readouterr().out == "bar\tlua.wasm\n"
+    assert _cli.main(["run", "--backend", session, lua, "-e", "os.exit(7)"]) == 7

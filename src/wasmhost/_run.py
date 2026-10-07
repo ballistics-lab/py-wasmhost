@@ -231,6 +231,6 @@ def run(host_args: Sequence[str], path: str, program_args: Sequence[str]) -> int
     except Trap as exc:
         print(f"Error: {exc}", file=sys.stderr)
         return TRAP_EXIT
-    except (WasmError, OSError, ValueError, TypeError, ImportError) as exc:
+    except (WasmError, OSError, ValueError, TypeError, ImportError, NotImplementedError) as exc:
         print(f"Error: {exc}", file=sys.stderr)
         return 1
