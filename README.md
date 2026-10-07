@@ -468,7 +468,7 @@ documented`) and counts as passed. If something fails, send the whole output. On
 `python -m wasmhost self test --all` runs it on every backend that starts. Installed with pip, the same commands are
 there as `wasmhost self test` and `wasmhost bench`.
 
-`wasmhost run [OPTIONS] module.wasm [-- ARGUMENTS]` runs a module along the lines of `wasmtime run` (the options and the output were written from memory, not compared with a real `wasmtime`, so they may differ). A module with `_start` is a WASI
+`wasmhost run [OPTIONS] module.wasm [-- ARGUMENTS]` runs a module along the lines of `wasmtime run` (the results, the exit codes and the options were compared with wasmtime 48.0.5; `--invoke` with too many words is an error here, and the `-W`/`-O`/... groups are not there). A module with `_start` is a WASI
 command (`wasmhost.wasi.Wasip1`) and its exit code is the command's; `--invoke FUNCTION` calls an exported function
 instead, the words after the module being its arguments (`wasmhost run --invoke add m.wasm 2 3` prints `5`; one result
 per line, a float as Rust prints it: `0.5`, `NaN`, `inf`). Options: `--backend`, `--dir HOST[::GUEST]` (repeatable),

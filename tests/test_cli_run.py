@@ -58,7 +58,7 @@ def test_errors_are_a_message_and_a_code(capsys: pytest.CaptureFixture[str], ses
         (["--invoke", "nope", arith], "no function named `nope`"),
         (["--invoke", "add", arith, "1"], "takes 2 argument(s)"),
         (["--invoke", "add", arith, "1", "x"], "invalid literal"),
-        ([arith], "_start"),
+        (["--invoke", "add", arith, "4294967295", "0"], "number too large"),
         (
             ["/no/such/file.wasm"],
             'failed to open wasm module "/no/such/file.wasm"\n\nCaused by:\n    No such file or directory (os error 2)',
@@ -109,3 +109,11 @@ def test_argv0_names_the_program(session: str, tmp_path: Path) -> None:
     args = _run.build_parser().parse_args(["--argv0", "tool", "--dir", "a::b", "--env", "X=1"])
     assert (args.argv0, args.dir, args.env) == ("tool", ["a::b"], ["X=1"])
     assert _run.split_command(["--argv0", "tool", "a.wasm", "x"]) == (["--argv0", "tool"], "a.wasm", ["x"])
+
+
+def test_a_module_without_a_start_function_exits_quietly(
+    capsys: pytest.CaptureFixture[str], session: str, arith: str
+) -> None:
+    """As `wasmtime m.wasm` does (checked against wasmtime 48.0.5): no output, exit code 0."""
+    assert _cli.main(["run", "--backend", session, arith]) == 0
+    assert capsys.readouterr() == ("", "")

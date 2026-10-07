@@ -68,7 +68,11 @@ def build_parser() -> argparse.ArgumentParser:
 
 def parse_value(kind: str, text: str) -> int | float:
     if kind in ("i32", "i64"):
-        return int(text, 0)
+        number = int(text, 0)
+        bits = 32 if kind == "i32" else 64
+        if not -(1 << (bits - 1)) <= number < (1 << (bits - 1)):  # as wasmtime: no wrapping, an error
+            raise ValueError("number too large to fit in target type")
+        return number
     return float(text)
 
 
@@ -186,7 +190,7 @@ def run(host_args: Sequence[str], path: str, program_args: Sequence[str]) -> int
                     print(line)
                 return 0
             if not hasattr(instance.exports, "_start") and not hasattr(instance.exports, "_initialize"):
-                raise WasmError("no export named `_start` found (use --invoke to call a function)")
+                return 0  # wasmtime runs a module without a start function and exits 0
             return wasi.start(instance)
     except Trap as exc:
         print(f"Error: {exc}", file=sys.stderr)
