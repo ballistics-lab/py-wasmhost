@@ -55,7 +55,10 @@ it works in Pythonista.
 
 `examples/coreutils.py` is a small shell over uutils coreutils (Rust, built to WASI, in `examples/wasm/`): `ls`, `cat`,
 `sort`, `cp`, `seq`, `wc` and the rest, and `lua`, with pipes and redirects, over a directory of the real file system.
-The WASI host for the modules is written in Python, on wasmhost; it is also a model of how to write one.
+The WASI host for the modules is `wasmhost.wasi.preview1` (see [WASI](#wasi)); the example only gives it a directory and a limit on what a
+pipe may carry. `wasmclang.py` takes the calls that are not about files from `wasi.preview1` and leaves the file calls to `memfs.wasm`, a file system that is
+itself a WebAssembly module; `wasi_sh.py` keeps a host of its own (a file system in a Python dict, pipes and hooks), because `wasi.preview1` is the
+specification's calls over real folders and nothing more.
 
 `examples/wasi_sh.py` is a real POSIX shell, BusyBox `ash` with about fifty utilities (the wasi-sh project's
 `busybox.wasm`, downloaded once from npm), with pipes, `$(...)`, here-documents and functions, over a file system that is
@@ -101,6 +104,24 @@ The `wasm3` backend has no extra: pywasm3's PyPI release is years behind the API
 
 The ordinary wheel: it is pure Python (`py3-none-any`). In StaSh (Pythonista) or PythonIDE's pip,
 `pip install wasmhost`, then run the self-test (see [Try it on a device](#try-it-on-a-device)).
+
+### iSH and iSH-AOK (iOS)
+
+iSH is a Linux shell for iOS (an emulated Linux with ordinary CPython); iSH-AOK is a fork of it. Neither has `objc_util`,
+JavaScriptCore or Node, so without an engine the self-test ends with `no backend could start` and says what to install.
+
+- **iSH-AOK** (`Linux 5.10.0-ish_aok`, `aarch64`): `wasmtime` installs there and works, and so does `wasm3` (`WASMHOST_BACKEND=wasm3`),
+  both 34/34.
+
+  ```shell
+  uv tool install wasmhost --with wasmtime
+  wasmhost self test
+  ```
+- **The original iSH** (`Linux 4.20.69-ish`, `i686`): the owner ran it with `wasm3` only. It passes 31 of 34
+  steps; the three that fail all come from one thing, see "On the original iSH, `wasm3` starts a memory at its maximum" in
+  [Backends](#backends).
+
+Both were run by the owner, not by the assistant: see [Where it has been run](#where-it-has-been-run).
 
 ## Host functions
 
@@ -257,7 +278,7 @@ fallback if the C API ever fails. The self-test reports which was used (`N bytes
 | `bun`       | anywhere with [Bun](https://bun.sh)                            | `bun` on `PATH`. It is JavaScriptCore (as in Safari and on iOS) in a runtime of its own, and runs the very script `node` does |
 
 With nothing configured, the first backend that starts wins, in the order shown: the native runtimes when they are installed, then the JavaScript engines. (On Pythonista nothing above `jscontext` can be installed, so it is the pick there; on a Mac that has rubicon-objc, `wasmtime` still comes first.) Each backend's constructor is its
-own probe: it fails when its runtime is missing. Choose one with `WASMHOST_BACKEND=<name>`,
+own probe: it fails when its runtime is missing. Choose one with `WASMHOST_BACKEND=<name>` (or `--runtime <name>`, the same as `--backend <name>`, in `run`, `bench` and `self test`; the option wins over the variable),
 `wasmhost.set_backend("<name>")` or `Module(..., backend="<name>")`; `wasmhost.get_backend().name` says which is in
 use. `wasmhost.close()` closes the backends it started. (In WebAssembly's words the *host* is the embedder, the
 Python side that provides imports; what runs the module is the backend.)
@@ -279,6 +300,12 @@ one and a runtime freed gives it back, so the 129th instance alive at once is `R
 and the same whether the module has a memory or not). An `Instance` is in a reference cycle (it holds its exports, which hold it), so
 one is freed only when Python's cyclic collector gets to it: in a loop that makes many of them, on a build whose collector runs rarely
 (the free-threaded `3.14t` did, in CI), call `gc.collect()` now and then, or keep them few. The other backends have no such limit.
+
+**On the original iSH, `wasm3` starts a memory at its maximum.** On the original iSH (`i686`, CPython 3.11.12) a module whose memory
+is declared as 1 page, at most 4, is 4 pages long from the start: `len(memory)` is 262144, `type()` says `minimum=4`, and the
+module's own `memory.grow(1)` answers -1 (it is already at its maximum). The same module has 1 page on 64-bit (Linux x86-64, and
+`wasm3` on iSH-AOK, `aarch64`: 34/34 there). Three steps of the self-test fail for this reason (`module's own memory.grow`,
+`Instance(max_memory=)` and `type()` of a memory); the other 31 pass. That is what was observed. The cause is not known and has not been looked into: the owner suspects iSH's emulation of i386 rather than 32-bit as such. Tried to reproduce it on 2026-10-08 and could not: `wasm3` as `pywasm3` pins it (`21f029a`, with `pywasm3`'s own compile flags) built as 32-bit x86 against glibc and against musl 1.2.5 (the C library of the iSH wheels), on a real x86-64 kernel, loads a 1..4 page memory as 1 page and `coremark-minimal.wasm` (2 pages, no maximum, data up to 67 657 bytes) as 2 pages. So neither 32 bits nor musl is the cause; what is left is iSH's emulator, or the `wasm3` inside the owner's wheel (`0.9.1.dev76+g7562b12f`, the pin is `dev75`). It is the only platform so far where not every test passes.
 
 **PyGObject for `gi-jsc`.** The simplest way is the system's own `python3-gi` (with `gir1.2-javascriptcoregtk-4.1`) and the system's Python, as
 CI does. To have it in a venv instead, `pip install "wasmhost[gi-jsc]"` (or `uv sync --extra gi-jsc`) builds PyGObject from source, so the system needs
@@ -307,6 +334,34 @@ on iOS; the cost of a call from Python is the same either way (the bridge domina
 (2.9.6 and 2.9.7 tried) panics ("Deno has panicked", `capacity overflow`) when a `WebAssembly.Exception` leaves
 `vm.runInContext`, which is what a module that throws an exception of a tag the caller does not catch does there. Node
 and Bun are the same V8 and JavaScriptCore without this. It is an upstream bug; see `BACKLOG.md` (B-701b).
+
+### What has run where
+
+`yes` means it has run: on the assistant's computer, in CI, or by the owner on a device. `no` means it fails. `n/a` means it cannot: `wasmtime`
+and `wasm3` are not JavaScript engines, so the Pyodide example, which is JavaScript glue, does not apply to them, and `gi-jsc` takes no host
+functions, so nothing that imports anything runs on it. `?` is not run or not looked at.
+
+| Program                                                | `wasmtime` | `wasm3`    | `node` | `bun`                  | `jsc`    | `jscontext`                      | `gi-jsc` |
+| ------------------------------------------------------ | ---------- | ---------- | ------ | ---------------------- | -------- | -------------------------------- | -------- |
+| the WASI programs of the self-test (both snapshots)    | yes        | yes        | yes    | yes                    | yes (CI) | yes (CI, device)                 | n/a      |
+| `coreutils.py` (uutils coreutils in Rust, and Lua)     | yes        | yes        | yes    | yes                    | yes (CI) | yes (CI, device)                 | n/a      |
+| `wasi_sh.py` (BusyBox ash)                             | yes        | yes        | yes    | yes                    | yes (CI) | yes (CI, device)                 | n/a      |
+| `wasmclang.py` (clang and lld, themselves wasm)        | yes (21 s) | yes (14 s) | yes    | **no**: Bun aborts     | ?        | yes (device, 22 s)               | n/a      |
+| `pyodide.py`                                           | n/a        | n/a        | yes    | yes                    | ?        | yes (CI, device, ready in 1.9 s) | n/a      |
+| `coremark.py` (score)                                  | 25405      | 3645       | 30411  | 29731                  | ?        | 1951 (iPhone 16), 1892 (PythonIDE) | n/a      |
+| `jslinux.py`                                           | ?          | ?          | ?      | ?                      | ?        | yes (device)                     | n/a      |
+
+The first four CoreMark scores are from one x86-64 computer and the `jscontext` one from a phone without JIT, so they say an order of magnitude and
+not more. `wasmclang.py` on Bun stops with `panic: abort() called` and Bun's own "this indicates a bug in Bun" (Bun 1.4.2, in the second build, the
+WASI program); the file as it was before 2026-10-07 does the same. Pyodide's own `pyodide.asm.wasm` does not link on `wasm3` in any case: it imports
+280 globals, which our `wasm3` backend can't give, and uses `externref`. `jslinux.py` needs a server that the assistant's environment cannot reach.
+
+CoreMark built natively (C, `-O2`, not through wasmhost), as a baseline for the devices where iSH emulates the processor: **3169** (GCC 15.2.0, 60000
+iterations, 18.9 s, "Correct operation validated") on iSH-AOK 1.3 (557), Linux 5.10.0-ish_aok aarch64; **1590** (GCC 12.2.1, 20000 iterations, 12.6 s,
+also validated) on the original iSH, Linux 4.20.69-ish i686. Through wasmhost (`examples/coremark.py`, the wasm3 project's build of CoreMark) on iSH-AOK: `wasmtime` **2571.2** (the last pass 15.6 s) and `wasm3`
+**207.2** (14.5 s; a `pywasm3` wheel built for musllinux aarch64), that is about 81 % and 6.5 % of the native 3169. The last pass is calibrated by each
+runtime to take over 10 s, so its time says nothing about speed: the scores do. On the original iSH (i686) `wasm3` does not get as far as a score: `examples/coremark.py` stops with `failed: data segment out of bounds` (the owner's run, 2026-10-08; the same platform as the 3 failed memory steps of the self-test, cause not investigated). These numbers are not comparable with
+the table's above either (another machine, another build of the benchmark).
 
 ## Limits for untrusted code
 
@@ -356,6 +411,48 @@ budget (a batch is one call; a call from a host function shares the outer one).
 `timeout` and `fuel` can be given together; whichever runs out first ends the call (on `wasmtime` that instance pays for both
 engines, about 5 times slower on a tight loop).
 
+## WASI
+
+`wasmhost.wasi.preview1` is a host for `wasi_snapshot_preview1` (WASI 0.1), the interface that Rust (`wasm32-wasip1`), wasi-sdk, Zig and
+most "command line" modules are built against: all 46 functions of the specification, in plain Python, standard library only. It also
+offers `wasi_unstable`, the first snapshot, which older toolchains (wasienv, wasm-clang) still produce and which the Lua build of
+`examples/coreutils.py` imports from. It is checked against the specification's own `witx` files of both snapshots (names, signatures,
+the numbers of errors and flags, the layout of the records), and its self-test step runs a small WASI program of each on every backend.
+
+```python
+import sys
+from wasmhost import Module
+from wasmhost.wasi.preview1 import Wasip1
+
+wasi = Wasip1(
+    args=["prog", "-v"],
+    env={"HOME": "/"},
+    preopens={"/": "some/folder"},
+    stdin=b"input",
+    stdout=sys.stdout.buffer.write,
+)
+code = wasi.run(Module(open("prog.wasm", "rb").read()))  # the exit code: what `proc_exit` was given, else 0
+```
+
+- **Names.** `wasmhost.wasi` is a package with a module for each version of WASI: `preview1` is WASI 0.1, with the class `Wasip1`,
+  which the package exports too (`from wasmhost.wasi import Wasip1`). A class has the version in its name, so a later `Wasip2`
+  cannot be taken for it.
+- **Folders.** `preopens` maps the name the program sees to a folder of the host; several can be given, and a name that leaves its
+  folder (`..`, an absolute name, a link that points out) is refused with `ENOTCAPABLE`. The check and the open are two steps, so
+  another process changing the folder in between can still get past it.
+- **Read-only.** `readonly=True` makes every preopen read-only, `readonly={"data"}` only the ones of those names. The rights that change
+  something are taken away from the folder (and so from what is opened in it), so a call that would write, make, remove, rename or
+  link answers `ENOTCAPABLE`, and a file opened with every right asked for is opened for reading only.
+- **Streams.** `stdin` is bytes or an object with `read(n)` (default: empty, there is no interactive input); `stdout` and `stderr`
+  are callables that take bytes, or objects with `write` (default: the interpreter's own streams).
+- **Running.** `wasi.run(module)` instantiates, starts and closes. To give options to the instance, or to make it yourself, use
+  `wasi.instantiate(module, timeout=5)` and `wasi.start(instance)`, or `wasi.imports()` with `wasi.bind(instance)`: the import
+  object has both snapshots, and the engine links the one a module asks for.
+- **`wasi_unstable`** is the same calls with four differences (the order of `whence`, one right less, a 32-bit link count in
+  `filestat`, and a clock subscription with an extra field) and no `sock_accept`.
+- **Not supported:** sockets (`ENOTSOCK`), signals (`ENOSYS`). A host function that sleeps (`poll_oneoff`) is outside what
+  `timeout` and `fuel` can stop.
+
 ## Try it on a device
 
 The package carries a self-test, since nothing else can be run in Pythonista/Python IDE to see whether this works there:
@@ -368,13 +465,20 @@ wasmhost.selftest()  # or, from a shell: python -m wasmhost self test [--backend
 
 It prints one line per check, then `N/M passed`: the Objective-C bridge in use (and, if the C API is not used, why:
 `C API  not used: ...`), `WebAssembly` and `BigInt` in the engine, bytes in and out (`via C API` or `via hex`), calls,
-`i64`, memory, globals, traps, batches, host functions, globals made on their own and shared between instances, an
+`i64`, memory, globals, traps, batches, host functions, a WASI program, globals made on their own and shared between instances, an
 isolated instance, which encodings of WebAssembly exceptions the engine takes (`final (try_table): yes, older
 (try/catch): no`: a module built with C++ exceptions, such as bclibc's `bclibc_wasm.wasm` from wasi-sdk, needs the final one),
 and the cost of a call. A check the backend can't do says so (`not available on this backend, as
 documented`) and counts as passed. If something fails, send the whole output. On a computer,
 `python -m wasmhost self test --all` runs it on every backend that starts. Installed with pip, the same commands are
 there as `wasmhost self test` and `wasmhost bench`.
+
+`wasmhost run [OPTIONS] module.wasm [-- ARGUMENTS]` runs a module along the lines of `wasmtime run` (the results, the exit codes and the options were compared with wasmtime 48.0.5; `--invoke` with too many words is an error here, and the `-W`/`-O`/... groups are not there). A module with `_start` is a WASI
+command (`wasmhost.wasi.Wasip1`) and its exit code is the command's; `--invoke FUNCTION` calls an exported function
+instead, the words after the module being its arguments (`wasmhost run --invoke add m.wasm 2 3` prints `5`; one result
+per line, a float as Rust prints it: `0.5`, `NaN`, `inf`). Options: `--backend`, `--dir HOST[::GUEST]` (repeatable),
+`--readonly`, `--env NAME[=VALUE]`, `--argv0 NAME` (the default is the module's file name), `--max-memory PAGES`, `--timeout SECONDS`, `--fuel UNITS`. `--runtime NAME` is `--backend NAME`. A trap exits with 134, as in
+wasmtime; any other error with 1. Everything after the module belongs to the program. Only the WASI functions are provided: a module that imports others (`examples/coremark.py`'s `env.clock_ms`) does not link, as in `wasmtime`; programs like that are run from Python, as the examples do.
 
 `python -m wasmhost bench [--backend NAME] [--no-jit] [--buffer KIB]` times a call, a batch of three, moving a buffer in and
 out of memory (MB/s) and the engine itself (a recursive
@@ -390,7 +494,13 @@ out of memory (MB/s) and the engine itself (a recursive
 | Pythonista 3, Python 3.10.4, iPhone 16 (iPhone17,3), iOS 26 (Darwin 25.6) | `jscontext` (`objc_util`) | **35/35**, bytes `via C API`, both encodings of exceptions, functions and signatures, async, threads (wasmhost 0.0.4.dev64)               | 68 / 156 us           |
 | Pythonista 3, Python 3.10.4, iPhone 16 (iPhone17,3), iOS 26 (Darwin 25.6) | `jscontext` (`objc_util`) | **36/36**, a 1 MiB buffer moves at 5400 MB/s in and 12700 MB/s out (a typed array through the C API; through hex it was about 40) (wasmhost 0.0.4.dev84) | 36 / 84 us |
 | Pythonista 3, Python 3.10.4, iPhone 16 (iPhone17,3), iOS 26 (Darwin 25.6) | `jscontext` (`objc_util`) | **38/38**, a memory held by the maximum of an imported `Memory` and by `Instance(max_memory=)` (wasmhost 0.1.0b2.dev3)                       | 36 / 83 us            |
+| Pythonista 3, Python 3.10.4, iPhone 16 (iPhone17,3), iOS 26 (Darwin 25.6) | `jscontext` (`objc_util`) | **41/41**, `wasmhost.wasi.preview1`: a WASI program of each snapshot (`wasi_snapshot_preview1` and `wasi_unstable`) with arguments, stdout, a file and an exit code; timeout and fuel "not available", as documented (wasmhost 0.1.0b3.dev14) | 47 / 111 us |
+| Pythonista 3, Python 3.10.4, iPhone 16 (iPhone17,3), iOS 26 (Darwin 25.6) | `jscontext` (`objc_util`) | **41/41** after the rename to `wasmhost.wasi.preview1` (the wheel `0.1.0b3.dev20+gb9498e8f6`; the output does not print the version), and the examples `coreutils`, `coremark`, `imports`, `basic`, `jitcheck`, `jslinux`, `pyodide`, `wasi_sh` and `wasmclang` run | 37 / 94 us |
 | PythonIDE, Python 3.14.7, `ios-13.0-arm64-iphoneos`                       | `jscontext` (`objc_util`) | **25/25**, bytes `via C API`, host functions (wasmhost 0.0.2b1)                                                                           | 39 / 77 us            |
+| PythonIDE, Python 3.14.7, `ios-13.0-arm64-iphoneos` | `jscontext` (`objc_util`) | **41/41**, the same, WASI step included (wasmhost 0.1.0b3.dev14) | 44 / 102 us |
+| iSH-AOK 1.3 (557), a fork of iSH, Linux 5.10.0-ish_aok aarch64, CPython 3.14.8 | `wasmtime` | **34/34** (wasmhost 0.1.0b2, `uv tool install wasmhost --prerelease=allow --with wasmtime`; without `wasmtime` no backend starts there and the self-test says so) | 1615 / 5500 us |
+| iSH-AOK 1.3 (557), Linux 5.10.0-ish_aok aarch64, CPython 3.14.8 | `wasm3` (`WASMHOST_BACKEND=wasm3`) | **34/34**, wasmhost 0.1.0b2 (the memory steps pass: the 64-bit `wasm3` starts a memory at its initial size) | 213 / 1191 us |
+| iSH (the original), Linux 4.20.69-ish i686, CPython 3.11.12 | `wasm3` | 31/34, failed: the module's own `memory.grow`, `Instance(max_memory=)`, `type()` of a memory (`wasm3` starts a memory at its maximum there, see Backends); wasmhost 0.1.0b2 | 571 / 3157 us |
 | Linux, CPython 3.14t                                                      | `jsc`                     | 35/35                                                                                                                                     | 32 / 102 us           |
 | Linux, CPython 3.14t                                                      | `gi-jsc`                  | 27/27 (host functions: not available, as documented)                                                                                      | 35 / 62 us            |
 | Ubuntu 26.04, CPython 3.10.20, PyGObject 3.58.0 (`pip`, built from source) | `gi-jsc`                  | **38/38** (host functions: not available, as documented)                                                                                  | 32 / 74 us            |
@@ -400,8 +510,8 @@ out of memory (MB/s) and the engine itself (a recursive
 | Linux, CPython 3.14t                                                      | `wasm3`                   | 29/29                                                                                                                                     | 3 / 63 us             |
 | Linux, CPython 3.10 and PyPy 3.10                                         | `node`                    | 25/25 (an earlier version; and the test suite on 3.10)                                                                                    |                       |
 
-The counts of the Linux rows are for the current version (the first two phone rows are for `0.0.2b1`: the self-test has
-grown since); the times are one run of the self-test each, so read them as an order of magnitude. A host function costs about
+Each count is that of the version the row was run on, and the self-test has grown since the older rows (it has 35 steps on
+`wasmtime` and `wasm3` now, and 41 on the JavaScript engines); the times are one run of the self-test each, so read them as an order of magnitude. A host function costs about
 what a call does, plus a round trip on `node` or `bun` (measured once: about 4 us on `wasm3`, 50 us on `wasmtime` and `jsc`,
 200 us on `node`, per host call including the export around it).
 
@@ -438,7 +548,8 @@ which it is meant to be done.
 - **Newer proposals**: no API for `WebAssembly.Tag` and `WebAssembly.Exception` (the self-test only reports which
   encodings of exceptions an engine takes), SIMD, `memory64`, multi-memory, GC types.
   Whether a module that uses them runs is up to the engine.
-- **WASI** is not part of wasmhost: a module that imports `wasi_snapshot_preview1` needs a host that provides it.
+- **WASI** is provided for `wasi_snapshot_preview1` by `wasmhost.wasi.preview1` (see [WASI](#wasi)); not yet: sockets, and a safe open through
+  `openat` (the check of a name and the open are two steps now). `examples/coreutils.py` uses it and `examples/wasmclang.py` uses it for the calls that are not about files; `wasi_sh.py` keeps a host of its own (a file system that is not a folder, pipes).
 
 ## Test
 

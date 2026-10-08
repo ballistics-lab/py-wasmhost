@@ -35,6 +35,7 @@ import time
 import urllib.request
 
 import wasmhost
+from wasmhost.wasi import preview1
 
 BASE = "https://binji.github.io/wasm-clang/"
 SYSROOT_URL = "https://raw.githubusercontent.com/binji/wasm-clang/master/sysroot.tar"
@@ -100,6 +101,17 @@ int main() {
 # libc++ refers to __lttf2 (a long double comparison, from compiler-rt, which the sysroot lacks); nothing here calls it.
 LONG_DOUBLE_STUB = "int __lttf2(long double a, long double b) { return 0; }\n"
 
+# What the host answers itself in a WASI program; every other call is a file call, and memfs answers it.
+HOST_CALLS = (
+    "proc_exit",
+    "environ_sizes_get",
+    "environ_get",
+    "args_sizes_get",
+    "args_get",
+    "random_get",
+    "clock_time_get",
+)
+
 WASI_LINK = ["-z", "stack-size=1048576", "-Llib/wasm32-wasi", "lib/wasm32-wasi/crt1.o"]
 
 
@@ -128,12 +140,6 @@ def fetch(directory):
         with open(path + ".part", "wb") as f:  # so that an interrupted download is not taken for a whole file
             f.write(data)
         os.replace(path + ".part", path)
-
-
-class ProcExit(Exception):  # noqa: N818 -- WASI's proc_exit
-    def __init__(self, code):
-        super().__init__(code)
-        self.code = code
 
 
 class Memory:
@@ -234,73 +240,21 @@ class MemFS:
                 if member.isdir():
                     self.add_directory(member.name)
                 elif (data := tar.extractfile(member)) is not None:  # a regular file
-                    self.add_file(member.name, data.read())
+                    self.add_file(member.name, data.read(member.size))  # StaSh's file object needs the size
 
     def run(self, module, *argv):
         """Run a WASI program (a module that imports `wasi_unstable`) with ARGV; its exit code."""
-        box = {}
-
-        def memory():
-            return Memory(box["instance"].exports.memory)
-
-        def proc_exit(code):
-            raise ProcExit(code)
-
-        def environ_sizes_get(count_out, size_out):
-            memory().set_u64(count_out, 0)
-            memory().set_u64(size_out, 0)
-            return 0
-
-        def environ_get(ptrs, buf):
-            return 0
-
-        def args_sizes_get(argc_out, size_out):
-            memory().set_u64(argc_out, len(argv))
-            memory().set_u64(size_out, sum(len(a.encode()) + 1 for a in argv))
-            return 0
-
-        def args_get(ptrs, buf):
-            mem = memory()
-            for arg in argv:
-                raw = arg.encode() + b"\0"
-                mem.set_u32(ptrs, buf)
-                mem.memory.write(buf, raw)
-                ptrs += 4
-                buf += len(raw)
-            mem.set_u32(ptrs, 0)
-            return 0
-
-        def random_get(buf, size):
-            memory().memory.write(buf, os.urandom(size))
-            return 0
-
-        def clock_time_get(clock_id, precision, time_out):
-            memory().set_u64(time_out, int(time.time() * 1e9))
-            return 0
-
-        def poll_oneoff(*_):
-            return 52  # ENOSYS
-
-        wasi = {
-            "proc_exit": proc_exit,
-            "environ_sizes_get": environ_sizes_get,
-            "environ_get": environ_get,
-            "args_sizes_get": args_sizes_get,
-            "args_get": args_get,
-            "random_get": random_get,
-            "clock_time_get": clock_time_get,
-            "poll_oneoff": poll_oneoff,
-        }
-        for imp in wasmhost.Module.imports(module):  # everything else is a file call: memfs has it
-            if imp.module == "wasi_unstable" and imp.name not in wasi:
-                wasi[imp.name] = getattr(self.exports, imp.name)
-        box["instance"] = wasmhost.Instance(module, {"wasi_unstable": wasi, "env": {}})
-        self.host_memory = box["instance"].exports.memory
-        try:
-            box["instance"].exports._start()
-        except ProcExit as exit_:
-            return exit_.code
-        return 0
+        # The calls that are not about files are `wasi.preview1`'s (the first snapshot, `wasi_unstable`); every file
+        # call is memfs's own: its exports are the WASI functions, and they work on the memory of the other module.
+        host = preview1.Preview1(argv)
+        calls = {name: host.imports()[preview1.UNSTABLE][name] for name in HOST_CALLS}
+        calls["poll_oneoff"] = lambda *_: 52  # ENOSYS: preview1's would look for memfs's descriptors in its own table
+        for imp in wasmhost.Module.imports(module):
+            if imp.module == "wasi_unstable" and imp.name not in calls:
+                calls[imp.name] = getattr(self.exports, imp.name)
+        instance = wasmhost.Instance(module, {"wasi_unstable": calls, "env": {}})
+        self.host_memory = instance.exports.memory
+        return host.start(instance)
 
 
 class Toolchain:

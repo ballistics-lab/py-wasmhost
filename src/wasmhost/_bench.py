@@ -84,7 +84,9 @@ def measure(backend: Any, *, fib: int, loop: int, calls: int, repeat: int) -> di
 
 
 def add_arguments(parser: argparse.ArgumentParser) -> None:
-    parser.add_argument("--backend", choices=sorted(BACKENDS), help="one backend (default: every one that starts)")
+    parser.add_argument(
+        "--backend", "--runtime", choices=sorted(BACKENDS), help="one backend (default: every one that starts)"
+    )
     parser.add_argument("--fib", type=int, default=27, metavar="N", help="n of the recursive fib (default 27)")
     parser.add_argument(
         "--loop", type=int, default=30_000_000, metavar="N", help="iterations of the loop (default 3e7)"

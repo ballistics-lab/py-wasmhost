@@ -12,9 +12,11 @@ import argparse
 import asyncio
 import importlib.util
 import math
+import os
 import platform
 import sys
 import sysconfig
+import tempfile
 import time
 import traceback
 from collections.abc import Callable
@@ -28,6 +30,7 @@ from ._binary import FuncType, GlobalType, MemoryType, TableType, i32, i64
 from ._errors import CompileError, LinkError, OutOfFuel, Timeout, Trap
 from ._js import JSBackend
 from ._registry import AUTO_ORDER, BACKENDS
+from .wasi.preview1 import Preview1
 
 __all__ = ("selftest",)
 
@@ -146,6 +149,27 @@ EXCEPTIONS_LEGACY = bytes.fromhex(
     "0a19020b00067f08000700412a0b0b0b00067f08010700412a0b0b"  # code
 )
 
+WASI_HELLO = bytes.fromhex(  # a WASI command: writes "hello, wasi\n" to stdout and to note.txt, exits with argc
+    "0061736d0100000001280660027f7f017f60047f7f7f7f017f60097f7f7f7f7f7e7e7f7f017f60017f017f60017f00600000"
+    "02b3010516776173695f736e617073686f745f70726576696577310e617267735f73697a65735f676574000016776173695f"
+    "736e617073686f745f70726576696577310866645f7772697465000116776173695f736e617073686f745f70726576696577"
+    "3109706174685f6f70656e000216776173695f736e617073686f745f70726576696577310866645f636c6f73650003167761"
+    "73695f736e617073686f745f70726576696577310970726f635f657869740004030201050503010001071302066d656d6f72"
+    "790200065f737461727400050a4c014a004100410410001a410141104101411810011a4103410141c00041084101427f427f"
+    "410041e40010021a41e40028020041104101411810011a41e40028020010031a410028020010040b0b30020041100b1c2000"
+    "00000c000000000000000000000068656c6c6f2c20776173690a0041c0000b086e6f74652e747874"
+)
+
+WASI_HELLO_UNSTABLE = bytes.fromhex(  # the same program, importing from wasi_unstable (the first snapshot)
+    "0061736d0100000001280660027f7f017f60047f7f7f7f017f60097f7f7f7f7f7e7e7f7f017f60017f017f60017f00600000"
+    "028601050d776173695f756e737461626c650e617267735f73697a65735f67657400000d776173695f756e737461626c6508"
+    "66645f777269746500010d776173695f756e737461626c6509706174685f6f70656e00020d776173695f756e737461626c65"
+    "0866645f636c6f736500030d776173695f756e737461626c650970726f635f65786974000403020105050301000107130206"
+    "6d656d6f72790200065f737461727400050a4c014a004100410410001a410141104101411810011a4103410141c000410841"
+    "01427f427f410041e40010021a41e40028020041104101411810011a41e40028020010031a410028020010040b0b30020041"
+    "100b1c200000000c000000000000000000000068656c6c6f2c20776173690a0041c0000b086e6f74652e747874"
+)
+
 
 class _Report:
     def __init__(self, out: Callable[[str], object]) -> None:
@@ -229,6 +253,7 @@ def _selftest_backend(backend: Backend, out: Callable[[str], object]) -> _Report
     step("batch: chained steps", lambda: _batch(box["i"]))
     step("batch: an error keeps the earlier results", lambda: _batch_error(box["i"]))
     step("host functions (Python called from the module)", lambda: _host_functions(backend))
+    step("WASI: a program of each snapshot, with arguments, stdout, a file and an exit code", lambda: _wasi(backend))
     step("globals: made on their own, imported, shared", lambda: _globals_on_their_own(backend))
     step("memory: made on its own, imported, shared", lambda: _memory_on_its_own(backend))
     step("memory: the maximum of an imported memory stops the module's grow", lambda: _memory_ceiling(backend))
@@ -298,6 +323,36 @@ def _host_functions(backend: Backend) -> str:
     box["ex"] = Instance(Module(CALLBACKS, backend=backend), imports).exports
     _expect(box["ex"].call_plus(-1, 0), 3)  # the nested call goes through the module and back
     return "a call, nested calls, i64, several results, an exception, re-entry"
+
+
+def _wasi(backend: Backend) -> str:
+    """A WASI command through `wasmhost.wasi.preview1`, once from each snapshot (`wasi_snapshot_preview1` and the first,
+    `wasi_unstable`): its arguments, standard output, a file made in a folder of the host, and its exit code, which
+    comes out of the program as an exception of the host function and must cross the engine. Then once more with the
+    folder read-only: the file is refused and the folder stays empty."""
+    if not backend.supports("imports"):
+        try:
+            Instance(Module(WASI_HELLO, backend=backend), Preview1().imports())
+        except NotImplementedError:
+            return "not available on this backend, as documented"
+        raise AssertionError("should be NotImplementedError")
+    for wasm in (WASI_HELLO, WASI_HELLO_UNSTABLE):
+        out: list[bytes] = []
+        with tempfile.TemporaryDirectory() as folder:
+            wasi = Preview1(args=["selftest", "x"], preopens={"/": folder}, stdout=out.append)
+            _expect(wasi.run(Module(wasm, backend=backend)), 2)  # proc_exit(argc)
+            _expect(b"".join(out), b"hello, wasi\n")
+            with open(os.path.join(folder, "note.txt"), "rb") as note:
+                _expect(note.read(), b"hello, wasi\n")
+    out = []
+    with tempfile.TemporaryDirectory() as folder:  # the same program on a folder that nothing can be written to
+        host = Preview1(args=["selftest", "x"], preopens={"/": folder}, stdout=out.append, readonly=True)
+        _expect(host.run(Module(WASI_HELLO, backend=backend)), 2)
+        _expect(b"".join(out), b"hello, wasi\n")
+        _expect(os.listdir(folder), [])  # note.txt was refused
+    return (
+        "arguments, stdout, a file in a temporary folder, the exit code; both snapshots; a read-only folder stays empty"
+    )
 
 
 def _imports(calls: list[str]) -> dict[str, dict[str, Any]]:
@@ -844,7 +899,12 @@ DESCRIPTION = "Check that wasmhost works here."
 
 
 def add_arguments(parser: argparse.ArgumentParser) -> None:
-    parser.add_argument("--backend", choices=sorted(BACKENDS), help="one backend (default: the first that starts)")
+    parser.add_argument(
+        "--backend",
+        "--runtime",
+        choices=sorted(BACKENDS),
+        help="one backend (default: $WASMHOST_BACKEND, else the first that starts)",
+    )
     parser.add_argument("--all", action="store_true", help="every backend that starts here")
 
 

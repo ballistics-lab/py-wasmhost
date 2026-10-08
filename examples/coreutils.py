@@ -12,9 +12,9 @@
 
 The utilities are `examples/wasm/coreutils.wasm`, one multi-call binary (`coreutils sort file`): `cat cp mv rm ls
 mkdir touch head tail wc sort uniq tr cut seq echo printf ...`; `help` lists them. They are WASI programs, so what
-they see of the world is whatever this file hands them: that is the `Wasi` class, the `wasi_snapshot_preview1` calls
-(files, arguments, clock, exit) over a directory of the real file system, which is all they can reach. wasmhost runs
-the module; Python answers its calls, the way `examples/wasmclang.py` does for the older `wasi_unstable`.
+they see of the world is whatever this file hands them: a `Preview1` of `wasmhost.wasi.preview1`, the WASI calls (files,
+arguments, clock, exit) over a directory of the real file system, which is all they can reach, with the few lines of
+`wasi_host()` below around it. wasmhost runs the module; Python answers its calls.
 
 Besides coreutils there is `lua`, Lua 5.4.6 (`examples/wasm/lua.wasm`, built to the first snapshot of WASI):
 `lua file.lua`, `lua -e "print(2^10)"`, `seq 3 | lua -e "for l in io.lines() do print(l * 2) end"`. That build has
@@ -48,483 +48,43 @@ instance of it. `coreutils.wasm` is read from `examples/wasm/` next to this file
 
 import argparse
 import codecs
-import errno
 import glob
 import io
 import os
 import shlex
-import struct
 import sys
 import tarfile
-import time
 import urllib.request
 
 import wasmhost
+from wasmhost.wasi import preview1
 
 WASM_URL = "https://raw.githubusercontent.com/ballistics-lab/py-wasmhost/examples/zigcc/examples/wasm/coreutils.wasm"
-WASI = "wasi_snapshot_preview1"
-WASI_OLD = "wasi_unstable"  # the first snapshot of WASI, which older toolchains (wasienv, wasm-clang) still produce
 LUA_URL = "https://registry.npmjs.org/@antonz/lua-wasi/-/lua-wasi-5.4.6.tgz"  # Lua 5.4.6 built to WASI, MIT
 # The directory is preopened as "/" and as ".": a C library of the first WASI snapshot takes relative paths against ".".
 PREOPENS = ("/", ".")
 PROGRAMS = {"lua": ("lua.wasm", LUA_URL, "package/dist/lua.wasm")}  # beside coreutils: name -> file, tarball, member
 PIPE_LIMIT = 16 * 1024 * 1024
 
-# WASI errno numbers (they are not the platform's).
-ESUCCESS, EACCES, EBADF, EBUSY, EEXIST, EFBIG, EINVAL, EIO, EISDIR = 0, 2, 8, 10, 20, 22, 28, 29, 31
-ELOOP, EMLINK, ENAMETOOLONG, ENOENT, ENOMEM, ENOSPC, ENOSYS, ENOTDIR = 32, 34, 37, 44, 48, 51, 52, 54
-ENOTEMPTY, ENOTSUP, EPERM, EPIPE, ERANGE, EROFS, ESPIPE, EXDEV, ENOTCAPABLE = 55, 58, 63, 64, 68, 69, 70, 75, 76
-ERRNO = {
-    errno.EACCES: EACCES, errno.EBADF: EBADF, errno.EBUSY: EBUSY, errno.EEXIST: EEXIST, errno.EFBIG: EFBIG,
-    errno.EINVAL: EINVAL, errno.EIO: EIO, errno.EISDIR: EISDIR, errno.ELOOP: ELOOP, errno.EMLINK: EMLINK,
-    errno.ENAMETOOLONG: ENAMETOOLONG, errno.ENOENT: ENOENT, errno.ENOMEM: ENOMEM, errno.ENOSPC: ENOSPC,
-    errno.ENOSYS: ENOSYS, errno.ENOTDIR: ENOTDIR, errno.ENOTEMPTY: ENOTEMPTY, errno.EPERM: EPERM,
-    errno.EPIPE: EPIPE, errno.ERANGE: ERANGE, errno.EROFS: EROFS, errno.ESPIPE: ESPIPE, errno.EXDEV: EXDEV,
-}  # fmt: skip
-FILETYPE = {"unknown": 0, "char": 2, "dir": 3, "file": 4, "symlink": 7}
-RIGHT_READ, RIGHT_WRITE, RIGHT_ALLOCATE, RIGHT_READDIR, RIGHT_SET_SIZE = 1 << 1, 1 << 6, 1 << 8, 1 << 14, 1 << 22
-ALL_RIGHTS = 0xFFFFFFFFFFFFFFFF
 
-
-class WasiExit(Exception):  # noqa: N818 -- WASI's proc_exit
-    def __init__(self, code):
-        super().__init__(code)
-        self.code = code
-
-
-class WasiError(Exception):
-    def __init__(self, code):
-        super().__init__(code)
-        self.code = code
-
-
-def s64(value):
-    """An i64 argument as the signed number it is."""
-    return value - (1 << 64) if value >= 1 << 63 else value
-
-
-def filetype_of(mode):
-    import stat  # noqa: PLC0415
-
-    if stat.S_ISDIR(mode):
-        return 3
-    if stat.S_ISREG(mode):
-        return 4
-    if stat.S_ISLNK(mode):
-        return 7
-    if stat.S_ISCHR(mode):
-        return 2
-    if stat.S_ISBLK(mode):
-        return 1
-    return 0
-
-
-class Fd:
-    def __init__(self, kind, path="", osfd=-1):
-        self.kind = kind  # stdin, stdout, stderr, dir, file
-        self.path = path  # on the host, for a directory
-        self.osfd = osfd  # the host's file descriptor, for a file
-
-
-class Wasi:
-    """The `wasi_snapshot_preview1` calls of one program run, over the directory ROOT (which it sees as `/`).
-
-    STDIN is bytes; STDOUT and STDERR are callables that take bytes.
-    """
-
-    def __init__(self, root, argv, stdin=b"", stdout=None, stderr=None, env=None, pipe_limit=None):
-        self.root = os.path.realpath(root)
-        self.argv = [str(a) for a in argv]
-        self.env = [f"{k}={v}" for k, v in (env or {}).items()]
-        self.stdin = stdin
-        self.stdin_pos = 0
-        self.write_out = stdout or (lambda data: None)
-        self.write_err = stderr or (lambda data: None)
-        self.pipe_limit = pipe_limit  # bytes the program may write to stdout, then EPIPE
-        self.written = 0
-        self.fds = {0: Fd("stdin"), 1: Fd("stdout"), 2: Fd("stderr")}
-        for fd, _name in enumerate(PREOPENS, 3):  # the same directory under each name
-            self.fds[fd] = Fd("dir", self.root)
-        self.next_fd = 3 + len(PREOPENS)
-        self.old = False  # the module speaks wasi_unstable
-        self._mem = None
-
-    @property
-    def mem(self):
-        if self._mem is None:
-            raise RuntimeError("the program is not running")
-        return self._mem
-
-    # --- running
-
-    def run(self, module):
-        """Run the module's `_start`; its exit code."""
-        calls = {}
-        for imp in wasmhost.Module.imports(module):
-            if imp.module in (WASI, WASI_OLD):
-                calls.setdefault(imp.module, {})[imp.name] = self._bind(imp.name)
-                self.old = self.old or imp.module == WASI_OLD
-        instance = wasmhost.Instance(module, calls)
-        self._mem = instance.exports.memory
-        try:
-            instance.exports._start()
-        except WasiExit as exit_:
-            return exit_.code
-        finally:
-            for fd in self.fds.values():
-                if fd.osfd >= 0:
-                    os.close(fd.osfd)
-        return 0
-
-    def _bind(self, name):
-        method = getattr(self, name, None)
-        if method is None:
-            return lambda *args: ENOSYS
-
-        def call(*args):
-            try:
-                method(*args)
-            except WasiError as exc:
-                return exc.code
-            except OSError as exc:
-                return ERRNO.get(exc.errno or 0, EIO)
-            except UnicodeDecodeError:
-                return EINVAL
-            return ESUCCESS
-
-        return call
-
-    # --- memory
-
-    def put32(self, ptr, value):
-        self.mem.write(ptr, struct.pack("<I", value & 0xFFFFFFFF))
-
-    def put64(self, ptr, value):
-        self.mem.write(ptr, struct.pack("<Q", value & 0xFFFFFFFFFFFFFFFF))
-
-    def iovs(self, ptr, count):
-        return list(struct.iter_unpack("<II", self.mem.read(ptr, 8 * count)))
-
-    def string(self, ptr, size):
-        return self.mem.read(ptr, size).decode("utf-8")
-
-    # --- paths: nothing leaves ROOT
-
-    def dir_entry(self, fd):
-        entry = self.fds.get(fd)
-        if entry is None:
-            raise WasiError(EBADF)
-        if entry.kind != "dir":
-            raise WasiError(ENOTDIR)
-        return entry
-
-    def resolve(self, fd, ptr, size, follow=True):
-        base = self.dir_entry(fd).path
-        rel = self.string(ptr, size).lstrip("/")
-        path = os.path.normpath(os.path.join(base, rel))
-        # With the last name not followed, only the directory it is in has to stay inside.
-        real = (
-            os.path.realpath(path)
-            if follow
-            else os.path.join(os.path.realpath(os.path.dirname(path)), os.path.basename(path))
-        )
-        if real != self.root and not real.startswith(self.root + os.sep):
-            raise WasiError(ENOTCAPABLE)
-        return path
-
-    def file_entry(self, fd):
-        entry = self.fds.get(fd)
-        if entry is None:
-            raise WasiError(EBADF)
-        return entry
-
-    def add_fd(self, entry):
-        fd = self.next_fd
-        self.next_fd += 1
-        self.fds[fd] = entry
-        return fd
-
-    # --- arguments, environment, clocks, randomness
-
-    def args_sizes_get(self, argc_ptr, size_ptr):
-        self.put32(argc_ptr, len(self.argv))
-        self.put32(size_ptr, sum(len(a.encode()) + 1 for a in self.argv))
-
-    def args_get(self, argv_ptr, buf_ptr):
-        for arg in self.argv:
-            raw = arg.encode() + b"\0"
-            self.put32(argv_ptr, buf_ptr)
-            self.mem.write(buf_ptr, raw)
-            argv_ptr += 4
-            buf_ptr += len(raw)
-
-    def environ_sizes_get(self, count_ptr, size_ptr):
-        self.put32(count_ptr, len(self.env))
-        self.put32(size_ptr, sum(len(e.encode()) + 1 for e in self.env))
-
-    def environ_get(self, environ_ptr, buf_ptr):
-        for item in self.env:
-            raw = item.encode() + b"\0"
-            self.put32(environ_ptr, buf_ptr)
-            self.mem.write(buf_ptr, raw)
-            environ_ptr += 4
-            buf_ptr += len(raw)
-
-    def clock_res_get(self, clock_id, out):
-        self.put64(out, 1000)
-
-    def clock_time_get(self, clock_id, precision, out):
-        now = (time.time_ns, time.monotonic_ns, time.process_time_ns, time.thread_time_ns)
-        if clock_id > 3:
-            raise WasiError(EINVAL)
-        self.put64(out, now[clock_id]())
-
-    def random_get(self, buf, size):
-        self.mem.write(buf, os.urandom(size))
-
-    def sched_yield(self):
-        pass
-
-    def proc_exit(self, code):
-        raise WasiExit(code)
-
-    def poll_oneoff(self, in_ptr, out_ptr, count, nevents_ptr):
-        events = []
-        for i in range(count):
-            raw = self.mem.read(in_ptr + 48 * i, 48)
-            userdata, tag = struct.unpack_from("<QB", raw, 0)
-            kind = 0 if tag == 0 else tag
-            if tag == 0:  # a clock: sleep until the timeout
-                clock_id, timeout, _precision, flags = struct.unpack_from("<IxxxxQQH", raw, 16)
-                if flags & 1:  # absolute
-                    now = time.time_ns() if clock_id == 0 else time.monotonic_ns()
-                    timeout = max(0, timeout - now)
-                time.sleep(timeout / 1e9)
-            events.append(struct.pack("<QHBxxxxxQHxxxxxx", userdata, ESUCCESS, kind, 0, 0))
-        self.mem.write(out_ptr, b"".join(events))
-        self.put32(nevents_ptr, len(events))
-
-    # --- the preopened directory
-
-    def fd_prestat_get(self, fd, buf):
-        if not 3 <= fd < 3 + len(PREOPENS):
-            raise WasiError(EBADF)
-        self.mem.write(buf, struct.pack("<BxxxI", 0, len(PREOPENS[fd - 3])))  # a directory, and the size of its name
-
-    def fd_prestat_dir_name(self, fd, path, size):
-        if not 3 <= fd < 3 + len(PREOPENS):
-            raise WasiError(EBADF)
-        self.mem.write(path, PREOPENS[fd - 3].encode()[:size])
-
-    # --- file descriptors
-
-    def fd_close(self, fd):
-        entry = self.file_entry(fd)
-        if fd < 3 + len(PREOPENS):
-            return
-        if entry.osfd >= 0:
-            os.close(entry.osfd)
-        del self.fds[fd]
-
-    def fd_read(self, fd, iovs, count, out):
-        entry = self.file_entry(fd)
-        total = 0
-        for buf, size in self.iovs(iovs, count):
-            if entry.kind == "stdin":
-                data = self.stdin[self.stdin_pos : self.stdin_pos + size]
-                self.stdin_pos += len(data)
-            elif entry.kind == "file":
-                data = os.read(entry.osfd, size)
-            else:
-                raise WasiError(EISDIR if entry.kind == "dir" else EBADF)
-            self.mem.write(buf, data)
-            total += len(data)
-            if len(data) < size:
-                break
-        self.put32(out, total)
-
-    def fd_write(self, fd, iovs, count, out):
-        entry = self.file_entry(fd)
-        total = 0
-        for buf, size in self.iovs(iovs, count):
-            data = self.mem.read(buf, size)
-            if entry.kind == "stdout":
-                if self.pipe_limit is not None and self.written + len(data) > self.pipe_limit:
-                    raise WasiError(EPIPE)
-                self.written += len(data)
-                self.write_out(data)
-            elif entry.kind == "stderr":
-                self.write_err(data)
-            elif entry.kind == "file":
-                data = data[: os.write(entry.osfd, data)]
-            else:
-                raise WasiError(EBADF)
-            total += len(data)
-        self.put32(out, total)
-
-    def fd_seek(self, fd, offset, whence, out):
-        entry = self.file_entry(fd)
-        if entry.kind != "file":
-            raise WasiError(ESPIPE)
-        # The first snapshot numbers the origins differently: CUR, END, SET.
-        origins = (os.SEEK_CUR, os.SEEK_END, os.SEEK_SET) if self.old else (os.SEEK_SET, os.SEEK_CUR, os.SEEK_END)
-        self.put64(out, os.lseek(entry.osfd, s64(offset), origins[whence]))
-
-    def fd_renumber(self, fd, to):
-        entry = self.file_entry(fd)
-        other = self.fds.get(to)
-        if other is not None and other is not entry and other.osfd >= 0 and to >= 3 + len(PREOPENS):
-            os.close(other.osfd)
-        self.fds[to] = entry
-        if fd != to:
-            del self.fds[fd]
-
-    def fd_tell(self, fd, out):
-        self.fd_seek(fd, 0, 1, out)
-
-    def fd_sync(self, fd):
-        entry = self.file_entry(fd)
-        if entry.kind == "file":
-            os.fsync(entry.osfd)
-
-    def fd_datasync(self, fd):
-        self.fd_sync(fd)
-
-    def fd_advise(self, fd, offset, length, advice):
-        self.file_entry(fd)
-
-    def fd_fdstat_get(self, fd, buf):
-        entry = self.file_entry(fd)
-        if entry.kind == "dir":
-            kind = 3
-        elif entry.kind == "file":
-            kind = filetype_of(os.fstat(entry.osfd).st_mode)
-        else:
-            kind = 2
-        self.mem.write(buf, struct.pack("<BxHxxxxQQ", kind, 0, ALL_RIGHTS, ALL_RIGHTS))
-
-    def fd_fdstat_set_flags(self, fd, flags):
-        self.file_entry(fd)
-
-    def stat_bytes(self, st):
-        return struct.pack(
-            "<QQBxxxxxxxQQQQQ", st.st_dev, st.st_ino, filetype_of(st.st_mode), st.st_nlink, st.st_size,
-            st.st_atime_ns, st.st_mtime_ns, st.st_ctime_ns,
-        )  # fmt: skip
-
-    def fd_filestat_get(self, fd, buf):
-        entry = self.file_entry(fd)
-        if entry.kind == "file":
-            self.mem.write(buf, self.stat_bytes(os.fstat(entry.osfd)))
-        elif entry.kind == "dir":
-            self.mem.write(buf, self.stat_bytes(os.stat(entry.path)))
-        else:
-            self.mem.write(buf, struct.pack("<QQBxxxxxxxQQQQQ", 0, 0, 2, 1, 0, 0, 0, 0))
-
-    def fd_filestat_set_size(self, fd, size):
-        entry = self.file_entry(fd)
-        if entry.kind != "file":
-            raise WasiError(EBADF)
-        os.ftruncate(entry.osfd, size)
-
-    def times(self, current, atim, mtim, flags):
-        """The (atime, mtime) in ns that FST_FLAGS ask for; CURRENT is the file's stat."""
-        now = time.time_ns()
-        a = now if flags & 2 else atim if flags & 1 else current.st_atime_ns
-        m = now if flags & 8 else mtim if flags & 4 else current.st_mtime_ns
-        return a, m
-
-    def fd_filestat_set_times(self, fd, atim, mtim, flags):
-        entry = self.file_entry(fd)
-        if entry.kind == "file":
-            os.utime(entry.osfd, ns=self.times(os.fstat(entry.osfd), atim, mtim, flags))
-        elif entry.kind == "dir":
-            os.utime(entry.path, ns=self.times(os.stat(entry.path), atim, mtim, flags))
-        else:
-            raise WasiError(EBADF)
-
-    def fd_readdir(self, fd, buf, size, cookie, used_ptr):
-        entry = self.dir_entry(fd)
-        names = [(".", os.stat(entry.path)), ("..", os.stat(os.path.join(entry.path, "..")))]
-        for name in sorted(os.listdir(entry.path)):
-            try:
-                names.append((name, os.lstat(os.path.join(entry.path, name))))
-            except OSError:
-                continue
-        out = b""
-        for index in range(cookie, len(names)):
-            name, st = names[index]
-            raw = name.encode()
-            out += struct.pack("<QQIBxxx", index + 1, st.st_ino, len(raw), filetype_of(st.st_mode)) + raw
-            if len(out) >= size:
-                break
-        out = out[:size]
-        self.mem.write(buf, out)
-        self.put32(used_ptr, len(out))
-
-    # --- paths
-
-    def path_open(self, dirfd, dirflags, ptr, size, oflags, rights, inheriting, fdflags, out):
-        follow = bool(dirflags & 1)
-        path = self.resolve(dirfd, ptr, size, follow)
-        write = bool(rights & (RIGHT_WRITE | RIGHT_SET_SIZE | RIGHT_ALLOCATE))
-        read = bool(rights & (RIGHT_READ | RIGHT_READDIR)) or not write
-        exists_dir = os.path.isdir(path) if follow else os.path.isdir(path) and not os.path.islink(path)
-        if oflags & 2 or exists_dir:  # a directory
-            if oflags & 1 and not os.path.exists(path):
-                raise WasiError(EISDIR if not oflags & 2 else ENOENT)
-            if not os.path.isdir(path):
-                raise WasiError(ENOTDIR if os.path.exists(path) else ENOENT)
-            if write and not oflags & 2:
-                raise WasiError(EISDIR)
-            self.put32(out, self.add_fd(Fd("dir", path)))
-            return
-        flags = os.O_RDWR if read and write else os.O_WRONLY if write else os.O_RDONLY
-        flags |= getattr(os, "O_CLOEXEC", 0)
-        if oflags & 1:
-            flags |= os.O_CREAT
-        if oflags & 4:
-            flags |= os.O_EXCL
-        if oflags & 8:
-            flags |= os.O_TRUNC
-        if fdflags & 1:
-            flags |= os.O_APPEND
-        if not follow:
-            flags |= getattr(os, "O_NOFOLLOW", 0)
-        self.put32(out, self.add_fd(Fd("file", path, os.open(path, flags, 0o666))))
-
-    def path_create_directory(self, fd, ptr, size):
-        os.mkdir(self.resolve(fd, ptr, size, follow=False))
-
-    def path_remove_directory(self, fd, ptr, size):
-        os.rmdir(self.resolve(fd, ptr, size, follow=False))
-
-    def path_unlink_file(self, fd, ptr, size):
-        os.unlink(self.resolve(fd, ptr, size, follow=False))
-
-    def path_rename(self, fd, ptr, size, new_fd, new_ptr, new_size):
-        os.rename(self.resolve(fd, ptr, size, follow=False), self.resolve(new_fd, new_ptr, new_size, follow=False))
-
-    def path_link(self, fd, flags, ptr, size, new_fd, new_ptr, new_size):
-        source = self.resolve(fd, ptr, size, follow=bool(flags & 1))
-        os.link(source, self.resolve(new_fd, new_ptr, new_size, follow=False), follow_symlinks=bool(flags & 1))
-
-    def path_symlink(self, ptr, size, fd, new_ptr, new_size):
-        os.symlink(self.string(ptr, size), self.resolve(fd, new_ptr, new_size, follow=False))
-
-    def path_readlink(self, fd, ptr, size, buf, buf_size, used_ptr):
-        target = os.readlink(self.resolve(fd, ptr, size, follow=False)).encode()[:buf_size]
-        self.mem.write(buf, target)
-        self.put32(used_ptr, len(target))
-
-    def path_filestat_get(self, fd, flags, ptr, size, buf):
-        path = self.resolve(fd, ptr, size, follow=bool(flags & 1))
-        self.mem.write(buf, self.stat_bytes(os.stat(path) if flags & 1 else os.lstat(path)))
-
-    def path_filestat_set_times(self, fd, flags, ptr, size, atim, mtim, fst_flags):
-        path = self.resolve(fd, ptr, size, follow=bool(flags & 1))
-        st = os.stat(path) if flags & 1 else os.lstat(path)
-        os.utime(path, ns=self.times(st, atim, mtim, fst_flags), follow_symlinks=bool(flags & 1))
+def wasi_host(root, argv, stdin=b"", stdout=None, stderr=None, env=None, pipe_limit=None):
+    """The WASI host of one program run: a `Preview1` over the directory ROOT, which the program sees as
+    `/` (and as `.`, for a C library of the first snapshot). STDIN is bytes; STDOUT and STDERR are callables that take
+    bytes; PIPE_LIMIT is how many bytes the program may write to STDOUT before it gets a broken pipe (that is how
+    `yes | head -3` ends)."""
+    write_out = stdout or (lambda data: None)
+    written = 0
+
+    def out(data):
+        nonlocal written
+        if pipe_limit is not None and written + len(data) > pipe_limit:
+            raise BrokenPipeError  # the host's answer to the program is EPIPE
+        written += len(data)
+        write_out(data)
+
+    return preview1.Preview1(
+        argv, env, {name: root for name in PREOPENS}, stdin, out, stderr or (lambda data: None)
+    )  # fmt: skip
 
 
 # --- the shell
@@ -707,7 +267,7 @@ class Shell:
             module, args = self.extra[name], argv
         else:
             module, args = self.module, ["coreutils", *argv]
-        wasi = Wasi(
+        wasi = wasi_host(
             self.cwd, args, stdin, stdout, self.console_writer(),
             env={"PWD": "/", "HOME": "/"}, pipe_limit=limit,
         )  # fmt: skip
