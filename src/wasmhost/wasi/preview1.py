@@ -542,8 +542,11 @@ class Preview1:
         Clockid.realtime: ("time", time.time_ns),
         Clockid.monotonic: ("monotonic", time.monotonic_ns),
         Clockid.process_cputime_id: ("process_time", time.process_time_ns),
-        Clockid.thread_cputime_id: ("thread_time", time.thread_time_ns),
     }
+    if hasattr(time, "thread_time_ns"):
+        _CLOCKS[Clockid.thread_cputime_id] = ("thread_time", time.thread_time_ns)
+    else:  # Python on Emscripten (Pyodide): no such clock, and one thread, so the thread's CPU time is the process's
+        _CLOCKS[Clockid.thread_cputime_id] = ("process_time", time.process_time_ns)
 
     @_call(i32, i32)
     def clock_res_get(self, clock_id: int, ptr: int) -> None:

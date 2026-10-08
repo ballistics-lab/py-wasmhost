@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import errno
 from pathlib import Path
 
 import pytest
@@ -61,7 +62,8 @@ def test_errors_are_a_message_and_a_code(capsys: pytest.CaptureFixture[str], ses
         (["--invoke", "add", arith, "4294967295", "0"], "number too large"),
         (
             ["/no/such/file.wasm"],
-            'failed to open wasm module "/no/such/file.wasm"\n\nCaused by:\n    No such file or directory (os error 2)',
+            'failed to open wasm module "/no/such/file.wasm"\n\nCaused by:\n'
+            f"    No such file or directory (os error {errno.ENOENT})",
         ),
     ):
         assert _cli.main(["run", "--backend", session, *line]) == 1

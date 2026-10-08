@@ -100,6 +100,45 @@ pip install wasmhost[wasmtime]
 The `wasm3` backend has no extra: pywasm3's PyPI release is years behind the API used here, so install it from git
 (CPython 3.11+, needs a C compiler): `pip install "pywasm3 @ git+https://github.com/wasm3/pywasm3"`.
 
+### Pyodide
+
+The ordinary wheel (pure Python, `py3-none-any`) installs with `micropip`, and the `pyodide` backend is the only one that
+starts there, so nothing is configured (see [Pyodide as a backend](#pyodide-as-a-backend) for what it can and can not do).
+
+From the Pyodide REPL, or any Python that runs in Pyodide:
+
+```python
+import micropip
+
+await micropip.install("wasmhost")
+
+import wasmhost
+
+print(wasmhost.get_backend().name)  # pyodide
+wasmhost.selftest()  # the same self-test as anywhere else
+```
+
+From JavaScript, in a browser or in Node (`npm install pyodide`):
+
+```js
+import { loadPyodide } from "pyodide";
+
+const py = await loadPyodide();
+await py.loadPackage("micropip");
+await py.runPythonAsync(`
+import micropip
+await micropip.install("wasmhost")
+
+import wasmhost
+print(wasmhost.get_backend().name)  # pyodide
+wasmhost.selftest()
+`);
+```
+
+A wheel built from a checkout (`uv build --wheel`) installs from its path or URL, e.g. `await micropip.install("emfs:/wheels/wasmhost-...-py3-none-any.whl")`,
+after putting the file in Pyodide's file system (`py.FS.writeFile`, or `mountNodeFS` on Node). In the repository itself,
+`node tests/pyodide_run.mjs selftest` and `pytest` run the self-test and the suite inside Pyodide.
+
 ### Pythonista and PythonIDE (iOS)
 
 The ordinary wheel: it is pure Python (`py3-none-any`). In StaSh (Pythonista) or PythonIDE's pip,
@@ -270,14 +309,15 @@ fallback if the C API ever fails. The self-test reports which was used (`N bytes
 | Backend     | Where                                                          | How it is detected                                                                                                                                                                                                                                                  |
 | ----------- | -------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `wasmtime`  | anywhere with the `wasmtime` package                           | `import wasmtime` (`pip install wasmtime`) |
-| `wasm3`     | CPython 3.11+ with [pywasm3](https://github.com/wasm3/pywasm3) | `import wasm3`; install it from git: `uv add "pywasm3 @ git+https://github.com/wasm3/pywasm3"` (its PyPI release predates the API used here) |
-| `jscontext` | iOS (Pythonista, PythonIDE), and a Mac with rubicon-objc       | Apple's `JSContext` through an Objective-C bridge: Pythonista's `objc_util` (both iOS apps have it), or [`rubicon-objc`](https://github.com/beeware/rubicon-objc) (`pip install rubicon-objc`; tested in CI on macOS, not on a device). `backend.bridge` says which |
-| `jsc`       | Linux, macOS                                                   | JavaScriptCore's C API through `ctypes`, no PyGObject: `apt install libjavascriptcoregtk-4.1-0` (macOS uses the system framework) |
-| `gi-jsc`    | Linux                                                          | the same engine through PyGObject (`apt install gir1.2-javascriptcoregtk-4.1 python3-gi`, or `pip install wasmhost[gi-jsc]`: see below) |
 | `node`      | anywhere with Node.js                                          | `node` on `PATH` |
 | `bun`       | anywhere with [Bun](https://bun.sh)                            | `bun` on `PATH`. It is JavaScriptCore (as in Safari and on iOS) in a runtime of its own, and runs the very script `node` does |
+| `jsc`       | Linux, macOS                                                   | JavaScriptCore's C API through `ctypes`, no PyGObject: `apt install libjavascriptcoregtk-4.1-0` (macOS uses the system framework) |
+| `gi-jsc`    | Linux                                                          | the same engine through PyGObject (`apt install gir1.2-javascriptcoregtk-4.1 python3-gi`, or `pip install wasmhost[gi-jsc]`: see below) |
+| `wasm3`     | CPython 3.11+ with [pywasm3](https://github.com/wasm3/pywasm3) | `import wasm3`; install it from git: `uv add "pywasm3 @ git+https://github.com/wasm3/pywasm3"` (its PyPI release predates the API used here) |
+| `jscontext` | iOS (Pythonista, PythonIDE), and a Mac with rubicon-objc       | Apple's `JSContext` through an Objective-C bridge: Pythonista's `objc_util` (both iOS apps have it), or [`rubicon-objc`](https://github.com/beeware/rubicon-objc) (`pip install rubicon-objc`; tested in CI on macOS, not on a device). `backend.bridge` says which |
+| `pyodide`   | inside [Pyodide](https://pyodide.org) (CPython in WebAssembly: a browser or Node)    | `import js`; it calls the `WebAssembly` of the engine around Python directly (no `pip install`: Pyodide is not on PyPI, see [Pyodide](#pyodide-as-a-backend)) |
 
-With nothing configured, the first backend that starts wins, in the order shown: the native runtimes when they are installed, then the JavaScript engines. (On Pythonista nothing above `jscontext` can be installed, so it is the pick there; on a Mac that has rubicon-objc, `wasmtime` still comes first.) Each backend's constructor is its
+With nothing configured, the first backend that starts wins, in the order shown, which is by speed (a JIT before an interpreter), then by how much of WebAssembly the runtime runs, then by what it costs to run: `wasmtime`, `node`, `bun`, `jsc`, `gi-jsc`, then the interpreters `wasm3` and `jscontext`, and `pyodide` last. (On Pythonista nothing above `jscontext` can be installed, so it is the pick there.) Each backend's constructor is its
 own probe: it fails when its runtime is missing. Choose one with `WASMHOST_BACKEND=<name>` (or `--runtime <name>`, the same as `--backend <name>`, in `run`, `bench` and `self test`; the option wins over the variable),
 `wasmhost.set_backend("<name>")` or `Module(..., backend="<name>")`; `wasmhost.get_backend().name` says which is in
 use. `wasmhost.close()` closes the backends it started. (In WebAssembly's words the *host* is the embedder, the
@@ -334,6 +374,33 @@ on iOS; the cost of a call from Python is the same either way (the bridge domina
 (2.9.6 and 2.9.7 tried) panics ("Deno has panicked", `capacity overflow`) when a `WebAssembly.Exception` leaves
 `vm.runInContext`, which is what a module that throws an exception of a tag the caller does not catch does there. Node
 and Bun are the same V8 and JavaScriptCore without this. It is an upstream bug; see `BACKLOG.md` (B-701b).
+
+### Pyodide as a backend
+
+wasmhost can also run *inside* Pyodide, and then the backend is the `WebAssembly` object of the JavaScript engine that Pyodide
+runs in, called through Pyodide's `js` module, with no source text evaluated and no process started. Load the package into
+Pyodide (`micropip.install` a wheel, or mount the source) and it is picked by itself, as nothing else can start there:
+
+```python
+import wasmhost  # in Pyodide
+
+instance = wasmhost.Instance(wasmhost.Module(data))  # backend: pyodide
+```
+
+It takes host functions and globals, memories and tables made on their own and imported. It has no `timeout`, `fuel` or
+`isolated` (`supports(...)` says so; Python has one thread there and nothing to stop a call with), and no `Memory.view`
+(Pyodide copies a buffer when it makes a `memoryview`). Threads do not exist in Python on Emscripten, and the tests that need
+them, symbolic links or the per-thread CPU clock are skipped there.
+
+The self-test and the whole suite run in CI inside Pyodide on Node (`tests/pyodide_run.mjs`); to try it here:
+
+```bash
+npm install --global pyodide            # or `npm install pyodide` in the folder you run from
+node tests/pyodide_run.mjs selftest     # python -m wasmhost self test --backend pyodide, inside Pyodide
+node tests/pyodide_run.mjs pytest       # the suite on the pyodide backend (needs a network for pytest's wheel)
+```
+
+`--backend pyodide` on an ordinary Python only says "No module named 'js'", as expected.
 
 ### What has run where
 
@@ -418,6 +485,11 @@ most "command line" modules are built against: all 46 functions of the specifica
 offers `wasi_unstable`, the first snapshot, which older toolchains (wasienv, wasm-clang) still produce and which the Lua build of
 `examples/coreutils.py` imports from. It is checked against the specification's own `witx` files of both snapshots (names, signatures,
 the numbers of errors and flags, the layout of the records), and its self-test step runs a small WASI program of each on every backend.
+
+It runs on the `pyodide` backend too (wasmhost inside Pyodide; the self-test step and the tests pass there), with what Emscripten
+lacks: the files a program sees are Pyodide's virtual file system (on Node a real folder can be mounted with `mountNodeFS`), there are no
+symbolic links (`path_symlink` and `path_readlink` fail). Python there has no per-thread CPU clock, so `thread_cputime_id` reads the process's CPU
+clock, which is the same thing with one thread.
 
 ```python
 import sys
@@ -560,6 +632,7 @@ uv run pytest --wasm-backend bun         # needs `bun` on PATH
 uv run pytest --wasm-backend wasmtime    # or wasm3, or jsc (needs the JavaScriptCore library)
 uv run pytest --wasm-backend gi-jsc      # needs PyGObject: `uv sync --extra gi-jsc` after the packages above, or a system-site-packages venv (the CI job)
 uv run pyright && uv run ruff check
+node tests/pyodide_run.mjs pytest        # the suite inside Pyodide (see [Pyodide as a backend](#pyodide-as-a-backend))
 ```
 
 [sources]: https://github.com/ballistics-lab/py-wasmhost
