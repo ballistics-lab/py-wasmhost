@@ -62,14 +62,17 @@ class _HostFailed(Exception):
     """A host function raised (or returned the wrong thing); the exception is in `JSBackend._raised`."""
 
 
-_JS_MESSAGE = re.compile(r"^(?:\[JS\] )?(\w+): ?(.*)$", re.DOTALL)
+_JS_MESSAGE = re.compile(r"^(?:\[JS\] )?(\w+)(?:: ?(.*))?$", re.DOTALL)
 
 
 def _translate(text: str) -> BaseException | None:
-    """The Python exception for a JavaScript error's text (`Name: message`), if it has one."""
+    """
+    The Python exception for a JavaScript error's text (`Name: message`, or just `Name` when the message is empty),
+    if it has one.
+    """
     m = _JS_MESSAGE.match(text)
     cls = _JS_ERRORS.get(m.group(1)) if m else None
-    return cls(m.group(2)) if cls and m else None
+    return cls(m.group(2) or "") if cls and m else None
 
 
 # The registry lives in the engine, under one global. ES5 plus BigInt literals (which only appear in
