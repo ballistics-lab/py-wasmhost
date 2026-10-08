@@ -100,6 +100,45 @@ pip install wasmhost[wasmtime]
 The `wasm3` backend has no extra: pywasm3's PyPI release is years behind the API used here, so install it from git
 (CPython 3.11+, needs a C compiler): `pip install "pywasm3 @ git+https://github.com/wasm3/pywasm3"`.
 
+### Pyodide
+
+The ordinary wheel (pure Python, `py3-none-any`) installs with `micropip`, and the `pyodide` backend is the only one that
+starts there, so nothing is configured (see [Pyodide as a backend](#pyodide-as-a-backend) for what it can and can not do).
+
+From the Pyodide REPL, or any Python that runs in Pyodide:
+
+```python
+import micropip
+
+await micropip.install("wasmhost")
+
+import wasmhost
+
+print(wasmhost.get_backend().name)  # pyodide
+wasmhost.selftest()  # the same self-test as anywhere else
+```
+
+From JavaScript, in a browser or in Node (`npm install pyodide`):
+
+```js
+import { loadPyodide } from "pyodide";
+
+const py = await loadPyodide();
+await py.loadPackage("micropip");
+await py.runPythonAsync(`
+import micropip
+await micropip.install("wasmhost")
+
+import wasmhost
+print(wasmhost.get_backend().name)  # pyodide
+wasmhost.selftest()
+`);
+```
+
+A wheel built from a checkout (`uv build --wheel`) installs from its path or URL, e.g. `await micropip.install("emfs:/wheels/wasmhost-...-py3-none-any.whl")`,
+after putting the file in Pyodide's file system (`py.FS.writeFile`, or `mountNodeFS` on Node). In the repository itself,
+`node tests/pyodide_run.mjs selftest` and `pytest` run the self-test and the suite inside Pyodide.
+
 ### Pythonista and PythonIDE (iOS)
 
 The ordinary wheel: it is pure Python (`py3-none-any`). In StaSh (Pythonista) or PythonIDE's pip,
@@ -270,15 +309,15 @@ fallback if the C API ever fails. The self-test reports which was used (`N bytes
 | Backend     | Where                                                          | How it is detected                                                                                                                                                                                                                                                  |
 | ----------- | -------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `wasmtime`  | anywhere with the `wasmtime` package                           | `import wasmtime` (`pip install wasmtime`) |
-| `wasm3`     | CPython 3.11+ with [pywasm3](https://github.com/wasm3/pywasm3) | `import wasm3`; install it from git: `uv add "pywasm3 @ git+https://github.com/wasm3/pywasm3"` (its PyPI release predates the API used here) |
 | `node`      | anywhere with Node.js                                          | `node` on `PATH` |
 | `bun`       | anywhere with [Bun](https://bun.sh)                            | `bun` on `PATH`. It is JavaScriptCore (as in Safari and on iOS) in a runtime of its own, and runs the very script `node` does |
-| `jscontext` | iOS (Pythonista, PythonIDE), and a Mac with rubicon-objc       | Apple's `JSContext` through an Objective-C bridge: Pythonista's `objc_util` (both iOS apps have it), or [`rubicon-objc`](https://github.com/beeware/rubicon-objc) (`pip install rubicon-objc`; tested in CI on macOS, not on a device). `backend.bridge` says which |
 | `jsc`       | Linux, macOS                                                   | JavaScriptCore's C API through `ctypes`, no PyGObject: `apt install libjavascriptcoregtk-4.1-0` (macOS uses the system framework) |
 | `gi-jsc`    | Linux                                                          | the same engine through PyGObject (`apt install gir1.2-javascriptcoregtk-4.1 python3-gi`, or `pip install wasmhost[gi-jsc]`: see below) |
+| `wasm3`     | CPython 3.11+ with [pywasm3](https://github.com/wasm3/pywasm3) | `import wasm3`; install it from git: `uv add "pywasm3 @ git+https://github.com/wasm3/pywasm3"` (its PyPI release predates the API used here) |
+| `jscontext` | iOS (Pythonista, PythonIDE), and a Mac with rubicon-objc       | Apple's `JSContext` through an Objective-C bridge: Pythonista's `objc_util` (both iOS apps have it), or [`rubicon-objc`](https://github.com/beeware/rubicon-objc) (`pip install rubicon-objc`; tested in CI on macOS, not on a device). `backend.bridge` says which |
 | `pyodide`   | inside [Pyodide](https://pyodide.org) (CPython in WebAssembly: a browser or Node)    | `import js`; it calls the `WebAssembly` of the engine around Python directly (no `pip install`: Pyodide is not on PyPI, see [Pyodide](#pyodide-as-a-backend)) |
 
-With nothing configured, the first backend that starts wins, in the order shown, which is by speed (a JIT before an interpreter), then by how much of WebAssembly the runtime runs, then by what it costs to run: the native runtimes when they are installed, then Node and Bun, then the engines of the system. (On Pythonista nothing above `jscontext` can be installed, so it is the pick there; on a Mac that has Node, `node` comes before `jscontext`, and `wasmtime` before both.) Each backend's constructor is its
+With nothing configured, the first backend that starts wins, in the order shown, which is by speed (a JIT before an interpreter), then by how much of WebAssembly the runtime runs, then by what it costs to run: `wasmtime`, `node`, `bun`, `jsc`, `gi-jsc`, then the interpreters `wasm3` and `jscontext`, and `pyodide` last. (On Pythonista nothing above `jscontext` can be installed, so it is the pick there.) Each backend's constructor is its
 own probe: it fails when its runtime is missing. Choose one with `WASMHOST_BACKEND=<name>` (or `--runtime <name>`, the same as `--backend <name>`, in `run`, `bench` and `self test`; the option wins over the variable),
 `wasmhost.set_backend("<name>")` or `Module(..., backend="<name>")`; `wasmhost.get_backend().name` says which is in
 use. `wasmhost.close()` closes the backends it started. (In WebAssembly's words the *host* is the embedder, the
