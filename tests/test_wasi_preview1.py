@@ -547,7 +547,10 @@ def test_filestat_of_a_path(host: Host, root: Path) -> None:
     assert host("path_filestat_get", 3, FOLLOW, ptr, size, out) == Errno.noent
 
 
-@pytest.mark.skipif(sys.platform == "win32", reason="symbolic links need a privilege on Windows")
+@pytest.mark.skipif(
+    sys.platform in ("win32", "emscripten"),
+    reason="symbolic links need a privilege on Windows; Emscripten's file system has none",
+)
 def test_symlink_readlink_and_link(host: Host, root: Path) -> None:
     (root / "target").write_text("T")
     t, tl = host.text("target")

@@ -9,36 +9,38 @@ from ._backend import Backend
 from ._js import BunBackend, GIJavaScriptCoreBackend, JSBackend, JSContextBackend, NodeBackend
 from ._jsc import JSCBackend
 from ._native import Wasm3Backend, WasmtimeBackend
+from ._pyodide import PyodideBackend
 
 __all__ = ("AUTO_ORDER", "BACKENDS", "JS_AUTO_ORDER", "JS_BACKENDS", "default_backend")
 
 BACKENDS: Final[dict[str, type[Backend]]] = {
     "wasmtime": WasmtimeBackend,
     "wasm3": Wasm3Backend,
+    "node": NodeBackend,
+    "bun": BunBackend,
     "jscontext": JSContextBackend,
     "jsc": JSCBackend,
     "gi-jsc": GIJavaScriptCoreBackend,
-    "node": NodeBackend,
-    "bun": BunBackend,
+    "pyodide": PyodideBackend,
 }
 # The ones that are JavaScript engines: a package that has JavaScript of its own to run needs these.
 JS_BACKENDS: Final[dict[str, type[JSBackend]]] = {
+    "node": NodeBackend,
+    "bun": BunBackend,
     "jscontext": JSContextBackend,
     "jsc": JSCBackend,
     "gi-jsc": GIJavaScriptCoreBackend,
-    "node": NodeBackend,
-    "bun": BunBackend,
 }
 
-# Tried in this order when nothing is chosen: the in-process runtimes when installed -- wasmtime (a JIT), wasm3
-# (an interpreter) -- then the JavaScript engines: JSContext (iOS; also a Mac with rubicon-objc, where the native
-# runtimes above win), JavaScriptCore through its C API, through PyGObject, then Node, then Bun. On Pythonista
-# nothing above JSContext can be installed, so it is the pick there. Note that iOS gives it no JIT for wasm: for pure
-# computation `wasm3` would be several times faster, but a C extension can't be installed there (see `wasmhost bench`).
-# Each constructor is its own availability
-# probe: it raises when its runtime isn't there (ImportError for objc_util/wasmtime/gi, a missing `node` or `bun`
+# Tried in this order when nothing is chosen. The order is by speed (a JIT before an interpreter), then by how much of
+# WebAssembly the runtime runs, then by how little it costs to run it: wasmtime (a JIT, in process), wasm3 (an
+# interpreter, in process), then the JavaScript engines: Node and Bun (a JIT, a process of their own), JSContext (iOS,
+# or a Mac with rubicon-objc; no JIT for wasm on iOS), JavaScriptCore through its C API, through PyGObject, and last
+# Pyodide, which is the only one that can start inside it. On Pythonista nothing above JSContext can be installed, so
+# it is the pick there. Each constructor is its own availability
+# probe: it raises when its runtime isn't there (ImportError for objc_util/wasmtime/gi/js, a missing `node` or `bun`
 # binary, an engine without WebAssembly), so "available" means "could actually start".
-AUTO_ORDER: Final[tuple[str, ...]] = ("wasmtime", "wasm3", "jscontext", "jsc", "gi-jsc", "node", "bun")
+AUTO_ORDER: Final[tuple[str, ...]] = ("wasmtime", "wasm3", "node", "bun", "jscontext", "jsc", "gi-jsc", "pyodide")
 JS_AUTO_ORDER: Final[tuple[str, ...]] = tuple(n for n in AUTO_ORDER if n in JS_BACKENDS)
 
 

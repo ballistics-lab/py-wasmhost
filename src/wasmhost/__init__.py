@@ -46,6 +46,7 @@ from ._binary import (
 from ._js import BunBackend, GIJavaScriptCoreBackend, JSBackend, JSContextBackend, NodeBackend
 from ._jsc import JSCBackend
 from ._native import Wasm3Backend, WasmtimeBackend
+from ._pyodide import PyodideBackend
 from ._registry import AUTO_ORDER, BACKENDS, JS_AUTO_ORDER, JS_BACKENDS, default_backend
 from ._selftest import selftest
 
@@ -75,6 +76,7 @@ __all__ = (
     "MemoryType",
     "Module",
     "NodeBackend",
+    "PyodideBackend",
     "Ref",
     "Table",
     "TableType",

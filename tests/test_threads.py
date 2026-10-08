@@ -2,13 +2,18 @@
 
 from __future__ import annotations
 
+import sys
 import threading
 
+import pytest
 import wasm_builder as wb
 
 import wasmhost
 
+no_threads = pytest.mark.skipif(sys.platform == "emscripten", reason="Python on Emscripten can't start a thread")
 
+
+@no_threads
 def test_threads_in_one_backend_get_right_answers(session: str) -> None:
     ex = wasmhost.Instance(wasmhost.Module(wb.arith())).exports
     errors: list[BaseException] = []
@@ -28,6 +33,7 @@ def test_threads_in_one_backend_get_right_answers(session: str) -> None:
     assert not errors, errors[0]
 
 
+@no_threads
 def test_two_backends_do_not_share_a_lock(session: str) -> None:
     first = wasmhost.get_backend()
     second = type(first)()

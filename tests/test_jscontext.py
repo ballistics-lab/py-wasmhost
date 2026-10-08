@@ -19,7 +19,12 @@ import wasmhost
 @pytest.fixture(params=["objc_util", "rubicon", "objc_util+c", "rubicon+c"])
 def jscontext(request: pytest.FixtureRequest, monkeypatch: pytest.MonkeyPatch) -> Iterator[wasmhost.JSContextBackend]:
     engine = None if request.param.endswith("+c") else fake_objc.real_engine()
-    fake_objc.install(monkeypatch, engine, request.param)
+    try:
+        fake_objc.install(monkeypatch, engine, request.param)
+    except (AttributeError, OSError) as exc:  # no JavaScriptCore C library to drive (Pyodide)
+        if request.param.endswith("+c"):
+            pytest.skip(f"JavaScriptCore's C API is not here: {exc}")
+        raise
     backend = wasmhost.JSContextBackend()
     yield backend
     backend.close()

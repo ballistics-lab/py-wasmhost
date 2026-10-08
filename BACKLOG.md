@@ -29,10 +29,12 @@ the feature itself:
 
 ## Working rules (the owner's conventions; read before starting)
 
-- **The owner opens the PR and names/tidies the branch.** The assistant does not create a PR, rename the branch or squash history. Work goes
-  into the branch the owner names; after a merge, a new change starts from a fresh `main` in a new branch.
-- **Statuses in this file change only on the owner's word.** `[x]`, "DONE" and similar marks are not set on the assistant's own impression
-  (B-302a was once closed wrongly and reopened). A decision of the owner is written with its date.
+- **Nothing is pushed to `main` directly: every change goes through a pull request.** The owner opens the PR and names/tidies the
+  branch; the assistant does not create a PR, rename the branch or squash history. After a merge, a new change starts from a fresh
+  `main` in a new branch.
+- **`[x]` means it is all done:** implemented, tested (CI green where it can run, and said plainly where it was not run), the README and
+  the self-test brought up to date, and agreed with the owner, with no open questions left. Anything less is `[~]` or `[ ]`, and the
+  note says what is missing. A decision of the owner is written with its date.
 - **The API stays as close to the JavaScript WebAssembly API as possible** (JavaScriptCore is the reference engine). The library is an alpha, so
   breaking old code for a cleaner API is allowed; when a new form is added, the old plain `int`/`float` form keeps working. Over-engineering is
   rejected (e.g. wrapper value types).
@@ -43,20 +45,22 @@ the feature itself:
 - **A feature comes with tests, a self-test step and the README/BACKLOG** (see the rule at the top). Run `PATH=/usr/local/bin:$PATH uv tool run
   pre-commit run --all-files` (one run at a time: two in parallel corrupt each other) and look at its result **before** committing; do not chain
   `&& git commit` after a `| tail`.
-- **Every commit:** `git fetch`, `git pull --ff-only` first (the owner pushes to the same branch), then commit, push, and **look at CI** (Tests and
+- **Every commit:** `git fetch`, `git pull --ff-only` first (the owner may push to the same branch), then commit, push, and **look at CI** (Tests and
   Pre-commit, all platforms) instead of trusting the local run. A red CI is fixed at once, not left.
 - **Tell the owner in Ukrainian in the chat, keep this file in English.** When he is confused, explain "as to a child" before continuing. Say honestly what
   was not verified (a device, Windows) and what was a guess.
 - **Sub-agents:** a worktree starts from `main`, which has no `BACKLOG.md` and none of this branch; give an agent a copy of the files it needs (or a
   commit to fast-forward to), and ask it to verify its own work with a script. Check an agent's result yourself before bringing it into the branch.
 
-## Current state (2026-10-07, written as a handoff to the next session)
+## Current state (2026-10-08, written as a handoff to the next session)
 
-**Where things are.** Branch `claude/kind-goldberg-3dsi27`, the one to work in (it started from `main` at `599e2e8`: PR #10 "Limits for untrusted code" and the tag `v0.1.0b2`). Never create a PR or rename the branch: the owner does.
+**Where things are.** `main` is at `5526e29` ("WASI preview1 host, `wasmhost run`, Python 3.15"), with phases 1 to 5 in it. **The Pyodide work is not committed**: it is in the working tree (B-701d below; new files `src/wasmhost/_pyodide.py`, `tests/pyodide_run.mjs`; changed README, BACKLOG, the CI job `Pyodide`, `_registry.py`, `__init__.py`, `wasi/preview1.py` and five test files).
 Look at CI of the newest commit first (`git log`). On 2026-10-08 `Tests` and `Pre-commit` were green on `37a7fd4` (runs 145 and 196, the whole matrix); `Tests` on `1610f5c` (run 137) failed once on `macos-latest / pypy3.11`, the known flake below, and the rest of that run was green. Runs on the newest commits may still be in progress. `Pre-commit` has been green in CI since `d823812` (it was red on every push because `ruff format` kept changing `examples/jitcheck.py`; fixed). Locally `pre-commit` runs pyright, ruff and the whole `pytest` (wasmtime, wasm3, node, bun
 here; `jsc`, `gi-jsc` and `jscontext` only in CI); on Python 3.15.0rc3 the whole suite passed too (906 passed, 166 skipped, before the CLI tests); on the newest commit here it is 969 passed, 166 skipped. The self-test has 35 steps on wasmtime and wasm3 and 41 on the JS engines.
 
-**Done in this branch (phases 1 to 5, in part).**
+**Pyodide backend (2026-10-08, B-701d, `[~]`).** Added on the owner's question: wasmhost inside Pyodide, calling the `WebAssembly` of the engine around it through `js`. `AUTO_ORDER` was reordered by the owner's decision to `wasmtime, wasm3, node, bun, jscontext, jsc, gi-jsc, pyodide` (speed, then specification coverage, then overhead); I measured `wasmhost bench` here (wasmtime, node, jsc only) and **suggested** `wasmtime, jsc, gi-jsc, node, bun, jscontext, wasm3, pyodide` (in-process engines before the pipe of Node: a call 23 us on `jsc` against 74 us on `node`, memory 12099 against 128 MB/s read); **the owner has not answered, so the order in the code is theirs.** Run inside Pyodide 314.0.7 on Node 26: `node tests/pyodide_run.mjs selftest` is 35/35 and `... pytest` is 393 passed, 91 skipped. Not run: the CI job `Pyodide` (never pushed), Pyodide with Python 3.13 (the owner's `sys.implementation` shows `cpython-313`), a browser. Needs `npm install --global pyodide` (or in the folder you run from). The rule for `[x]` changed on the owner's word (2026-10-08): done, tested, agreed, no open questions.
+
+**Done (phases 1 to 5, in part).**
 - Phases 1 to 4: B-201 (`Function`, `signature`, `type()`, identity, `elem`, `call_indirect` net), B-202, B-204, B-301 (`Memory.view`), B-302 (`bench`), B-304 (a lock per backend, `await compile/instantiate`, threads only with
   `threaded=True`), B-507, B-509, fast buffers, Bun in CI, phase 4 (B-401 memory ceiling, B-402/B-403 timeout, B-404 fuel), all closed by the owner. The limits are in one README section, "Limits for untrusted code".
 - **Phase 5 (started by the owner's command): everything is closed except B-503** (B-501, B-501.1, B-502, B-504, B-505, B-506, B-507, B-508, B-509). The package `wasmhost/wasi/` has `preview1.py`: all 46 functions of `wasi_snapshot_preview1` and the 45 of `wasi_unstable` (B-501.1), the class `Preview1`; the package
@@ -82,8 +86,9 @@ with `data segment out of bounds` (README "What has run where").
 it works on the device with its hybrid host: clang and lld compiled C and C++ in `jscontext` (the C++ link took 16 s of 22 s), the same output as on wasmtime and node (`fib(10) = 55`, a WASI program with `argc=3`, C++ with `std::vector` and `std::map`).
 
 **To do first, if the owner has not said otherwise:**
+0. Commit the Pyodide work to a branch (the owner opens the PR; no push to `main`), look at the first run of the job `Pyodide`, then at the whole `Tests` matrix: `test_registry.py` follows the new order, the `+c` bridges of `test_jscontext.py` and the Emscripten skips are new. Close B-701d when it is green and the owner agrees; ask about the order of `AUTO_ORDER` (above), and README "What has run where" has no `pyodide` column yet.
 1. ~~On the device: the self-test after the rename~~ Done 2026-10-07 by the owner: Pythonista 41/41 with the wheel after the rename (call 37 us, batch of 3 94 us); all the examples run on the device (see above).
-2. The CI of the newest commit, and the macOS/PyPy flake (below): it has now come back three times in the eleven runs 124 to 134 on this branch, so "seen once" is out of date; the owner chose to treat it as a flake, but it may be worth the guesses in its entry.
+2. The CI of the newest commit, and the macOS/PyPy flake (below): it has now come back three times in the eleven runs 124 to 134 on the branch of that time, so "seen once" is out of date; the owner chose to treat it as a flake, but it may be worth the guesses in its entry.
 3. The first CI run after Python 3.15 is released (the matrix is unpinned).
 4. B-405 when upstream merges pywasm3's two PRs (#13, #14); B-406 is closed (option b: leave it, documented).
 5. Then the owner picks: B-203 (`externref`), a binary channel for node/bun (about 50 MB/s through the pipe and JSON now), B-006 (CI for examples), or B-503 (the `openat` sandbox, the only open entry of phase 5).
@@ -93,6 +98,7 @@ tidying (B-003), `coreutils.wasm` stays in git (B-004), `tiny-bclibc-wasm` (B-80
 (`bellard.org` is blocked in the assistant's environment; the owner ran it on the device), `coremark.py` (the owner ran it on the device); the "Examples" step in CI runs only `basic.py` and `imports.py` (B-006).
 
 **Things that bit this session (read before touching the same code):**
+- Pyodide: a JavaScript `null` is `pyodide.ffi.jsnull`, not `None` (newer Pyodide); an i64 must reach JavaScript as a `BigInt` and Pyodide turns a `BigInt` into a Python `int` (and a whole `Number` into an `int`, and `-0` into `0`), so the backend passes values as text through a small shim; `JsBuffer.to_memoryview()` copies, so there is no `Memory.view`; an exception raised by a host function comes back out of the call as it was (not as a `JsException`), the backend keeps it in `_raised` anyway; `time.thread_time_ns` and threads do not exist on Emscripten; Pyodide on Node caches wheels under the current folder (`./https:/`) unless `packageCacheDir` is set (now `$WASMHOST_CACHE` or `~/.cache/wasmhost/pyodide-packages`).
 - wasm3: 128 live runtimes per process at most, and an `Instance` is in a reference cycle, so only the cyclic collector frees it (B-406); the `session` fixture in `tests/conftest.py` calls `gc.collect()` for that reason. `suspendable` and
   `gas_limit` must be set **before** the first `find_function`. An instance that timed out is finished.
 - Run one pre-commit at a time and do not edit files during a run (a pytest "Failed" can be only the hook seeing a tracked file change). Use the `uv` from pip: `PATH=/usr/local/bin:$PATH uv tool run pre-commit run --all-files` (the one in
@@ -103,11 +109,11 @@ tidying (B-003), `coreutils.wasm` stays in git (B-004), `tiny-bclibc-wasm` (B-80
 - On Windows `time.monotonic` ticks every 15.6 ms: a timing test uses `time.perf_counter` (a 30 ms sleep read as 16 ms on `windows-latest / 3.10`).
 - Under StaSh (not in plain Pythonista, the owner says) `tarfile.extractfile()` gives a `MyFileObject` whose `read()` needs the `size` (the standard one does not): pass `member.size` (`examples/wasmclang.py` failed there with `read() missing 1 required positional argument: 'size'`). When something fails on the device, ask whether it was run in StaSh or in Pythonista itself.
 - A mutation check that edits a file and puts it back within the same second, with the same size, can leave a stale `.pyc`: delete `__pycache__` before believing a result.
-- Facts: `jscontext` on iOS has **no JIT**, no wasmtime or wasm3 there, and neither timeout nor fuel; the owner works in Ukrainian, this file stays in English; a status mark (`[x]`) is set only on the owner's word.
+- Facts: `jscontext` on iOS has **no JIT**, no wasmtime or wasm3 there, and neither timeout nor fuel; the owner works in Ukrainian, this file stays in English; `[x]` means done, tested, agreed and with no open questions (see the working rules).
 
 ## Order of work
 
-Owner decision: everything is done in the current branch (the owner opens the PR and tidies the branch). Each step comes with tests, a step in the
+Owner decision: everything is done in one working branch (the owner opens the PR and tidies the branch). Each step comes with tests, a step in the
 self-test and a green pre-commit, and is a separate commit. Done so far, in order: B-201 (steps 1-4), B-304, B-204, B-507, B-509, B-202, B-301, B-302,
 then phase 4 (B-401 to B-404), then B-501, B-502, B-504 and B-505 (done 2026-10-07). The detail of each is in its own entry below. Open: B-203, B-303, B-304a, B-006, phase 5 (B-503 only) and phase 6.
 
@@ -139,9 +145,9 @@ a clean API.
 - [x] The command line: `python -m wasmhost self test [--backend NAME] [--all]` as a subcommand,
       without a command the help is printed (code 2). The module `_cli.py`; the running of a module is `wasmhost run` (B-506).
 - [x] The self-test on the device was reconciled with `main` (steps for `Memory`, `Table`, `customSections`) — see B-005.
-- [~] Examples from the branch `examples/zigcc` (merged into `main` by the owner, the branch deleted): `wasmclang.py` (clang/lld in wasm, C and C++),
+- [x] (closed 2026-10-08 on the owner's word: it has been in `main` for a long time) Examples from the branch `examples/zigcc` (merged into `main`, the branch deleted): `wasmclang.py` (clang/lld in wasm, C and C++),
       `coreutils.py` (a shell over uutils coreutils and Lua with a WASI host in Python), `examples/wasm/coreutils.wasm`,
-      `examples/wasm/lua.wasm`, the test `tests/test_coreutils_example.py`. The decision about a PR into `main` — see phase 0.
+      `examples/wasm/lua.wasm`, the test `tests/test_coreutils_example.py`.
 
 ## Phase 0. Cleanup (S, done first)
 
@@ -564,6 +570,18 @@ shared memory, memory64 (and GC), each with `supports(...)`.
 - [x] **B-701a** Bun (`bun`): `BunBackend` on the same script and protocol as Node; self-test 32/32 and the whole test
       suite (140 passed, 7 skipped, as in Node) on Bun 1.4.2. CI: Linux and macOS (Windows not tried). README, the tables
       of backends and capabilities. Bun is JavaScriptCore, so it is useful as JSC on all OSes without GTK, closer to iOS.
+- [~] **B-701d** Pyodide (`pyodide`): wasmhost running inside Pyodide, the backend being the `WebAssembly` of the engine around it,
+      through the `js` module (`_pyodide.py`; direct calls, no registry in the engine; a small JS shim only for `BigInt` of an i64, `-0`
+      and `null`). Written 2026-10-08 on the owner's question; **not closed: CI has not run yet.** State: the self-test
+      35/35 and the suite (391 passed, the rest skipped for Emscripten) inside Pyodide 314.0.7 on Node 26, via `tests/pyodide_run.mjs`;
+      CI has a job `Pyodide` (Node 24, npm `pyodide@314.0.7`) which **has not run yet** (not seen on GitHub).
+      No `timeout`, `fuel`, `isolated`, `Memory.view` (`to_memoryview()` copies). Not tried: Pyodide 3.13 (the owner's
+      `sys.implementation` showed `cpython-313`), a browser, a Pythonista-like device, the reported `jsnull` handling on a Pyodide older
+      than the one with `pyodide.ffi.jsnull` (a fallback to `None` is there, unchecked). Changes elsewhere: `wasi/preview1.py` leaves out
+      the thread CPU clock where `time.thread_time_ns` is missing; tests skip on `sys.platform == "emscripten"` (threads, symlinks, the
+      thread clock; the errno in `test_cli_run.py` follows `errno.ENOENT`); `test_jscontext.py` skips the `+c` bridges without a
+      JavaScriptCore library. **Order (owner's decision, 2026-10-08):** `AUTO_ORDER` is `wasmtime, wasm3, node, bun, jscontext, jsc, gi-jsc, pyodide`: by speed (JIT before
+      interpreter), then by completeness of the specification, then by overhead; `BACKENDS`, `JS_BACKENDS`, the README table and `test_registry.py` follow it.
 - [ ] **B-701b** Deno (`deno`): through `deno eval` and the same shim (`deno eval -A`, the same `_NODE_LOOP`) passes
       32/33 (as of 2026-10-06, Deno 2.9.6 and 2.9.7, V8 15.0; the npm package `deno` lags behind, 2.9.7 exists only as a binary from GitHub Releases). **The cause was found, it is a bug
       in Deno itself, not in our code:** the step "call cost" merely finishes off an already dead process (`BrokenPipeError`); Deno

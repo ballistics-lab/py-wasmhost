@@ -65,7 +65,7 @@ class _HostFailed(Exception):
 _JS_MESSAGE = re.compile(r"^(?:\[JS\] )?(\w+)(?:: ?(.*))?$", re.DOTALL)
 
 
-def _translate(text: str) -> BaseException | None:
+def translate_error(text: str) -> BaseException | None:
     """
     The Python exception for a JavaScript error's text (`Name: message`, or just `Name` when the message is empty),
     if it has one.
@@ -218,11 +218,11 @@ def _literal(value: int | float, kind: str) -> str:
     return {float("inf"): "Infinity", float("-inf"): "-Infinity"}.get(x) or repr(x)
 
 
-def _parse(text: str, kind: str) -> int | float:
+def parse_value(text: str, kind: str) -> int | float:
     return int(text) if kind in ("i32", "i64") else float(text)
 
 
-def _text(value: int | float, kind: str) -> str:
+def value_text(value: int | float, kind: str) -> str:
     """A value as text for the engine (`Number("NaN")` and `BigInt("5")` take it back)."""
     if kind in ("i32", "i64"):
         return str(int(value))
@@ -296,7 +296,7 @@ class JSBackend(Backend):
             if self._raised is not None and HOST_ERROR in str(exc):
                 raised, self._raised = self._raised, None
                 raise raised from None
-            if err := _translate(str(exc)):
+            if err := translate_error(str(exc)):
                 raise err from None
             raise
 
@@ -313,9 +313,9 @@ class JSBackend(Backend):
     def _answer(self, ident: int, args_json: str) -> str:
         host = self._hosts[ident]
         try:
-            args = [_parse(t, k) for t, k in zip(json.loads(args_json), host.ftype.params, strict=True)]
+            args = [parse_value(t, k) for t, k in zip(json.loads(args_json), host.ftype.params, strict=True)]
             values = check_results(host.fn(*args), host.ftype)
-            return json.dumps([_text(v, k) for v, k in zip(values, host.ftype.results, strict=True)])
+            return json.dumps([value_text(v, k) for v, k in zip(values, host.ftype.results, strict=True)])
         except BaseException as exc:  # noqa: BLE001 -- whatever it is, it goes to the caller of the export
             self._raised = exc
             raise _HostFailed from None
@@ -419,13 +419,13 @@ class JSBackend(Backend):
         literals = ",".join(_literal(a, k) for a, k in zip(args, ftype.params, strict=True))
         with self._under(self._inst_timeout.get(instance)):
             text = self._run(f"__wh.call({instance},{json.dumps(name)},[{literals}])")
-        return [_parse(t, k) for t, k in zip(text.split(","), ftype.results, strict=True)] if ftype.results else []
+        return [parse_value(t, k) for t, k in zip(text.split(","), ftype.results, strict=True)] if ftype.results else []
 
     def call_ref(self, func: int, args: Sequence[int | float], ftype: FuncType) -> list[int | float]:
         literals = ",".join(_literal(a, k) for a, k in zip(args, ftype.params, strict=True))
         with self._under(self._obj_timeout.get(func)):
             text = self._run(f"__wh.callref({func},[{literals}])")
-        return [_parse(t, k) for t, k in zip(text.split(","), ftype.results, strict=True)] if ftype.results else []
+        return [parse_value(t, k) for t, k in zip(text.split(","), ftype.results, strict=True)] if ftype.results else []
 
     def function_key(self, func: int) -> int:
         return func  # one number for one function: the engine side sees to that
@@ -509,7 +509,7 @@ class JSBackend(Backend):
         self._o("write", memory, int(offset), json.dumps(data.hex()))
 
     def global_get(self, glob: int, kind: str) -> int | float:
-        return _parse(self._o("get", glob), kind)
+        return parse_value(self._o("get", glob), kind)
 
     def global_set(self, glob: int, kind: str, value: int | float) -> None:
         self._o("set", glob, _literal(normalize(value, kind), kind))
@@ -554,13 +554,15 @@ class JSBackend(Backend):
             if text is None or slot not in kinds:
                 continue
             kind = kinds[slot]
-            values[slot] = bytes.fromhex(text) if kind == "bytes" else None if kind == "void" else _parse(text, kind)
+            values[slot] = (
+                bytes.fromhex(text) if kind == "bytes" else None if kind == "void" else parse_value(text, kind)
+            )
         error: BaseException | None = None
         if reply["e"]:
             if HOST_ERROR in reply["e"] and self._raised is not None:
                 error, self._raised = self._raised, None
             else:
-                error = _translate(reply["e"]) or RuntimeError(reply["e"])
+                error = translate_error(reply["e"]) or RuntimeError(reply["e"])
         return BatchResult(values, error)
 
 

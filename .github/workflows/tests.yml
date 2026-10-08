@@ -6,6 +6,8 @@ name: Tests
 #
 #   test:     every OS x CPython oldest/newest (also free-threaded 3.15t) + PyPy, on wasmtime and on Node (both
 #             available on every runner), and on wasm3 where pywasm3 installs (CPython 3.11+; built from git).
+#   pyodide:  the suite and the self-test run inside Pyodide (CPython in WebAssembly, on Node), where the backend is the
+#             JavaScript engine's own WebAssembly (tests/pyodide_run.mjs).
 #   jsc:      WebKitGTK's JavaScriptCore -- the engine behind Pythonista's JSContext -- with its JIT
 #             and without it (iOS apps like Pythonista run it without), as the stand-in for an iOS
 #             device.
@@ -88,6 +90,29 @@ jobs:
         run: |
           WASMHOST_BACKEND=node uv run --locked python examples/basic.py
           WASMHOST_BACKEND=node uv run --locked python examples/imports.py
+
+  pyodide:
+    name: Pyodide
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24
+
+      - name: Install Pyodide
+        run: npm install --no-save --prefix "$RUNNER_TEMP/pyodide" pyodide@314.0.7
+
+      # Run from the folder with node_modules, so that the script finds the package.
+      - name: Self-test on the pyodide backend
+        working-directory: ${{ runner.temp }}/pyodide
+        run: node "$GITHUB_WORKSPACE/tests/pyodide_run.mjs" selftest
+
+      - name: pytest --wasm-backend pyodide
+        if: ${{ !cancelled() }}
+        working-directory: ${{ runner.temp }}/pyodide
+        run: node "$GITHUB_WORKSPACE/tests/pyodide_run.mjs" pytest
 
   jsc:
     name: WebKitGTK JavaScriptCore
