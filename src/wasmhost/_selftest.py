@@ -30,7 +30,7 @@ from ._binary import FuncType, GlobalType, MemoryType, TableType, i32, i64
 from ._errors import CompileError, LinkError, OutOfFuel, Timeout, Trap
 from ._js import JSBackend
 from ._registry import AUTO_ORDER, BACKENDS
-from .wasi.preview1 import Wasip1
+from .wasi.preview1 import Preview1
 
 __all__ = ("selftest",)
 
@@ -332,21 +332,21 @@ def _wasi(backend: Backend) -> str:
     folder read-only: the file is refused and the folder stays empty."""
     if not backend.supports("imports"):
         try:
-            Instance(Module(WASI_HELLO, backend=backend), Wasip1().imports())
+            Instance(Module(WASI_HELLO, backend=backend), Preview1().imports())
         except NotImplementedError:
             return "not available on this backend, as documented"
         raise AssertionError("should be NotImplementedError")
     for wasm in (WASI_HELLO, WASI_HELLO_UNSTABLE):
         out: list[bytes] = []
         with tempfile.TemporaryDirectory() as folder:
-            wasi = Wasip1(args=["selftest", "x"], preopens={"/": folder}, stdout=out.append)
+            wasi = Preview1(args=["selftest", "x"], preopens={"/": folder}, stdout=out.append)
             _expect(wasi.run(Module(wasm, backend=backend)), 2)  # proc_exit(argc)
             _expect(b"".join(out), b"hello, wasi\n")
             with open(os.path.join(folder, "note.txt"), "rb") as note:
                 _expect(note.read(), b"hello, wasi\n")
     out = []
     with tempfile.TemporaryDirectory() as folder:  # the same program on a folder that nothing can be written to
-        host = Wasip1(args=["selftest", "x"], preopens={"/": folder}, stdout=out.append, readonly=True)
+        host = Preview1(args=["selftest", "x"], preopens={"/": folder}, stdout=out.append, readonly=True)
         _expect(host.run(Module(WASI_HELLO, backend=backend)), 2)
         _expect(b"".join(out), b"hello, wasi\n")
         _expect(os.listdir(folder), [])  # note.txt was refused

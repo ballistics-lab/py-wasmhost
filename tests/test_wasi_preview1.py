@@ -11,7 +11,7 @@ from typing import Any
 import pytest
 
 from wasmhost.wasi import preview1
-from wasmhost.wasi.preview1 import Errno, Fdflags, Filetype, Lookupflags, Oflags, Rights, WasiExit, Wasip1
+from wasmhost.wasi.preview1 import Errno, Fdflags, Filetype, Lookupflags, Oflags, Preview1, Rights, WasiExit
 
 SIZE = 1 << 16
 FOLLOW = Lookupflags.symlink_follow
@@ -37,10 +37,10 @@ class Memory:
 
 
 class Host:
-    """A Wasip1 with a memory, and the helpers a test needs to put things in it and read results out."""
+    """A Preview1 with a memory, and the helpers a test needs to put things in it and read results out."""
 
     def __init__(self, snapshot: str = preview1.SNAPSHOT, **options: Any) -> None:
-        self.wasi = Wasip1(**options)
+        self.wasi = Preview1(**options)
         self.mem = Memory()
         self.wasi.memory = self.mem
         self.calls = self.wasi.imports()[snapshot]
@@ -261,7 +261,7 @@ def test_several_preopens_in_order(tmp_path: Path) -> None:
 
 def test_a_preopen_must_be_a_directory(tmp_path: Path) -> None:
     with pytest.raises(NotADirectoryError):
-        Wasip1(preopens={"/": tmp_path / "missing"})
+        Preview1(preopens={"/": tmp_path / "missing"})
 
 
 # --- files
@@ -737,7 +737,7 @@ def test_arguments_arrive_unsigned(host: Host) -> None:
 
 
 def test_calls_before_the_memory_is_bound_say_so() -> None:
-    wasi = Wasip1()
+    wasi = Preview1()
     with pytest.raises(RuntimeError, match="memory"):
         wasi.imports()[preview1.SNAPSHOT]["args_sizes_get"](0, 4)
 
@@ -753,7 +753,7 @@ def test_close_closes_the_files(host: Host, root: Path) -> None:
 
 
 def test_context_manager_closes(root: Path) -> None:
-    with Wasip1(preopens={"/": root}) as wasi:
+    with Preview1(preopens={"/": root}) as wasi:
         assert wasi.imports()
     assert not wasi._fds  # pyright: ignore[reportPrivateUsage]
 
@@ -868,9 +868,9 @@ def test_subscriptions_are_56_bytes_in_the_first_snapshot(old: Host) -> None:
 def test_the_package_exports_the_module_and_the_class() -> None:
     import wasmhost.wasi as package
 
-    assert package.Wasip1 is Wasip1
-    assert package.preview1.Wasip1 is Wasip1
-    assert set(package.__all__) == {"Wasip1", "preview1"}
+    assert package.Preview1 is Preview1
+    assert package.preview1.Preview1 is Preview1
+    assert set(package.__all__) == {"Preview1", "preview1"}
 
 
 # --- read-only preopens
@@ -974,7 +974,7 @@ def test_only_the_named_preopens_are_read_only(tmp_path: Path) -> None:
 
 def test_readonly_is_checked_and_defaults_to_nothing(tmp_path: Path) -> None:
     with pytest.raises(ValueError, match="nope"):
-        Wasip1(preopens={"/": tmp_path}, readonly={"nope"})
+        Preview1(preopens={"/": tmp_path}, readonly={"nope"})
     assert Host(preopens={"/": tmp_path}, readonly="/").open("a", Oflags.creat)[0] == Errno.notcapable  # a bare name
     assert Host(preopens={"/": tmp_path}, readonly=False).open("a", Oflags.creat)[0] == 0
     assert Host(preopens={"/": tmp_path}).open("b", Oflags.creat)[0] == 0

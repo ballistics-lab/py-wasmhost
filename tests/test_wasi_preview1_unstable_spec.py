@@ -34,7 +34,7 @@ def test_the_witx_files_are_what_the_tests_think() -> None:
 def test_the_functions_are_those_of_the_snapshot_but_sock_accept() -> None:
     assert set(preview1.UNSTABLE_SIGNATURES) == set(NAMES0)
     assert set(preview1.SIGNATURES) - set(preview1.UNSTABLE_SIGNATURES) == {"sock_accept"}
-    assert set(preview1.Wasip1().imports()[preview1.UNSTABLE]) == set(NAMES0)
+    assert set(preview1.Preview1().imports()[preview1.UNSTABLE]) == set(NAMES0)
 
 
 @pytest.mark.parametrize("name", NAMES0)

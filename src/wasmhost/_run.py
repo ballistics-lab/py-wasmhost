@@ -19,7 +19,7 @@ from pathlib import Path
 from typing import Any
 
 from . import BACKENDS, Instance, Module, Trap, WasmError, get_backend, set_backend
-from .wasi.preview1 import WasiExit, Wasip1
+from .wasi.preview1 import Preview1, WasiExit
 
 # The options that take a value: the command line is split before argparse sees it, to find the module.
 VALUE_OPTIONS = frozenset(
@@ -171,7 +171,7 @@ def _invoke(instance: Instance, module: Module, name: str, words: Sequence[str])
     return [format_value(kind, item) for kind, item in zip(kinds_out, items, strict=True)]
 
 
-def _start(wasi: Wasip1, instance: Instance) -> int:
+def _start(wasi: Preview1, instance: Instance) -> int:
     """As run.rs: `_initialize` (a reactor) first if there is one, then `_start`; a module with neither exits 0."""
     try:
         initialize = getattr(instance.exports, "_initialize", None)
@@ -204,7 +204,7 @@ def run(host_args: Sequence[str], path: str, program_args: Sequence[str]) -> int
         else:
             get_backend()
         module = Module(wasm)
-        wasi = Wasip1(
+        wasi = Preview1(
             args=[args.argv0 if args.argv0 is not None else os.path.basename(path), *program_args],
             env=_environment(args.env),
             preopens=_preopens(args.dir),

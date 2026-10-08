@@ -129,7 +129,7 @@ def test_the_witx_files_are_what_the_tests_think() -> None:
 def test_every_function_of_the_specification_and_no_other() -> None:
     expected = {signature(f)[0] for f in FUNCS}
     assert set(preview1.SIGNATURES) == expected
-    assert set(preview1.Wasip1().imports()[preview1.SNAPSHOT]) == expected
+    assert set(preview1.Preview1().imports()[preview1.SNAPSHOT]) == expected
     assert preview1.SNAPSHOT == str(MODULE[1]).lstrip("$")
 
 

@@ -12,7 +12,7 @@
 
 The utilities are `examples/wasm/coreutils.wasm`, one multi-call binary (`coreutils sort file`): `cat cp mv rm ls
 mkdir touch head tail wc sort uniq tr cut seq echo printf ...`; `help` lists them. They are WASI programs, so what
-they see of the world is whatever this file hands them: a `Wasip1` of `wasmhost.wasi.preview1`, the WASI calls (files,
+they see of the world is whatever this file hands them: a `Preview1` of `wasmhost.wasi.preview1`, the WASI calls (files,
 arguments, clock, exit) over a directory of the real file system, which is all they can reach, with the few lines of
 `wasi_host()` below around it. wasmhost runs the module; Python answers its calls.
 
@@ -68,7 +68,7 @@ PIPE_LIMIT = 16 * 1024 * 1024
 
 
 def wasi_host(root, argv, stdin=b"", stdout=None, stderr=None, env=None, pipe_limit=None):
-    """The WASI host of one program run: a `Wasip1` over the directory ROOT, which the program sees as
+    """The WASI host of one program run: a `Preview1` over the directory ROOT, which the program sees as
     `/` (and as `.`, for a C library of the first snapshot). STDIN is bytes; STDOUT and STDERR are callables that take
     bytes; PIPE_LIMIT is how many bytes the program may write to STDOUT before it gets a broken pipe (that is how
     `yes | head -3` ends)."""
@@ -82,7 +82,7 @@ def wasi_host(root, argv, stdin=b"", stdout=None, stderr=None, env=None, pipe_li
         written += len(data)
         write_out(data)
 
-    return preview1.Wasip1(
+    return preview1.Preview1(
         argv, env, {name: root for name in PREOPENS}, stdin, out, stderr or (lambda data: None)
     )  # fmt: skip
 

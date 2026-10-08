@@ -6,7 +6,7 @@ random bytes. Sockets, threads and signals are not supported: those calls answer
 (`ENOTSOCK`, `ENOSYS`). The first snapshot, `wasi_unstable` (what older toolchains still produce), is offered too,
 from the same object: see UNSTABLE below for the four things in which it differs. Standard library only.
 
-    wasi = Wasip1(args=["prog", "-v"], preopens={"/": "some/dir"}, stdout=sys.stdout.buffer.write)
+    wasi = Preview1(args=["prog", "-v"], preopens={"/": "some/dir"}, stdout=sys.stdout.buffer.write)
     code = wasi.run(module)           # the exit code of `_start`
 
 or in steps, when the instance needs options of its own:
@@ -287,7 +287,7 @@ def _sink(target: Callable[[bytes], object] | Any | None, fallback: Any) -> Call
     return target.write
 
 
-class Wasip1:
+class Preview1:
     """The `wasi_snapshot_preview1` calls of one program run.
 
     `args` are the program's arguments, the first one its name; `env` the environment; `preopens` maps the name the
@@ -390,7 +390,7 @@ class Wasip1:
                     pass
         self._fds.clear()
 
-    def __enter__(self) -> Wasip1:
+    def __enter__(self) -> Preview1:
         return self
 
     def __exit__(self, *exc: object) -> None:
