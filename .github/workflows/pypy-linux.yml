@@ -2,9 +2,10 @@ name: PyPy on Linux
 
 # A small check of PyPy 3.11 on Linux, where the macOS flake (a segfault in JSValueToStringCopy, see BACKLOG "Known flaky
 # CI failures") has not been seen. It runs the same two steps that crash on macOS (wasmtime in the process, then the C
-# API of JavaScriptCore) and repeats the JSC ones. Run it by hand; it is not a part of the regular matrix.
+# API of JavaScriptCore) and repeats the JSC ones. It is not a part of the regular matrix.
 
 on:
+  pull_request:
   workflow_dispatch:
     inputs:
       repeat:
@@ -46,7 +47,7 @@ jobs:
       - name: Repeat the JavaScriptCore tests (a wasmtime engine alive in the process, as in the failing job)
         if: ${{ !cancelled() }}
         run: |
-          for i in $(seq 1 "${{ inputs.repeat }}"); do
+          for i in $(seq 1 "${{ inputs.repeat || 10 }}"); do
             echo "::group::run $i"
             uv run --locked pytest -q -x tests/test_jscontext.py tests/test_coreutils_example.py --wasm-backend jsc || exit 1
             echo "::endgroup::"
