@@ -423,6 +423,13 @@ not more. `wasmclang.py` on Bun stops with `panic: abort() called` and Bun's own
 WASI program); the file as it was before 2026-10-07 does the same. Pyodide's own `pyodide.asm.wasm` does not link on `wasm3` in any case: it imports
 280 globals, which our `wasm3` backend can't give, and uses `externref`. `jslinux.py` needs a server that the assistant's environment cannot reach.
 
+**Known problem: PyPy on macOS with the `jsc` backend.** On PyPy 3.11 (macOS, arm64) the `jsc` backend, the system JavaScriptCore through
+`ctypes`, sometimes ends the process with a segmentation fault in `JSValueToStringCopy`. It happens when Python reads the memory of a
+module from inside a host function that the module itself called (for example `fd_write` of a WASI program, as in `coreutils.py`), so
+a run of the test suite hits it about once in ten to twenty-five repeats, with the JIT of JavaScriptCore on or off. It was not seen on
+CPython on macOS, on PyPy on Linux (WebKitGTK's JavaScriptCore, 30 repeats), or with any other backend. The cause is not known; on macOS use
+CPython for `jsc`, or another backend (`wasmtime`, `node`, `bun`) on PyPy. Details are in `BACKLOG.md`.
+
 CoreMark built natively (C, `-O2`, not through wasmhost), as a baseline for the devices where iSH emulates the processor: **3169** (GCC 15.2.0, 60000
 iterations, 18.9 s, "Correct operation validated") on iSH-AOK 1.3 (557), Linux 5.10.0-ish_aok aarch64; **1590** (GCC 12.2.1, 20000 iterations, 12.6 s,
 also validated) on the original iSH, Linux 4.20.69-ish i686. Through wasmhost (`examples/coremark.py`, the wasm3 project's build of CoreMark) on iSH-AOK: `wasmtime` **2571.2** (the last pass 15.6 s) and `wasm3`

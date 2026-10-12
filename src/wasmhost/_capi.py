@@ -121,19 +121,19 @@ class CApi:
         """The value of the last expression as a string; a JavaScript exception is a RuntimeError("[JS] ...")."""
         ref = self.ref
         script = self._string(src)
-        exception = (ctypes.c_void_p * 1)()  # memory of its own, not a `byref` temporary, for PyPy's JIT to leave alone
+        exception = ctypes.c_void_p()
         try:
-            value = self._c.JSEvaluateScript(ref, script, None, None, 1, exception)
-            # The engine's collector doesn't see a value held only in Python (PyPy moves and drops objects on its own
-            # schedule), so it is protected at once, before anything else is called, until it has been turned into text.
-            held = exception[0] or value
-            if held:
-                self._c.JSValueProtect(ref, held)
+            value = self._c.JSEvaluateScript(ref, script, None, None, 1, ctypes.byref(exception))
         finally:
             self._c.JSStringRelease(script)
+        # The engine's collector doesn't see a value held only in Python (PyPy moves and drops objects on its own
+        # schedule), so it is protected until it has been turned into text.
+        held = exception.value or value
+        if held:
+            self._c.JSValueProtect(ref, held)
         try:
-            if exception[0]:
-                raise RuntimeError(f"[JS] {self._text(ref, exception[0])}")
+            if exception.value:
+                raise RuntimeError(f"[JS] {self._text(ref, exception.value)}")
             return self._text(ref, value)
         finally:
             if held:
@@ -159,15 +159,14 @@ class CApi:
         """The bytes of the Uint8Array that `expr` evaluates to."""
         ref = self.ref
         script = self._string(f"(b => b.byteOffset ? b.slice() : b)({expr})")
-        exception = (ctypes.c_void_p * 1)()
+        exception = ctypes.c_void_p()
         try:
-            value = self._c.JSEvaluateScript(ref, script, None, None, 1, exception)
-            if value and not exception[0]:
-                self._c.JSValueProtect(ref, value)
+            value = self._c.JSEvaluateScript(ref, script, None, None, 1, ctypes.byref(exception))
         finally:
             self._c.JSStringRelease(script)
-        if exception[0] or not value:
+        if exception.value or not value:
             raise OSError("JSEvaluateScript failed")
+        self._c.JSValueProtect(ref, value)
         try:
             array = self._c.JSValueToObject(ref, value, None)
             ptr = array and self._c.JSObjectGetTypedArrayBytesPtr(ref, array, None)

@@ -634,7 +634,17 @@ shared memory, memory64 (and GC), each with `supports(...)`.
 - `examples/wasmclang.py` does not run on Bun 1.4.2: Bun aborts ("this indicates a bug in Bun") while it compiles the WASI program, and did so before this session too. It runs on `wasmtime`, `wasm3`, `node` and, on the device, `jscontext`.
 - `coreutils.wasm` weighs 10.8 MB (see B-004).
 
-## Known flaky CI failures (not understood, not fixed; the owner chose to treat it as a flake, 2026-10-07)
+## Known flaky CI failures (documented as a known problem, 2026-10-12; not fixed)
+
+**2026-10-12, PR #14 (`.github/workflows/pypy-linux.yml`): it is not a flake of CI, it is reproducible.** The crash is on PyPy 3.11, macOS arm64, backend `jsc` only,
+and always on the same path: `Preview1.fd_write` -> `Memory.read` -> `readB64` evaluated in JavaScript from inside the host function -> `CApi._text`
+(`JSValueToStringCopy`). Not JIT (it crashed with `JSC_useJIT=false`), not wasmtime (`--wasm-backend jsc` never starts it; the job prints `wasmtime loaded: False`),
+and not Linux (ubuntu, PyPy 3.11, 30 repeats: clean; CPython on macOS: clean). Rate without a change: about one run in 25 (crashes at repeat 5 and 12, and 30 clean).
+`-p no:faulthandler` passed 30 of 30, which is one sample and proves nothing.
+**A try that did not work:** protecting the value of `JSEvaluateScript` before `JSStringRelease(script)` and keeping the exception out-parameter in a ctypes
+array instead of a `byref` (commit `561e9ec`, reverted): 3 of the 3 finished shards of 30 repeats crashed (repeats 2, 9 and one more), which is no better than before.
+**Not tried:** reading the memory through `get_bytes` (a typed array, C API) instead of `readB64` while a host function runs; running the module with a
+smaller program that only calls a host function that reads memory. The earlier notes follow.
 
 - **A segmentation fault on `macos-latest / pypy3.11`, in the step `pytest --wasm-backend wasmtime`.** Run 37613538125
   (`main`, `7f3c548`, only `publish.yml` changed since a green run). The process died in
