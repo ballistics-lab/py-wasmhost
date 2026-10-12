@@ -408,15 +408,15 @@ node tests/pyodide_run.mjs pytest       # the suite on the pyodide backend (need
 and `wasm3` are not JavaScript engines, so the Pyodide example, which is JavaScript glue, does not apply to them, and `gi-jsc` takes no host
 functions, so nothing that imports anything runs on it. `?` is not run or not looked at.
 
-| Program                                                | `wasmtime` | `wasm3`    | `node` | `bun`                  | `jsc`    | `jscontext`                      | `gi-jsc` |
-| ------------------------------------------------------ | ---------- | ---------- | ------ | ---------------------- | -------- | -------------------------------- | -------- |
-| the WASI programs of the self-test (both snapshots)    | yes        | yes        | yes    | yes                    | yes (CI) | yes (CI, device)                 | n/a      |
-| `coreutils.py` (uutils coreutils in Rust, and Lua)     | yes        | yes        | yes    | yes                    | yes (CI) | yes (CI, device)                 | n/a      |
-| `wasi_sh.py` (BusyBox ash)                             | yes        | yes        | yes    | yes                    | yes (CI) | yes (CI, device)                 | n/a      |
-| `wasmclang.py` (clang and lld, themselves wasm)        | yes (21 s) | yes (14 s) | yes    | **no**: Bun aborts     | ?        | yes (device, 22 s)               | n/a      |
-| `pyodide.py`                                           | n/a        | n/a        | yes    | yes                    | ?        | yes (CI, device, ready in 1.9 s) | n/a      |
-| `coremark.py` (score)                                  | 25405      | 3645       | 30411  | 29731                  | ?        | 1951 (iPhone 16), 1892 (PythonIDE) | n/a      |
-| `jslinux.py`                                           | ?          | ?          | ?      | ?                      | ?        | yes (device)                     | n/a      |
+| Program                                                | `wasmtime` | `wasm3`    | `node` | `bun`                  | `jsc`    | `jscontext`                      | `gi-jsc` | `pyodide` |
+| ------------------------------------------------------ | ---------- | ---------- | ------ | ---------------------- | -------- | -------------------------------- | -------- | ---------- |
+| the WASI programs of the self-test (both snapshots)    | yes        | yes        | yes    | yes                    | yes (CI) | yes (CI, device)                 | n/a      | yes (CI)   |
+| `coreutils.py` (uutils coreutils in Rust, and Lua)     | yes        | yes        | yes    | yes                    | yes (CI) | yes (CI, device)                 | n/a      | ?          |
+| `wasi_sh.py` (BusyBox ash)                             | yes        | yes        | yes    | yes                    | yes (CI) | yes (CI, device)                 | n/a      | ?          |
+| `wasmclang.py` (clang and lld, themselves wasm)        | yes (21 s) | yes (14 s) | yes    | **no**: Bun aborts     | ?        | yes (device, 22 s)               | n/a      | ?          |
+| `pyodide.py`                                           | n/a        | n/a        | yes    | yes                    | ?        | yes (CI, device, ready in 1.9 s) | n/a      | n/a        |
+| `coremark.py` (score)                                  | 25405      | 3645       | 30411  | 29731                  | ?        | 1951 (iPhone 16), 1892 (PythonIDE) | n/a      | ?          |
+| `jslinux.py`                                           | ?          | ?          | ?      | ?                      | ?        | yes (device)                     | n/a      | ?          |
 
 The first four CoreMark scores are from one x86-64 computer and the `jscontext` one from a phone without JIT, so they say an order of magnitude and
 not more. `wasmclang.py` on Bun stops with `panic: abort() called` and Bun's own "this indicates a bug in Bun" (Bun 1.4.2, in the second build, the
