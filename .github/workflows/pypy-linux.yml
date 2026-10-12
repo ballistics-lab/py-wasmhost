@@ -1,10 +1,10 @@
 name: PyPy on Linux and macOS
 
 # A small check of PyPy 3.11 on Linux and on macOS, side by side: the macOS flake (a segfault in JSValueToStringCopy, see
-# BACKLOG "Known flaky CI failures") has not been seen on Linux. It runs wasmtime, then the C API of JavaScriptCore, and repeats the JSC tests. It is not a part of the regular matrix.
+# BACKLOG "Known flaky CI failures") has not been seen on Linux. It runs wasmtime, then the C API of JavaScriptCore, and repeats the JSC tests. It is run by hand (Actions > this workflow > Run workflow), not on pull requests: the crash is known, so
+# its red jobs would only hide real failures.
 
 on:
-  pull_request:
   workflow_dispatch:
     inputs:
       repeat:
