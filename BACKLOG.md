@@ -54,11 +54,11 @@ the feature itself:
 
 ## Current state (2026-10-08, written as a handoff to the next session)
 
-**Where things are.** `main` is at `5526e29` ("WASI preview1 host, `wasmhost run`, Python 3.15"), with phases 1 to 5 in it. **The Pyodide work is not committed**: it is in the working tree (B-701d below; new files `src/wasmhost/_pyodide.py`, `tests/pyodide_run.mjs`; changed README, BACKLOG, the CI job `Pyodide`, `_registry.py`, `__init__.py`, `wasi/preview1.py` and five test files).
+**Where things are.** `main` is at `5526e29` ("WASI preview1 host, `wasmhost run`, Python 3.15"), with phases 1 to 5 in it. **The Pyodide work is merged (PR #12, `a7b4548`), CI green (runs 161 to 163); release `v0.1.0b4` is on it.** Python 3.15 is stable (owner, 2026-10-12); the matrix stays unpinned. The classifier stays Beta.
 Look at CI of the newest commit first (`git log`). On 2026-10-08 `Tests` and `Pre-commit` were green on `37a7fd4` (runs 145 and 196, the whole matrix); `Tests` on `1610f5c` (run 137) failed once on `macos-latest / pypy3.11`, the known flake below, and the rest of that run was green. Runs on the newest commits may still be in progress. `Pre-commit` has been green in CI since `d823812` (it was red on every push because `ruff format` kept changing `examples/jitcheck.py`; fixed). Locally `pre-commit` runs pyright, ruff and the whole `pytest` (wasmtime, wasm3, node, bun
 here; `jsc`, `gi-jsc` and `jscontext` only in CI); on Python 3.15.0rc3 the whole suite passed too (906 passed, 166 skipped, before the CLI tests); on the newest commit here it is 969 passed, 166 skipped. The self-test has 35 steps on wasmtime and wasm3 and 41 on the JS engines.
 
-**Pyodide backend (2026-10-08, B-701d, `[~]`).** Added on the owner's question: wasmhost inside Pyodide, calling the `WebAssembly` of the engine around it through `js`. `AUTO_ORDER` was reordered by the owner's decision (see the entry's "Order" note): `wasmtime, node, bun, jsc, gi-jsc, wasm3, jscontext, pyodide`. Run inside Pyodide 314.0.7 on Node 26: `node tests/pyodide_run.mjs selftest` is 35/35 and `... pytest` is 393 passed, 91 skipped. Not run: the CI job `Pyodide` (never pushed), Pyodide with Python 3.13 (the owner's `sys.implementation` shows `cpython-313`), a browser. Needs `npm install --global pyodide` (or in the folder you run from). The rule for `[x]` changed on the owner's word (2026-10-08): done, tested, agreed, no open questions.
+**Pyodide backend (2026-10-08, B-701d, closed 2026-10-12 on the owner's word: merged, CI green).** Added on the owner's question: wasmhost inside Pyodide, calling the `WebAssembly` of the engine around it through `js`. `AUTO_ORDER` was reordered by the owner's decision (see the entry's "Order" note): `wasmtime, node, bun, jsc, gi-jsc, wasm3, jscontext, pyodide`. Run inside Pyodide 314.0.7 on Node 26: `node tests/pyodide_run.mjs selftest` is 35/35 and `... pytest` is 393 passed, 91 skipped. Not run: the CI job `Pyodide` (never pushed), Pyodide with Python 3.13 (the owner's `sys.implementation` shows `cpython-313`), a browser. Needs `npm install --global pyodide` (or in the folder you run from). The rule for `[x]` changed on the owner's word (2026-10-08): done, tested, agreed, no open questions.
 
 **Done (phases 1 to 5, in part).**
 - Phases 1 to 4: B-201 (`Function`, `signature`, `type()`, identity, `elem`, `call_indirect` net), B-202, B-204, B-301 (`Memory.view`), B-302 (`bench`), B-304 (a lock per backend, `await compile/instantiate`, threads only with
@@ -86,7 +86,7 @@ with `data segment out of bounds` (README "What has run where").
 it works on the device with its hybrid host: clang and lld compiled C and C++ in `jscontext` (the C++ link took 16 s of 22 s), the same output as on wasmtime and node (`fib(10) = 55`, a WASI program with `argc=3`, C++ with `std::vector` and `std::map`).
 
 **To do first, if the owner has not said otherwise:**
-0. Commit the Pyodide work to a branch (the owner opens the PR; no push to `main`), look at the first run of the job `Pyodide`, then at the whole `Tests` matrix: `test_registry.py` follows the new order, the `+c` bridges of `test_jscontext.py` and the Emscripten skips are new. Close B-701d when it is green and the owner agrees; ask about the order of `AUTO_ORDER` (above), and README "What has run where" has no `pyodide` column yet.
+0. ~~Pyodide work~~ Done: merged in PR #12, CI green, B-701d closed, README "What has run where" has a `pyodide` column (only the self-test is `yes (CI)`; the rest is `?`). Next: the owner tags `v0.1.0`.
 1. ~~On the device: the self-test after the rename~~ Done 2026-10-07 by the owner: Pythonista 41/41 with the wheel after the rename (call 37 us, batch of 3 94 us); all the examples run on the device (see above).
 2. The CI of the newest commit, and the macOS/PyPy flake (below): it has now come back three times in the eleven runs 124 to 134 on the branch of that time, so "seen once" is out of date; the owner chose to treat it as a flake, but it may be worth the guesses in its entry.
 3. The first CI run after Python 3.15 is released (the matrix is unpinned).
@@ -570,7 +570,7 @@ shared memory, memory64 (and GC), each with `supports(...)`.
 - [x] **B-701a** Bun (`bun`): `BunBackend` on the same script and protocol as Node; self-test 32/32 and the whole test
       suite (140 passed, 7 skipped, as in Node) on Bun 1.4.2. CI: Linux and macOS (Windows not tried). README, the tables
       of backends and capabilities. Bun is JavaScriptCore, so it is useful as JSC on all OSes without GTK, closer to iOS.
-- [~] **B-701d** Pyodide (`pyodide`): wasmhost running inside Pyodide, the backend being the `WebAssembly` of the engine around it,
+- [x] **B-701d** (CLOSED 2026-10-12 on the owner's word: merged in #12, CI green) Pyodide (`pyodide`): wasmhost running inside Pyodide, the backend being the `WebAssembly` of the engine around it,
       through the `js` module (`_pyodide.py`; direct calls, no registry in the engine; a small JS shim only for `BigInt` of an i64, `-0`
       and `null`). Written 2026-10-08 on the owner's question; **not closed: CI has not run yet.** State: the self-test
       35/35 and the suite (391 passed, the rest skipped for Emscripten) inside Pyodide 314.0.7 on Node 26, via `tests/pyodide_run.mjs`;
@@ -634,7 +634,17 @@ shared memory, memory64 (and GC), each with `supports(...)`.
 - `examples/wasmclang.py` does not run on Bun 1.4.2: Bun aborts ("this indicates a bug in Bun") while it compiles the WASI program, and did so before this session too. It runs on `wasmtime`, `wasm3`, `node` and, on the device, `jscontext`.
 - `coreutils.wasm` weighs 10.8 MB (see B-004).
 
-## Known flaky CI failures (not understood, not fixed; the owner chose to treat it as a flake, 2026-10-07)
+## Known flaky CI failures (documented as a known problem, 2026-10-12; not fixed)
+
+**2026-10-12, PR #14 (`.github/workflows/pypy-linux.yml`): it is not a flake of CI, it is reproducible.** The crash is on PyPy 3.11, macOS arm64, backend `jsc` only,
+and always on the same path: `Preview1.fd_write` -> `Memory.read` -> `readB64` evaluated in JavaScript from inside the host function -> `CApi._text`
+(`JSValueToStringCopy`). Not JIT (it crashed with `JSC_useJIT=false`), not wasmtime (`--wasm-backend jsc` never starts it; the job prints `wasmtime loaded: False`),
+and not Linux (ubuntu, PyPy 3.11, 30 repeats: clean; CPython on macOS: clean). Rate without a change: about one run in 25 (crashes at repeat 5 and 12, and 30 clean).
+`-p no:faulthandler` passed 30 of 30, which is one sample and proves nothing.
+**A try that did not work:** protecting the value of `JSEvaluateScript` before `JSStringRelease(script)` and keeping the exception out-parameter in a ctypes
+array instead of a `byref` (commit `561e9ec`, reverted): 3 of the 3 finished shards of 30 repeats crashed (repeats 2, 9 and one more), which is no better than before.
+**Not tried:** reading the memory through `get_bytes` (a typed array, C API) instead of `readB64` while a host function runs; running the module with a
+smaller program that only calls a host function that reads memory. The earlier notes follow.
 
 - **A segmentation fault on `macos-latest / pypy3.11`, in the step `pytest --wasm-backend wasmtime`.** Run 37613538125
   (`main`, `7f3c548`, only `publish.yml` changed since a green run). The process died in

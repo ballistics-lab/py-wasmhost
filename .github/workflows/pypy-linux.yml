@@ -1,0 +1,97 @@
+name: PyPy on Linux and macOS
+
+# A small check of PyPy 3.11 on Linux and on macOS, side by side: the macOS flake (a segfault in JSValueToStringCopy, see
+# BACKLOG "Known flaky CI failures") has not been seen on Linux. It runs wasmtime, then the C API of JavaScriptCore, and repeats the JSC tests. It is run by hand (Actions > this workflow > Run workflow), not on pull requests: the crash is known, so
+# its red jobs would only hide real failures.
+
+on:
+  workflow_dispatch:
+    inputs:
+      repeat:
+        description: "How many times to repeat the JavaScriptCore tests"
+        default: "10"
+
+permissions:
+  contents: read
+
+jobs:
+  pypy:
+    name: ${{ matrix.os }} / pypy3.11
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+
+      # On macOS the JavaScriptCore of the system is there.
+      - name: Install JavaScriptCore
+        if: ${{ matrix.os == 'ubuntu-latest' }}
+        run: |
+          sudo apt-get update -q
+          sudo apt-get install -y -q libjavascriptcoregtk-4.1-0
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@c18668ad3cf93ea998bef934396af7bb5c839dc7
+        with:
+          python-version: pypy3.11
+
+      - name: Install
+        run: uv sync --locked
+
+      - name: pytest --wasm-backend wasmtime
+        run: uv run --locked pytest -v --wasm-backend wasmtime
+
+      - name: pytest --wasm-backend jsc
+        if: ${{ !cancelled() }}
+        run: uv run --locked pytest -v --wasm-backend jsc
+
+      - name: Repeat the JavaScriptCore tests
+        if: ${{ !cancelled() }}
+        run: |
+          for i in $(seq 1 "${{ inputs.repeat || 10 }}"); do
+            echo "::group::run $i"
+            uv run --locked pytest -q -x tests/test_jscontext.py tests/test_coreutils_example.py --wasm-backend jsc || exit 1
+            echo "::endgroup::"
+          done
+
+  # Controls for the macOS crash (a segfault in JSValueToStringCopy on PyPy), each repeating only the JavaScriptCore tests.
+  # `--wasm-backend jsc` never starts wasmtime, so these have none of its signal handlers in the process.
+  macos-control:
+    name: macos-latest / pypy3.11 / ${{ matrix.variant }} ${{ matrix.shard }}
+    runs-on: macos-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        variant: [plain]
+        shard: [1, 2, 3, 4, 5, 6] # the crash is rare (about 1 run in 25), so many runs are needed to tell a fix from luck
+    env:
+      JSC_useJIT: ${{ matrix.variant == 'jit-off' && 'false' || 'true' }}
+      PYTEST_FLAGS: ${{ matrix.variant == 'no-faulthandler' && '-p no:faulthandler' || '' }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@c18668ad3cf93ea998bef934396af7bb5c839dc7
+        with:
+          python-version: pypy3.11
+
+      - name: Install
+        run: uv sync --locked
+
+      - name: Is wasmtime in the process?
+        run: |
+          uv run --locked python -c "import sys, wasmhost; wasmhost.set_backend('jsc'); wasmhost.Module(b'\0asm\1\0\0\0'); print('wasmtime loaded:', 'wasmtime' in sys.modules)"
+
+      - name: Repeat the JavaScriptCore tests (${{ matrix.variant }})
+        run: |
+          for i in $(seq 1 "${{ inputs.repeat || 30 }}"); do
+            echo "::group::run $i"
+            uv run --locked pytest -q -x $PYTEST_FLAGS tests/test_jscontext.py tests/test_coreutils_example.py --wasm-backend jsc || { echo "FAILED on run $i"; exit 1; }
+            echo "::endgroup::"
+          done
