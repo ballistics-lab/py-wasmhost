@@ -18,7 +18,6 @@ classifiers = [
     "Natural Language :: English",
     "Operating System :: OS Independent",
     "Operating System :: iOS",
-    "Development Status :: 4 - Beta",
     "Programming Language :: Python :: 3",
     "Programming Language :: Python :: 3 :: Only",
     "Programming Language :: Python :: 3.10",
