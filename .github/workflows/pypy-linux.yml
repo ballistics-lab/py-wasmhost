@@ -61,12 +61,13 @@ jobs:
   # Controls for the macOS crash (a segfault in JSValueToStringCopy on PyPy), each repeating only the JavaScriptCore tests.
   # `--wasm-backend jsc` never starts wasmtime, so these have none of its signal handlers in the process.
   macos-control:
-    name: macos-latest / pypy3.11 / ${{ matrix.variant }}
+    name: macos-latest / pypy3.11 / ${{ matrix.variant }} ${{ matrix.shard }}
     runs-on: macos-latest
     strategy:
       fail-fast: false
       matrix:
-        variant: [plain, no-faulthandler, jit-off]
+        variant: [plain]
+        shard: [1, 2, 3, 4, 5, 6] # the crash is rare (about 1 run in 25), so many runs are needed to tell a fix from luck
     env:
       JSC_useJIT: ${{ matrix.variant == 'jit-off' && 'false' || 'true' }}
       PYTEST_FLAGS: ${{ matrix.variant == 'no-faulthandler' && '-p no:faulthandler' || '' }}
