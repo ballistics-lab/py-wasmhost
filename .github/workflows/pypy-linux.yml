@@ -1,7 +1,7 @@
-name: PyPy on Linux
+name: PyPy on Linux and macOS
 
-# A small check of PyPy 3.11 on Linux, where the macOS flake (a segfault in JSValueToStringCopy, see BACKLOG "Known flaky
-# CI failures") has not been seen. It runs the same two steps that crash on macOS (wasmtime in the process, then the C
+# A small check of PyPy 3.11 on Linux and on macOS, side by side: the macOS flake (a segfault in JSValueToStringCopy, see
+# BACKLOG "Known flaky CI failures") has not been seen on Linux. It runs the same two steps that crash on macOS (wasmtime in the process, then the C
 # API of JavaScriptCore) and repeats the JSC ones. It is not a part of the regular matrix.
 
 on:
@@ -17,14 +17,20 @@ permissions:
 
 jobs:
   pypy:
-    name: ubuntu / pypy3.11
-    runs-on: ubuntu-latest
+    name: ${{ matrix.os }} / pypy3.11
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
     steps:
       - uses: actions/checkout@v7
         with:
           fetch-depth: 0
 
+      # On macOS the JavaScriptCore of the system is there.
       - name: Install JavaScriptCore
+        if: ${{ matrix.os == 'ubuntu-latest' }}
         run: |
           sudo apt-get update -q
           sudo apt-get install -y -q libjavascriptcoregtk-4.1-0
