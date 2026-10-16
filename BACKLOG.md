@@ -302,6 +302,18 @@ Done when: for an arbitrary module an import object can be assembled automatical
       globals, so `import.global` on wasm3 (`supports("import.global")` is False) is a neighbouring limit to settle together. B-601 (`Tag` / `Exception`, `exnref`) and B-604 (GC types) are the
       same kind of opaque engine reference: make the registry general so they can reuse it. B-405 does not unblock wasm3 `externref` as written (its two PRs are about Python 3.15 and the
       GIL); that needs a separate pywasm3 PR for `externref` arguments and tables.
+      **Measured on Pyodide (2026-10-16, `pyodide.asm.wasm` of pyodide 314.0.7, 9.6 MB, read with wasmhost's own parser; scratch scripts, nothing in the repository).**
+      `examples/pyodide.py` does not go through the Python API at all: it uses wasmhost as a JavaScript engine (`JSBackend.evaluate`) and Pyodide's own JS instantiates the module with
+      the engine's `WebAssembly`, so B-203 would not change that example. The module itself: 268 function imports (254 `env`, 14 `wasi_snapshot_preview1`), 280 imported globals (all
+      mutable `i32`, module `GOT.func`), 149 imports and 76 of the 7415 function exports with `externref` in their type, 1141 exported globals, 2 tags, one exported table.
+      With stub imports through the Python API: **node** compiles (0.5 s) and instantiates (0.2 s), all 8558 exports there, so `externref` in the types does not stop linking;
+      **wasmtime** fails to compile (`legacy_exceptions feature required for try instruction`, offset 5950063; not about `externref`; whether enabling them helps was not tried);
+      **wasm3** parses the module and stops at the imported globals (`can't make a global on its own`, `import.global`), before `externref` matters. So Pyodide is not a case that
+      needs B-203: using the module for real means Python implementations of the 254 `env` imports (Emscripten's JS runtime), and an `externref` there is a JS value that Python cannot do
+      anything with, so a handle registry would not help.
+      **A small bug found by the same probe (not fixed):** an `externref` *argument* is refused everywhere (`NotImplementedError: externref values are not supported`), but an `externref`
+      *result* is not: node raises `ValueError: could not convert string to float: 'null'`, wasmtime returns `()` as if it had succeeded, wasm3 raises `TypeError: unknown type 7`.
+      It should be the same `NotImplementedError` on every backend (with a test); `Global("externref")` is a `ValueError` and `Table("externref")` a `NotImplementedError`, also not alike.
 - [x] **B-204** (DONE: the `Ref` tuple, `CallStep.outs`, `tests/test_batch_multi_value.py`, a step in the self-test; it was: this is code, not just documentation: `Batch.call` currently raises `NotImplementedError("multi-value results in a batch")`, the README describes this; waiting for a decision about the shape of the result, `Ref` or a tuple of `Ref`) Multi-value in `Batch`: a tuple of results in a batch (right now the README says "not supported").
 
 Backends: wasmtime (fully), wasm3 (partly), the JS engines (through wrappers); what does not exist is marked
