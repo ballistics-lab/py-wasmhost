@@ -91,7 +91,7 @@ it works on the device with its hybrid host: clang and lld compiled C and C++ in
 2. The CI of the newest commit. `Tests` and `Pre-commit` were green on `b80e8d9` (runs 183 and 234 on `main`, 184 and 235 on the tag `v0.1.0`; checked 2026-10-16). The macOS/PyPy failure is not a flake: it is a reproducible crash on PyPy 3.11, macOS arm64, backend `jsc` (see its entry below); `pypy-linux.yml` is run by hand only, so it no longer reddens PRs.
 3. ~~The first CI run after Python 3.15 is released~~ Done: 3.15 is stable (owner, 2026-10-12), the matrix stays unpinned and was green on `b80e8d9`.
 4. B-405 when upstream merges pywasm3's two PRs (#13, #14); B-406 is closed (option b: leave it, documented).
-5. Nothing else is ready to start: B-006 was closed and B-203 deferred (2026-10-16), B-303, B-304a and B-503 are deferred (below). The faster transfer for node/bun is done (a side file, B-302; to be agreed with the owner).
+5. Nothing else is ready to start: B-006 was closed and B-203 deferred (2026-10-16), B-303, B-304a and B-503 are deferred (below). The faster transfer for node/bun is done and closed (a side file, B-302, 2026-10-16).
 
 **Deferred by owner decision:** B-203 (`externref`; 2026-10-16: no consumer now and none expected), B-303 (until it is really needed), B-304a (examples on asyncio), B-503 (the `openat` sandbox, until it is needed), stubs for the imports of a module in `wasmhost run` (the owner: not now), `wasmhost.vfs`, Deno (B-701b: a bug in Deno itself). **Waiting for the owner:** the branch name and
 tidying (B-003), `coreutils.wasm` stays in git (B-004), `tiny-bclibc-wasm` (B-803). **Not covered by tests:** `examples/wasmclang.py` (run by hand on wasmtime and node on 2026-10-07: the same output before and after the change), `jslinux.py`
@@ -371,7 +371,7 @@ Done when: `instance.exports.table.get(0)(1, 2)` works where the engine allows i
       processes gets below one copy through the kernel; real shared memory needs a native extension (Node has no `mmap`, `SharedArrayBuffer` stays in one process), which the project does
       not have, and an engine in the same process (`jsc`, `wasmtime`) is the other way. Risks of a side file, not tried: a private temporary directory (`tempfile`, mode 0700) and removing
       it on `close`, file locking on Windows, and `/dev/shm` exists only on Linux (macOS and Windows would use the temporary directory). One run each, 4 cores.
-      **DONE for `node` and `bun`, 2026-10-16 (`NodeBackend`, `tests/test_side_file.py`, README "Big buffers on Node and Bun"; not yet agreed with the owner, so the mark of B-302 is not touched).**
+      **DONE for `node` and `bun`, 2026-10-16, CLOSED on the owner's word the same day, with the limits listed below as they are (`NodeBackend`, `tests/test_side_file.py`, README "Big buffers on Node and Bun"; CI of the branch was green on Windows, macOS and Linux, after one re-run of a `jsc` crash that is the known one).**
       `Memory.read` / `Memory.write` of `_side_min` = 16 KiB or more go through the side file (`WASMHOST_SIDE` tells Node which file; the context gets `__sideRead(view)` and `__sideWrite(view)`
       and no path, so a script there cannot reach another file); the directory is made with `tempfile.mkdtemp` (mode 0700), in `/dev/shm` if it is writable, and goes with `close()`; if it
       cannot be made the pipe carries everything as before. The threshold was measured on the real code: the file wins from 4 KiB in `/dev/shm` and from 8 KiB on a disk (`/tmp`), 16 KiB
