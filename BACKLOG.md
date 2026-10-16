@@ -710,6 +710,13 @@ and not Linux (ubuntu, PyPy 3.11, 30 repeats: clean; CPython on macOS: clean). R
 array instead of a `byref` (commit `561e9ec`, reverted): 3 of the 3 finished shards of 30 repeats crashed (repeats 2, 9 and one more), which is no better than before.
 **Not tried:** reading the memory through `get_bytes` (a typed array, C API) instead of `readB64` while a host function runs; running the module with a
 smaller program that only calls a host function that reads memory. The earlier notes follow.
+**A crash on CPython, at another place (2026-10-16, run `Tests` 190 on `79e9f14`, branch `backlog-triage`).** The job `macos-latest / 3.15`, step `pytest --wasm-backend jsc`, ended with
+`Fatal Python error: Segmentation fault` (exit code 139) on CPython 3.15.0 (Homebrew, arm64). The Python stack: `_capi.py` `evaluate` (line 126) <- `_jsc.py` `evaluate` <- `examples/pyodide.py` `_eval` (line 549) <-
+`Pyodide.__init__` (line 503) <- `tests/test_pyodide_example.py::test_python_runs_in_pyodide[jsc]`; the C stack names `JavaScriptCore`, `JSC::typedArrayViewProtoGetterFuncBuffer` (the `.buffer` getter of a typed array).
+So it is **not PyPy, not `JSValueToStringCopy`, and not from inside a host function**: the same `ctypes` entry into the JavaScriptCore C API (`evaluate`) on macOS arm64, a different place. The step stopped after 22 s,
+and the rest of the job (447 tests of the `jscontext` step) passed. A re-run of the job on the same commit (attempt 2) was green, and the `jsc` step of `3.10`, `3.15t` and `pypy3.11` in attempt 1 was green too.
+That makes it one sample on CPython, not a rate, and it does not say that the change of that commit played no part: the commit adds only a side-file path to `NodeBackend` (node and bun), which `jsc` never calls, and two
+unused functions in the shared `_JS` script. What it does change: "CPython on macOS: clean" above was true of 30 repeats of one test and is not a promise for the suite; the guesses about PyPy's JIT are not the whole story.
 
 - **A segmentation fault on `macos-latest / pypy3.11`, in the step `pytest --wasm-backend wasmtime`.** Run 37613538125
   (`main`, `7f3c548`, only `publish.yml` changed since a green run). The process died in
