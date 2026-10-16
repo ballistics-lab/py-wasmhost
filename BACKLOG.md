@@ -88,12 +88,12 @@ it works on the device with its hybrid host: clang and lld compiled C and C++ in
 **To do first, if the owner has not said otherwise:**
 0. ~~Pyodide work~~ Done: merged in PR #12, CI green, B-701d closed, README "What has run where" has a `pyodide` column (only the self-test is `yes (CI)`; the rest is `?`). Next: the owner tags `v0.1.0`.
 1. ~~On the device: the self-test after the rename~~ Done 2026-10-07 by the owner: Pythonista 41/41 with the wheel after the rename (call 37 us, batch of 3 94 us); all the examples run on the device (see above).
-2. The CI of the newest commit, and the macOS/PyPy flake (below): it has now come back three times in the eleven runs 124 to 134 on the branch of that time, so "seen once" is out of date; the owner chose to treat it as a flake, but it may be worth the guesses in its entry.
-3. The first CI run after Python 3.15 is released (the matrix is unpinned).
+2. The CI of the newest commit. `Tests` and `Pre-commit` were green on `b80e8d9` (runs 183 and 234 on `main`, 184 and 235 on the tag `v0.1.0`; checked 2026-10-16). The macOS/PyPy failure is not a flake: it is a reproducible crash on PyPy 3.11, macOS arm64, backend `jsc` (see its entry below); `pypy-linux.yml` is run by hand only, so it no longer reddens PRs.
+3. ~~The first CI run after Python 3.15 is released~~ Done: 3.15 is stable (owner, 2026-10-12), the matrix stays unpinned and was green on `b80e8d9`.
 4. B-405 when upstream merges pywasm3's two PRs (#13, #14); B-406 is closed (option b: leave it, documented).
-5. Then the owner picks: B-203 (`externref`), a binary channel for node/bun (about 50 MB/s through the pipe and JSON now), B-006 (CI for examples), or B-503 (the `openat` sandbox, the only open entry of phase 5).
+5. Nothing else is ready to start: B-006 was closed and B-203 deferred (2026-10-16), B-303, B-304a and B-503 are deferred (below). The owner may pick a binary channel for node/bun (about 50 MB/s through the pipe and JSON now; it has no entry of its own yet).
 
-**Deferred by owner decision:** B-303 (until it is really needed), B-304a (examples on asyncio), B-503 (the `openat` sandbox, until it is needed), stubs for the imports of a module in `wasmhost run` (the owner: not now), `wasmhost.vfs`, Deno (B-701b: a bug in Deno itself). **Waiting for the owner:** the branch name and
+**Deferred by owner decision:** B-203 (`externref`; 2026-10-16: no consumer now and none expected), B-303 (until it is really needed), B-304a (examples on asyncio), B-503 (the `openat` sandbox, until it is needed), stubs for the imports of a module in `wasmhost run` (the owner: not now), `wasmhost.vfs`, Deno (B-701b: a bug in Deno itself). **Waiting for the owner:** the branch name and
 tidying (B-003), `coreutils.wasm` stays in git (B-004), `tiny-bclibc-wasm` (B-803). **Not covered by tests:** `examples/wasmclang.py` (run by hand on wasmtime and node on 2026-10-07: the same output before and after the change), `jslinux.py`
 (`bellard.org` is blocked in the assistant's environment; the owner ran it on the device), `coremark.py` (the owner ran it on the device); the "Examples" step in CI runs only `basic.py` and `imports.py` (B-006).
 
@@ -115,7 +115,7 @@ tidying (B-003), `coreutils.wasm` stays in git (B-004), `tiny-bclibc-wasm` (B-80
 
 Owner decision: everything is done in one working branch (the owner opens the PR and tidies the branch). Each step comes with tests, a step in the
 self-test and a green pre-commit, and is a separate commit. Done so far, in order: B-201 (steps 1-4), B-304, B-204, B-507, B-509, B-202, B-301, B-302,
-then phase 4 (B-401 to B-404), then B-501, B-502, B-504 and B-505 (done 2026-10-07). The detail of each is in its own entry below. Open: B-203, B-303, B-304a, B-006, phase 5 (B-503 only) and phase 6.
+then phase 4 (B-401 to B-404), then B-501, B-502, B-504 and B-505 (done 2026-10-07). The detail of each is in its own entry below. Open, all deferred or far: B-203, B-303, B-304a, phase 5 (B-503 only) and phase 6 (B-006 was closed 2026-10-16).
 
 ## Accepted API decisions
 
@@ -282,7 +282,7 @@ Done when: for an arbitrary module an import object can be assembled automatical
       name on every call.
       Self-test: a step about `Function` with a known and an unknown signature, `type()` and resolution; ordinary tests.
 - [x] **B-202** (DONE: `Table(..., init)` and `grow(delta, init)`, filling through `table_set` at the API level, so on the JS engines N calls for a table of N entries; tests in `test_memory_table.py`, a step in the self-test) `Table(kind, initial, maximum, init)`: the initial value.
-- [ ] **B-203** `externref` and `funcref` as values of globals and tables (right now only numbers) and `Table("externref", …)`.
+- [ ] **B-203** (DEFERRED 2026-10-16 on the owner's word: no consumer now and none expected; revisit when one appears) `externref` and `funcref` as values of globals and tables (right now only numbers) and `Table("externref", …)`.
       A design decision: how to hold Python objects on the engine side (a registry with handles, release).
       **Design notes (2026-10-16, nothing built; the owner has not chosen yet).** Ways to release a handle: (1) the registry lives as long as the `Instance` (simplest, no dangling
       handle, leaks in long-lived instances); (2) a scope, `with inst.refs() as refs:`, that clears its handles on exit, with `weakref.finalize` plus a `ResourceWarning` as a safety net
