@@ -284,6 +284,18 @@ Done when: for an arbitrary module an import object can be assembled automatical
 - [x] **B-202** (DONE: `Table(..., init)` and `grow(delta, init)`, filling through `table_set` at the API level, so on the JS engines N calls for a table of N entries; tests in `test_memory_table.py`, a step in the self-test) `Table(kind, initial, maximum, init)`: the initial value.
 - [ ] **B-203** `externref` and `funcref` as values of globals and tables (right now only numbers) and `Table("externref", …)`.
       A design decision: how to hold Python objects on the engine side (a registry with handles, release).
+      **Design notes (2026-10-16, nothing built; the owner has not chosen yet).** Ways to release a handle: (1) the registry lives as long as the `Instance` (simplest, no dangling
+      handle, leaks in long-lived instances); (2) a scope, `with inst.refs() as refs:`, that clears its handles on exit, with `weakref.finalize` plus a `ResourceWarning` as a safety net
+      for a scope that was not closed (the `open()` / `with open()` pattern); a handle carries a generation so a stale one raises `ValueError` and does not reach another object; (3) a host
+      import `drop(ref)` that the module calls (the `wasm-bindgen` way, needs a cooperating module); (4) the engine's native `externref` and its own GC; (5) Python's GC alone: rejected,
+      it only sees the Python wrapper and not what the module still holds; (6) do nothing: a user's own dict plus `i32` keys already works today. `funcref` most likely needs no registry
+      (`Function` objects stand for it). Table slots and globals can be cleared on scope exit; linear memory cannot be scanned.
+      **wasm3 (checked 2026-10-16, pywasm3 `4c1334e`, wasm3 `21f029a`, built and run in a scratch venv):** the engine has `externref` (`c_m3Type_externref`, a host handle
+      `const void* ref`, `d_m3HasRefTypes`); a module with `ref.null extern` / `ref.is_null` and an `externref` table with `table.get` loads and runs. **pywasm3 cannot pass the
+      value:** `put_arg_on_stack` / `set_tagged_value` take only i32, i64, f32, f64, so a call with an `externref` parameter silently drops the argument (`None`, `0` and `object()`
+      all read as null inside the module, no error), and pywasm3 has no tables API (`export_table` here is a placeholder). Native `externref` on wasm3 needs a change in pywasm3
+      (argument conversion and tables), not in wasmhost; until then `supports("table.externref")` stays False there. Not checked: a non-null `externref` through the engine, and
+      whether wasm3 allows `table.get` / `table.set` on `externref` tables beyond the one `table.get` run above.
 - [x] **B-204** (DONE: the `Ref` tuple, `CallStep.outs`, `tests/test_batch_multi_value.py`, a step in the self-test; it was: this is code, not just documentation: `Batch.call` currently raises `NotImplementedError("multi-value results in a batch")`, the README describes this; waiting for a decision about the shape of the result, `Ref` or a tuple of `Ref`) Multi-value in `Batch`: a tuple of results in a batch (right now the README says "not supported").
 
 Backends: wasmtime (fully), wasm3 (partly), the JS engines (through wrappers); what does not exist is marked
