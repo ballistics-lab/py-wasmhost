@@ -362,6 +362,15 @@ Done when: `instance.exports.table.get(0)(1, 2)` works where the engine allows i
       not tried: writing the header and the bytes separately. **Not proved:** the real protocol puts the data inside the `eval` scripts, also inside a `Batch` and in nested host calls,
       so a binary frame has to fit there; the pipes would have to be binary (the code uses `universal_newlines=True` now); Windows and macOS were not measured, and Windows was the
       reason to ask. Scripts: `scratchpad/proto/loop.js` and `bench.py` of the session (not kept in the repository).
+      **Plan B measured the same day (D, a side file):** Python writes the bytes to a file, only the path and the length go over the pipe, and Node reads the file straight into the
+      memory (`fs.readSync(fd, memory, ...)`; the prototype used a `Buffer` of the size of a wasm memory, not a real `WebAssembly.Memory`) and writes it out the same way for a read.
+      MB/s, write / read, `/dev/shm`: `node` 64 KiB 764 / 784, 1 MiB 1330 / 1351, 8 MiB 1987 / 2364; `bun` 817 / 736, 2260 / 2337, 2444 / 2432. On `/tmp` (a disk, so the page cache): `node`
+      239 / 244, 1405 / 1443, 1929 / 2086; `bun` 292 / 312, 1566 / 1485, 1802 / 2229. So from about 1 MiB a file is two to three times faster than raw bytes over the pipe (C: 450-1100),
+      near 2 GB/s, and on small buffers it is worse (the cost of opening and truncating a file), so it would need a threshold (about 256 KiB, to be measured) and the pipe below it. `wasmtime`
+      on the same machine: write 5800-8800, read 1400-1500 (the copy that makes `bytes`), so a file is as fast as `wasmtime` for reading and 3-4 times slower for writing. Nothing between two
+      processes gets below one copy through the kernel; real shared memory needs a native extension (Node has no `mmap`, `SharedArrayBuffer` stays in one process), which the project does
+      not have, and an engine in the same process (`jsc`, `wasmtime`) is the other way. Risks of a side file, not tried: a private temporary directory (`tempfile`, mode 0700) and removing
+      it on `close`, file locking on Windows, and `/dev/shm` exists only on Linux (macOS and Windows would use the temporary directory). One run each, 4 cores.
       JSC without JIT is turned off with the variable `JSC_useJIT=false` before the process starts (`jsc` has no `--jitless` of its own; `typeof
       WebAssembly` remains `object`, wasm runs on the LLInt interpreter).
       Computation inside wasm itself (`fib(30)` recursive / a loop of 1e8 iterations), integers only, no memory:
