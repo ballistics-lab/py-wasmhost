@@ -20,9 +20,11 @@ import base64
 import contextlib
 import importlib
 import json
+import os
 import re
 import shutil
 import subprocess
+import tempfile
 from collections.abc import Generator, Sequence
 from typing import Any
 
@@ -166,6 +168,18 @@ globalThis.__wh = (function () {
             var b = __Buffer.from(text, 'base64'), u = new Uint8Array(objs[o].buffer);
             if (ptr < 0 || ptr + b.length > u.length) throw new RangeError('memory access out of bounds');
             u.set(b, ptr);
+            return '';
+        },
+        readToFile: function (o, ptr, n) {  // memory into the side file (node, bun: see NodeBackend), no text
+            var u = new Uint8Array(objs[o].buffer);
+            if (ptr < 0 || ptr + n > u.length) throw new RangeError('memory access out of bounds');
+            __sideWrite(u.subarray(ptr, ptr + n));
+            return '';
+        },
+        writeFromFile: function (o, ptr, n) {  // the side file into memory, in place
+            var u = new Uint8Array(objs[o].buffer);
+            if (ptr < 0 || ptr + n > u.length) throw new RangeError('memory access out of bounds');
+            __sideRead(u.subarray(ptr, ptr + n));
             return '';
         },
         writeIn: function (o, ptr, n) {  // bytes that Python left in globalThis.__wasmhost_in, through the C API
@@ -682,6 +696,27 @@ const ctx = vm.createContext({ __Buffer: Buffer });
 const pause = new Int32Array(new SharedArrayBuffer(4));
 const sleep = ms => Atomics.wait(pause, 0, 0, ms);
 
+// The side file: the one file Python made for moving big buffers (WASMHOST_SIDE). A script in the context gets these
+// two functions and no path, so it can't read or write any other file through them.
+const sidePath = process.env.WASMHOST_SIDE || '';
+if (sidePath) {
+    ctx.__sideRead = view => {  // fill `view` from the file, in place
+        const fd = fs.openSync(sidePath, 'r');
+        try {
+            for (let got = 0; got < view.length;) {
+                const n = fs.readSync(fd, view, got, view.length - got, got);
+                if (n === 0) throw new Error('the bytes did not arrive whole');
+                got += n;
+            }
+        } finally { fs.closeSync(fd); }
+    };
+    ctx.__sideWrite = view => {  // the file becomes the bytes of `view`
+        const fd = fs.openSync(sidePath, 'w');
+        try { for (let put = 0; put < view.length;) put += fs.writeSync(fd, view, put, view.length - put, put); }
+        finally { fs.closeSync(fd); }
+    };
+}
+
 function writeAll(text) {
     const bytes = Buffer.from(text);
     for (let off = 0; off < bytes.length;) {
@@ -738,11 +773,29 @@ rl.on('close', () => process.exit(0));
 """.replace("@HOST_ERROR@", HOST_ERROR)
 
 
+def _side_dir() -> str | None:
+    """A private directory for the side file (mode 0700), in `/dev/shm` where there is one (memory, so no disk), else in
+    the temporary directory; None if neither can be made, and then the pipe carries everything."""
+    shm = "/dev/shm"
+    for where in (shm if os.path.isdir(shm) and os.access(shm, os.W_OK) else None, None):
+        try:
+            return tempfile.mkdtemp(prefix="wasmhost-", dir=where)
+        except OSError:
+            continue
+    return None
+
+
 class NodeBackend(JSBackend):
-    """A long-lived `node` process evaluating scripts in a `vm` context (see the protocol above)."""
+    """A long-lived `node` process evaluating scripts in a `vm` context (see the protocol above).
+
+    A buffer of `_side_min` bytes or more does not go over the pipe (base64 in a JSON line, about 50 MB/s) but through
+    a file of a private directory: Python writes it and Node reads it straight into the memory of the module, or the
+    other way round, and only a short line crosses the pipe. About 2 GB/s on a 1 MiB buffer and more. Smaller buffers
+    stay on the pipe, where opening a file costs more than the bytes."""
 
     name = "node"
     _base64 = True
+    _side_min = 16 * 1024  # bytes; the file wins from 4 KiB in /dev/shm and from 8 KiB on a disk (BACKLOG B-302)
     program = "node"  # what is looked for on PATH
     # a process: any thread may talk to it, one at a time; and `vm` can stop a script that runs too long
     features = JSBackend.features | {"imports", "threads", "timeout"}
@@ -752,14 +805,25 @@ class NodeBackend(JSBackend):
         node = node or shutil.which(self.program)
         if not node:
             raise FileNotFoundError(f"{self.program} not found on PATH")
-        self._proc = subprocess.Popen(
-            [node, "-e", _NODE_LOOP],
-            stdin=subprocess.PIPE,
-            stdout=subprocess.PIPE,
-            universal_newlines=True,
-            encoding="utf-8",
-        )
+        self._side: str | None = _side_dir()
+        self._side_file = os.path.join(self._side, "bytes") if self._side else ""
+        env = dict(os.environ)
+        if self._side:
+            env["WASMHOST_SIDE"] = self._side_file
+        try:
+            self._proc = subprocess.Popen(
+                [node, "-e", _NODE_LOOP],
+                stdin=subprocess.PIPE,
+                stdout=subprocess.PIPE,
+                universal_newlines=True,
+                encoding="utf-8",
+                env=env,
+            )
+        except BaseException:
+            self._drop_side()
+            raise
         if self._proc.stdin is None or self._proc.stdout is None:  # can't happen with PIPE; narrows the types
+            self._drop_side()
             raise RuntimeError(f"{self.program} started without stdin/stdout pipes")
         self._stdin = self._proc.stdin
         self._stdout = self._proc.stdout
@@ -773,6 +837,32 @@ class NodeBackend(JSBackend):
     def _send(self, message: dict[str, Any]) -> None:
         self._stdin.write(json.dumps(message) + "\n")
         self._stdin.flush()
+
+    def _drop_side(self) -> None:
+        """Remove the directory of the side file (once the process is gone)."""
+        if self._side:
+            shutil.rmtree(self._side, ignore_errors=True)
+            self._side = None
+
+    def memory_read(self, memory: int, offset: int, length: int) -> bytes:
+        if self._side and length >= self._side_min:
+            self._o("readToFile", memory, int(offset), int(length))
+            with open(self._side_file, "rb", buffering=0) as f:
+                data = f.read(length)
+            if len(data) != length:
+                raise OSError("the bytes did not arrive whole")
+            return data
+        return super().memory_read(memory, offset, length)
+
+    def memory_write(self, memory: int, offset: int, data: bytes) -> None:
+        if self._side and len(data) >= self._side_min:
+            with open(self._side_file, "wb", buffering=0) as f:
+                view = memoryview(data)
+                while view:
+                    view = view[f.write(view) :]
+            self._o("writeFromFile", memory, int(offset), len(data))
+            return
+        super().memory_write(memory, offset, data)
 
     def _install_hostcall(self) -> None:
         """Nothing to do: `__hostcall` is in the context from the start."""
@@ -804,6 +894,7 @@ class NodeBackend(JSBackend):
             self._proc.wait(timeout=5)
         if not self._stdout.closed:
             self._stdout.close()
+        self._drop_side()
 
 
 class BunBackend(NodeBackend):
