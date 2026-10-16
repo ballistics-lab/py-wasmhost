@@ -296,6 +296,12 @@ Done when: for an arbitrary module an import object can be assembled automatical
       all read as null inside the module, no error), and pywasm3 has no tables API (`export_table` here is a placeholder). Native `externref` on wasm3 needs a change in pywasm3
       (argument conversion and tables), not in wasmhost; until then `supports("table.externref")` stays False there. Not checked: a non-null `externref` through the engine, and
       whether wasm3 allows `table.get` / `table.set` on `externref` tables beyond the one `table.get` run above.
+      **Related entries (2026-10-16):** B-201 (done) is the precedent for the registry: `Function` is cached by the engine's key (`(store_id, index)` on wasmtime, `===` in the shim's registry
+      on the JS engines) and called by `handle`; `externref` can extend that to any object. B-304 (a lock per backend) already serialises the registry. B-406 (an `Instance` is freed only by
+      the cyclic collector) is why GC-driven release is not reliable. B-505 notes the first real user: Pyodide's `pyodide.asm.wasm` has `externref` in 149 function types and 280 imported
+      globals, so `import.global` on wasm3 (`supports("import.global")` is False) is a neighbouring limit to settle together. B-601 (`Tag` / `Exception`, `exnref`) and B-604 (GC types) are the
+      same kind of opaque engine reference: make the registry general so they can reuse it. B-405 does not unblock wasm3 `externref` as written (its two PRs are about Python 3.15 and the
+      GIL); that needs a separate pywasm3 PR for `externref` arguments and tables.
 - [x] **B-204** (DONE: the `Ref` tuple, `CallStep.outs`, `tests/test_batch_multi_value.py`, a step in the self-test; it was: this is code, not just documentation: `Batch.call` currently raises `NotImplementedError("multi-value results in a batch")`, the README describes this; waiting for a decision about the shape of the result, `Ref` or a tuple of `Ref`) Multi-value in `Batch`: a tuple of results in a batch (right now the README says "not supported").
 
 Backends: wasmtime (fully), wasm3 (partly), the JS engines (through wrappers); what does not exist is marked
