@@ -304,6 +304,15 @@ A program with JavaScript of its own (Pyodide, an emulator) needs to hand the en
 `objc_util`) through its C API (`ctypes`), which fills the array in place; through hex on the others and as the
 fallback if the C API ever fails. The self-test reports which was used (`N bytes via C API` or `via hex`).
 
+## Big buffers on Node and Bun
+
+`Memory.read` and `Memory.write` of 16 KiB or more do not go over the pipe to `node` or `bun` (base64 in a JSON line, about 50 MB/s) but
+through a file: Python writes it, Node reads it straight into the memory of the module, or the other way round, and only a short line
+crosses the pipe. The file is in a private directory (mode 0700, `/dev/shm` where there is one, else the temporary directory) that goes with
+the backend, and a script in the engine can reach that one file only. About 1.5 to 2.5 GB/s from a 1 MiB buffer (`wasmhost bench --buffer 1024`),
+against 50 to 100 MB/s before; below 16 KiB the pipe is as quick. If the directory cannot be made the pipe carries everything, as before.
+Batches (`Batch.read` / `Batch.write`) and `put_bytes` / `get_bytes` still use the pipe. `wasmtime` is faster still, and is first in the order.
+
 ## Backends
 
 | Backend     | Where                                                          | How it is detected                                                                                                                                                                                                                                                  |
