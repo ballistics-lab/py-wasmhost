@@ -165,7 +165,7 @@ It changes nothing in the API, it only makes the documentation truthful.
       import), "table: made on its own, imported, shared" (functions through `call_indirect` between instances, null,
       `grow`, `externref` is rejected) and "custom sections". Backends without `import.memory`/`import.table` (wasm3)
       honestly say «не підтримується» (that is, "not supported"). The modules in `_selftest.py` are checked by `tests/test_selftest.py`.
-- [ ] **B-006** CI: the "Examples" step runs only `basic.py` and `imports.py`. `coreutils.py` is covered through
+- [x] **B-006** (CLOSED 2026-10-16 on the owner's word: no wider coverage is needed; the examples that need a large download or a terminal stay manual) CI: the "Examples" step runs only `basic.py` and `imports.py`. `coreutils.py` is covered through
       `pytest` (`tests/test_coreutils_example.py`), and `wasmclang.py` is not run in CI at all (it needs
       a download of ~60 MB). Decide whether it is worth it: a light smoke test with an artifact cache, or leave it as manual.
       As of 2026-10-06 the ones left without tests are `examples/wasmclang.py`, `examples/jslinux.py` and `examples/coremark.py`
