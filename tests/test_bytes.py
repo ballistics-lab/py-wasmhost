@@ -57,9 +57,7 @@ def _jscontext_with_broken_c_api(monkeypatch: pytest.MonkeyPatch) -> Any:
 
 def test_jscontext_falls_back_to_hex_when_the_c_api_fails(monkeypatch: pytest.MonkeyPatch) -> None:
     backend = _jscontext_with_broken_c_api(monkeypatch)
-    assert (
-        backend._capi is not None
-    )  # signatures could be set: it is the calls that fail  # pyright: ignore[reportPrivateUsage]
+    assert backend._capi is not None  # signatures could be set: it is the calls that fail  # pyright: ignore[reportPrivateUsage]
     assert backend.put_bytes("globalThis.blob", b"abc") == "hex"  # the C API was tried, failed, and is off now
     assert backend._capi is None  # pyright: ignore[reportPrivateUsage]
     assert backend.get_bytes("blob") == b"abc"
