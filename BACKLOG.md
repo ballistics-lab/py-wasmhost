@@ -352,6 +352,16 @@ Done when: `instance.exports.table.get(0)(1, 2)` works where the engine allows i
       on `node`, 149-156 on `wasmtime`) are not slower through the pipe, so the bytes are the cost. Not measured: Windows, macOS. Plan (owner, 2026-10-16): try a larger read chunk and
       length-prefixed raw bytes instead of base64 as one experiment; an extra pipe (fd 3) is out, `Popen(pass_fds=...)` does not work on Windows; a side file (path/offset/length over
       the pipe) is plan B.
+      **Prototype of 2026-10-16 (a stand-alone micro-benchmark, not a change to `_js.py`; nothing in the repository).** It compares three transports between Python and a long-lived
+      `node` / `bun` process, MB/s write / read, best of 5 (the spread is large, only factors mean something): A the way it is today (a JSON line with the base64 inside the script that
+      `vm.runInContext` runs), B a JSON line with base64 and no `vm`, C a JSON header line followed by the raw bytes (length-prefixed). `node`, read chunk 64 KiB: 64 KiB buffer
+      A 83 / 53, B 101 / 55, C 677 / 325; 1 MiB A 35 / 56, B 120 / 65, C 1228 / 553; 8 MiB A 29 / 51, B 42 / 53, C 1057 / 558. `bun`: C 885-1023 write, 443-740 read on 1-8 MiB. The data
+      came back intact in every C run. What it says: dropping base64 and JSON for the bytes is worth 10-35 times, much more than the earlier guess of 2-3 times; a larger read chunk (1 MiB)
+      changes little (it helps A and B a bit on small buffers); compiling the script in `vm` is not the cost (B is only a little faster than A); base64 gets worse on big buffers (~30-40
+      MB/s at 8 MiB) while raw bytes stay near 1 GB/s. The read side of C is slower than the write side because the prototype builds the answer with `Buffer.concat` (one copy more);
+      not tried: writing the header and the bytes separately. **Not proved:** the real protocol puts the data inside the `eval` scripts, also inside a `Batch` and in nested host calls,
+      so a binary frame has to fit there; the pipes would have to be binary (the code uses `universal_newlines=True` now); Windows and macOS were not measured, and Windows was the
+      reason to ask. Scripts: `scratchpad/proto/loop.js` and `bench.py` of the session (not kept in the repository).
       JSC without JIT is turned off with the variable `JSC_useJIT=false` before the process starts (`jsc` has no `--jitless` of its own; `typeof
       WebAssembly` remains `object`, wasm runs on the LLInt interpreter).
       Computation inside wasm itself (`fib(30)` recursive / a loop of 1e8 iterations), integers only, no memory:
