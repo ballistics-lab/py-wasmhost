@@ -346,6 +346,12 @@ Done when: `instance.exports.table.get(0)(1, 2)` works where the engine allows i
       64 KiB 1052 / 1169; the buffers are intact at all sizes (1 byte to 8 MiB); a call 36-42 µs, a batch of 3 81-84 µs; selftest 36/36.**
       Next, the bottleneck of node/bun is the pipe and JSON (~50 MB/s): a binary channel or a larger read chunk. `jscontext`
       on Pythonista has the same path through the C API: measure `wasmhost bench` on the device.
+      **Baseline re-measured 2026-10-16** (`wasmhost bench --buffer KIB --repeat 5`, Linux, 4 cores, `main` at `b80e8d9`; MB/s, write / read; one run each, the spread between runs is large,
+      only factors mean something): `node` 64 KiB 50 / 61, 1 MiB 61 / 71, 8 MiB 44 / 61; `bun` 49 / 75, 59 / 103, 45 / 105; `wasmtime` 6480 / 6588, 8786 / 1529, 5838 / 1404. The size of the
+      buffer hardly matters, so it is the throughput of the stream and not a per-message cost; a call (64-71 us on `node`, 70-92 on `bun`, 41 on `wasmtime`) and a batch of 3 (99-123 us
+      on `node`, 149-156 on `wasmtime`) are not slower through the pipe, so the bytes are the cost. Not measured: Windows, macOS. Plan (owner, 2026-10-16): try a larger read chunk and
+      length-prefixed raw bytes instead of base64 as one experiment; an extra pipe (fd 3) is out, `Popen(pass_fds=...)` does not work on Windows; a side file (path/offset/length over
+      the pipe) is plan B.
       JSC without JIT is turned off with the variable `JSC_useJIT=false` before the process starts (`jsc` has no `--jitless` of its own; `typeof
       WebAssembly` remains `object`, wasm runs on the LLInt interpreter).
       Computation inside wasm itself (`fib(30)` recursive / a loop of 1e8 iterations), integers only, no memory:
