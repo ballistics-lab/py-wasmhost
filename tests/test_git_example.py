@@ -42,6 +42,8 @@ def load_example() -> ModuleType:
 def git(
     session: str, monkeypatch: pytest.MonkeyPatch, tmp_path: Path, tmp_path_factory: pytest.TempPathFactory
 ) -> Iterator[Callable[..., int]]:
+    if session == "pyodide":  # the host would run inside Pyodide's Python, which has no os.link and no sockets
+        pytest.skip("the WASI and network host of the example needs a CPython with sockets and os.link")
     if not wasmhost.get_backend().supports("imports"):
         pytest.skip(f"the {wasmhost.get_backend().name} backend can't take imports")
     for name in ("GIT_USERNAME", "GIT_PASSWORD", "GIT_TOKEN"):
