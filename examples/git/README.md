@@ -18,9 +18,10 @@ processes, which is why git alone cannot reach a server: libgit2 gets its connec
     python examples/git/git.py pull | push [-u remote branch] | fetch
 
 **From a ZIP (Pythonista):** download the repository as a ZIP from GitHub (*Code → Download ZIP*) and unpack it. Nothing needs
-installing: `git.py` finds `wasmhost` in `../../src` of the unpacked tree and the two modules are beside it. Open
-`examples/git/git.py` and press play: it gives a `git>` prompt (in `~/Documents/git`; `cd DIR`, `pwd`, `exit`, and any
-`git` command, with or without the word `git`). Or, from StaSh, `python examples/git/git.py clone <url>`.
+installing: `git.py` finds `wasmhost` in `../../src` of the unpacked tree and the two modules are beside it. Run
+`examples/git/git.py` with arguments from a shell (StaSh, a terminal): `python examples/git/git.py clone <url>`. Where there is no
+shell, only play, run it with the argument `-i` (or `--interactive`): it gives a `git>` prompt (in `~/Documents/git`; `cd DIR`,
+`pwd`, `exit`, and any `git` command, with or without the word `git`). Without arguments it only prints the usage.
 
 **In StaSh:** copy `git.py`, `git.wasm` and `git-real.wasm` into StaSh's `bin` directory. Then `git clone ...`, `git status`,
 `git commit -m ...` are commands of the shell. If a `.wasm` is not beside `git.py`, it is downloaded once into

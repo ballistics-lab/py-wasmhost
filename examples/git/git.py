@@ -3,6 +3,7 @@
     python examples/git/git.py clone https://github.com/user/repo
     python examples/git/git.py status | add -A | commit -m msg | log | diff | merge | rebase | tag | reset | ...
     python examples/git/git.py pull | push | fetch
+    python examples/git/git.py -i            # a `git>` prompt, for a place with no shell (Pythonista's play button)
 
 Two modules share the repository on disk (they write the same format):
 
@@ -262,8 +263,13 @@ def run(argv, cwd=None, wasm=None, real_wasm=None, **options):
     return run_git(argv, root, inside, **git)
 
 
+USAGE = """usage: git.py <git command and arguments>     e.g. git.py clone https://github.com/user/repo
+       git.py -i                              a prompt that takes git commands (for Pythonista's play button)
+Credentials: GIT_USERNAME and GIT_TOKEN. See examples/git/README.md."""
+
+
 def prompt():
-    """Without arguments (Pythonista's play button): a prompt that takes `git` commands, `cd`, `pwd` and `exit`."""
+    """`-i`: a prompt that takes `git` commands, `cd`, `pwd` and `exit`."""
     documents = os.path.expanduser("~/Documents")
     here = os.path.join(documents, "git") if os.path.isdir(documents) else os.getcwd()
     os.makedirs(here, exist_ok=True)
@@ -297,5 +303,14 @@ def prompt():
                 print(f"git: {exc}")
 
 
+def main(argv):
+    if argv[:1] in (["-i"], ["--interactive"]):
+        return prompt()
+    if not argv:
+        print(USAGE, file=sys.stderr)
+        return 2
+    return run(argv)
+
+
 if __name__ == "__main__":
-    sys.exit(run(sys.argv[1:]) if len(sys.argv) > 1 else prompt())
+    sys.exit(main(sys.argv[1:]))
