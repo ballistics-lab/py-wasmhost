@@ -704,6 +704,15 @@ shared memory, memory64 (and GC), each with `supports(...)`.
       libgit2 never looks for `.git` in `/`, so the repository root is mounted as `/work`; on wasm32 libgit2 picks
       `__builtin_umul_overflow(unsigned*)` for `size_t` (`unsigned long`), hence `-Wno-incompatible-pointer-types`.
 
+- [~] **B-511** (2026-10-18) PoC: the real git built to WASI, `examples/git/real/` (`build.sh`, `wasi_compat.c/.h`, `README.md`; the binary
+      `git-real.wasm`, 3.4 MB, is not committed). git 2.56.0 from the kernel.org tarball + zlib of `libgit2-sys`, `zig cc`, 3 small patches
+      (`/dev/null`, `save_state` of merge, `chmod` renamed to a no-op) and about 100 lines of POSIX stubs. Works on `wasmtime`, `node`, `bun`, `wasm3`:
+      init, add, commit, log, status, diff, show, branch, checkout, tag, describe, reset, cherry-pick, rebase, rm, merge (ort), `fsck --strict` clean.
+      Does not work: the network (libcurl and `git-remote-http` as a process), `stash` and everything that starts a child process.
+      Checked that libgit2 (`git.py`, with the network) and this git work on the same directory, so the way to a whole client is a
+      dispatcher: `clone/fetch/push` to libgit2, the rest to real git. **Not done:** the dispatcher, a run on `jscontext` (the module is 3.4 MB and
+      may be slow to compile without JIT), tests, a decision on committing the binary.
+
 ## Known problems of the examples (not the API)
 
 - `examples/wasm/lua.wasm` was built without `longjmp`: any script error (syntax, `error()`, `pcall`) kills the
