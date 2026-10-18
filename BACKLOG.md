@@ -719,8 +719,10 @@ shared memory, memory64 (and GC), each with `supports(...)`.
       `jsc` (macOS; WebKitGTK with and without JIT) and `jscontext` (CI on macOS through rubicon-objc, Tests run 201 green; and the owner on a
       device, PythonIDE/Pythonista). **Not on:** `gi-jsc` (takes no host functions, so no WASI and no `wasmhost_net`) and `pyodide` (its Python has no
       `os.link` and no sockets; the tests skip it). **`bun`: partly**: Bun 1.4.2 crashes with a segmentation fault in `git-real.wasm` on a
-      `git checkout` of another branch, so the two tests that need it are skipped on `bun`. Not read: whether each git test ran (not skipped)
-      on `jsc` and `jscontext` in CI, only that the jobs are green. Builds: `build.sh` and `real/build.sh` check the SHA-256 of the libgit2-sys
+      `git checkout` of another branch, so the two tests that need it are skipped on `bun`. Read from the logs of Tests run 202 (2026-10-18):
+      the 4 tests of `tests/test_git_example.py` PASSED on `jscontext` (macOS 3.10, 3.15, 3.15t), on `jsc` (macOS, and WebKitGTK with JIT on and
+      off), `wasmtime`, `node` and `wasm3` (Linux, macOS, Windows, also PyPy); on `bun` 2 passed and 2 skipped; on `gi-jsc` all 4 skipped. The
+      Pyodide job runs without `-v`, so its skips are not listed one by one (394 passed, 94 skipped in all). Builds: `build.sh` and `real/build.sh` check the SHA-256 of the libgit2-sys
       crate and of `git-2.56.0.tar.xz` (both agree with the index of crates.io and `sha256sums` of kernel.org), warn if zig is not 0.17.0,
       and give byte-identical modules in any directory (`-ffile-prefix-map`; checked in two). `examples/git/NOTICE` lists the licenses (git
       GPL-2.0; libgit2 GPL-2.0 with the linking exception) and the sources. The binaries are committed, so the repository ships GPL-licensed
