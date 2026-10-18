@@ -64,6 +64,10 @@ specification's calls over real folders and nothing more.
 `busybox.wasm`, downloaded once from npm), with pipes, `$(...)`, here-documents and functions, over a file system that is
 a Python dict: nothing real is touched. It is made for Pythonista (`input()` at the prompt, no terminal needed).
 
+`examples/git/` is a git client for Pythonista (StaSh's `git clone`, `commit`, `push`, ...): libgit2 built to WASI with
+`zig cc`, with Python as its WASI host, and the network (http and https) served by the host through four imports, because
+WASI preview1 has no sockets. See [examples/git/README.md](examples/git/README.md).
+
 `examples/coremark.py` runs CoreMark (the wasm3 project's build, in `examples/wasm/`) on every backend that starts here,
 to compare their speed. A runtime that finishes the last pass in under 10 s is not scored by CoreMark itself, so it
 prints the pass time too.
@@ -426,6 +430,7 @@ functions, so nothing that imports anything runs on it. `?` is not run or not lo
 | `pyodide.py`                                           | n/a        | n/a        | yes    | yes                    | ?        | yes (CI, device, ready in 1.9 s) | n/a      | n/a        |
 | `coremark.py` (score)                                  | 25405      | 3645       | 30411  | 29731                  | ?        | 1951 (iPhone 16), 1892 (PythonIDE) | n/a      | ?          |
 | `jslinux.py`                                           | ?          | ?          | ?      | ?                      | ?        | yes (device)                     | n/a      | ?          |
+| `git/git.py` (libgit2, clone and push over http/https) | yes        | yes        | yes    | yes                    | ?        | ? (not run on a device)          | n/a      | ?          |
 
 The first four CoreMark scores are from one x86-64 computer and the `jscontext` one from a phone without JIT, so they say an order of magnitude and
 not more. `wasmclang.py` on Bun stops with `panic: abort() called` and Bun's own "this indicates a bug in Bun" (Bun 1.4.2, in the second build, the

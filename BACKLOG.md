@@ -690,6 +690,20 @@ shared memory, memory64 (and GC), each with `supports(...)`.
       only `echo`/variables/loops work, there are no pipes, `$(...)`, here-doc, redirections, `exit N` loses the status.
       **wasi-shell/wasibox** (oligamiq's crates) is not confirmed (the docs are unavailable). `wasmsh` was cancelled by the owner.
 
+- [~] **B-510** (2026-10-18) A git client for Pythonista (to be used as a StaSh command): `examples/git/` (`git.py`, `git.wasm`,
+      `lg2.c`, `build.sh`) and `tests/test_git_example.py` (3 tests, run on `wasmtime`, `wasm3`, `node` and `bun`; 12 passes). libgit2 1.9.0
+      (the sources are in the `libgit2-sys` crate) built with `zig cc -target wasm32-wasi`, a command line of our own on top
+      (`init clone status add commit log diff branch checkout remote fetch pull(ff) push`), `git.py` is the WASI host.
+      WASI preview1 has no sockets, so the connection is a `git_stream` served by four imports `wasmhost_net.connect/read/write/close`
+      (`stubs/socket.c`), and the host (`socket` + `ssl`) does the TCP and the TLS; libgit2's own HTTP client runs on it.
+      Checked: clone, commit, push, fast-forward pull against a real `git http-backend`, Basic authentication
+      (`GIT_USERNAME` + `GIT_TOKEN`), the TLS certificate check (a self-signed one is refused), a command from a subdirectory,
+      the repository passes `git fsck --strict`. **Not done, so not `[x]`:** a run on `jscontext` on a device (speed without JIT, the TLS roots
+      in Pythonista: `certifi` is the fallback); a run on StaSh itself; GitHub with a real token (no access from here); merge, rebase, stash,
+      tag, reset, ssh; `git.wasm` is 840 KB and is committed, so it must be rebuilt with `build.sh` when `lg2.c` changes. Findings:
+      libgit2 never looks for `.git` in `/`, so the repository root is mounted as `/work`; on wasm32 libgit2 picks
+      `__builtin_umul_overflow(unsigned*)` for `size_t` (`unsigned long`), hence `-Wno-incompatible-pointer-types`.
+
 ## Known problems of the examples (not the API)
 
 - `examples/wasm/lua.wasm` was built without `longjmp`: any script error (syntax, `error()`, `pcall`) kills the
