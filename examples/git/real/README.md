@@ -28,12 +28,12 @@ passes `git fsck --strict` and is read by the host's own `git`, and the other wa
 
 ## The way to a whole client: both modules together
 
-`git.py` of the parent directory (libgit2, which has the network through `wasmhost_net`) and this module work on **the same
+`wasmgit` of the parent directory (libgit2, which has the network through `wasmhost_net`) and this module work on **the same
 directory**, because they write the same repository format. Checked: `clone` by libgit2, `add` and `commit` by git (it sees
 `origin/main: ahead 1`), `push` by libgit2, the server has the commit, `git fsck --strict` is clean. So a `git` command can send
 `clone`, `fetch`, `push` (and `ls-remote`) to libgit2 and everything else to this module; `pull` is a `fetch` by libgit2
 and a `merge FETCH_HEAD` by git. That gives merge, rebase, stash-free workflows and every option of git, with the
-network that already works. The dispatcher is `git.py` of the parent directory.
+network that already works. The dispatcher is `src/wasmgit/_core.py` of the parent directory.
 
 ## What a pure git would take
 

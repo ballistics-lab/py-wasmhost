@@ -88,5 +88,6 @@ LDFLAGS = -L$work/zlib
 EXTLIBS = $work/wasi_compat.o -lwasi-emulated-mman -lwasi-emulated-signal -lwasi-emulated-process-clocks -lwasi-emulated-getpid
 EOF
 make -C "$src" -j"$(nproc)" git
-cp "$src/git" "$here/../git-real.wasm"
-ls -l "$here/../git-real.wasm"
+out=${OUT:-$here/..}
+cp "$src/git" "$out/git-real.wasm"
+ls -l "$out/git-real.wasm"

@@ -1,7 +1,8 @@
-# git for Pythonista (and anywhere wasmhost runs)
+# wasmgit: git for Pythonista (and anywhere wasmhost runs)
 
 A whole git client that runs in wasmhost, so also in Pythonista's `JSContext`, where there is no `git`, no processes,
-and `dulwich` does not work (the owner, 2026-10). It is two WebAssembly modules and `git.py`, a WASI host in Python:
+and `dulwich` does not work (the owner, 2026-10). It is two WebAssembly modules and the Python package `wasmgit`, a WASI
+host:
 
 - `git-real.wasm` (3.4 MB): **git itself** (git 2.56), built to WASI (`real/build.sh`). Every command that needs
   neither the network nor a child process, with git's own options and output: `add`, `commit`, `log`, `diff`, `status`,
@@ -12,20 +13,27 @@ and `dulwich` does not work (the owner, 2026-10). It is two WebAssembly modules 
 They work on the same directory because they write the same repository format. WASI preview1 has no sockets and no
 processes, which is why git alone cannot reach a server: libgit2 gets its connections from the host.
 
-    python examples/git/git.py clone https://github.com/user/repo
+    wasmgit clone https://github.com/user/repo
     cd repo
-    python examples/git/git.py status | add -A | commit -m "msg" | log --oneline | diff | merge feat | rebase main
-    python examples/git/git.py pull | push [-u remote branch] | fetch
+    wasmgit status | add -A | commit -m "msg" | log --oneline | diff | merge feat | rebase main
+    wasmgit pull | push [-u remote branch] | fetch
 
-**From a ZIP (Pythonista):** download the repository as a ZIP from GitHub (*Code → Download ZIP*) and unpack it. Nothing needs
-installing: `git.py` finds `wasmhost` in `../../src` of the unpacked tree and the two modules are beside it. Run
-`examples/git/git.py` with arguments from a shell (StaSh, a terminal): `python examples/git/git.py clone <url>`. Where there is no
-shell, only play, run it with the argument `-i` (or `--interactive`): it gives a `git>` prompt (in `~/Documents/git`; `cd DIR`,
-`pwd`, `exit`, and any `git` command, with or without the word `git`). Without arguments it only prints the usage.
+The command is `wasmgit` (also `python -m wasmgit`), not `git`: `git` is the real one, or StaSh's own, and an executable
+named `git-NAME` on the PATH would become the subcommand `git NAME`.
 
-**In StaSh:** copy `git.py`, `git.wasm` and `git-real.wasm` into StaSh's `bin` directory. Then `git clone ...`, `git status`,
-`git commit -m ...` are commands of the shell. If a `.wasm` is not beside `git.py`, it is downloaded once into
-`$WASMHOST_CACHE` (else `~/.cache/wasmhost`). `wasmhost` itself must then be importable (`pip install wasmhost`), as the copy is no longer next to `src/`.
+## Install
+
+This directory is a project (a `src` layout, like `uv init --package`): `pyproject.toml`, `setup.py` and `src/wasmgit/`.
+Its wheel (`py3-none-any`, 1.7 MB, with both modules inside) is built by the workflow `wasmgit wheel` of this repository
+and goes up as the artifact `wasmgit-wheel` of the run; it is not on PyPI. Install it with `pip install wasmgit-*.whl`
+(it needs `wasmhost>=0.1.0`). `uv build --wheel` here builds it yourself, on Linux or macOS with `cmake`, `ninja` and `make`.
+
+**From a ZIP (Pythonista), nothing installed:** download the repository as a ZIP from GitHub (*Code → Download ZIP*) and
+unpack it. `examples/git/git.py` is a launcher: it finds `wasmgit` in `src/` and `wasmhost` in `../../src` of the
+unpacked tree, and the two modules are beside it. Run it with arguments from a shell (StaSh, a terminal):
+`python examples/git/git.py clone <url>`. Where there is no shell, only play, run it with the argument `-i` (or
+`--interactive`): it gives a `git>` prompt (in `~/Documents/git`; `cd DIR`, `pwd`, `exit`, and any `git` command, with or
+without the word `git`). Without arguments it only prints the usage.
 
 Credentials for https remotes are read from the environment, as a token is the usual way in: `GIT_USERNAME` and
 `GIT_TOKEN` (or `GIT_PASSWORD`). On GitHub, `GIT_USERNAME=<you> GIT_TOKEN=<personal access token>`. The committer is
@@ -40,7 +48,7 @@ else that starts a child process (hooks, an editor, a pager, `gc`, `submodule`, 
 
 ## How it works
 
-- **Which module.** `git.py` sends `clone`, `fetch`, `push` and the network half of `pull` to libgit2, and everything else to git.
+- **Which module.** `wasmgit` sends `clone`, `fetch`, `push` and the network half of `pull` to libgit2, and everything else to git.
 
 - **Files.** WASI preview1 over a real directory (`wasmhost.wasi.preview1`). The root of the repository (found by going
   up from the current directory) is `/` to git (it starts in the right subdirectory with `-C`) and `/work` to libgit2,

@@ -1,0 +1,7 @@
+# The sdist can build the modules on its own: the scripts, the C that is ours, and the licenses
+include build.sh lg2.c compat.c NOTICE LICENSE README.md git.py
+graft stubs
+graft real
+prune real/.build
+graft src
+global-exclude *.wasm __pycache__ *.py[cod]

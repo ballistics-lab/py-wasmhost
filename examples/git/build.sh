@@ -1,7 +1,7 @@
 #!/bin/sh
 # Builds git.wasm: libgit2 (from the libgit2-sys crate, which carries its sources) plus lg2.c, with `zig cc`
 # targeting wasm32-wasi. Needs: python3 with `ziglang` (uv pip install ziglang), cmake, ninja, curl, tar.
-#   ZIG="python3 -m ziglang" ./build.sh        # output: ./git.wasm
+#   ZIG="python3 -m ziglang" ./build.sh        # output: ./git.wasm, or $OUT/git.wasm
 set -eu
 here=$(cd "$(dirname "$0")" && pwd)
 work=${WORK:-$here/.build}
@@ -44,5 +44,5 @@ ninja -C "$work/cmake"
 
 "$work/bin/zcc" -Os $flags -I"$src/include" "$here/lg2.c" "$here/compat.c" "$work/cmake/libgit2.a" \
 	-lwasi-emulated-mman -lwasi-emulated-signal -lwasi-emulated-process-clocks -lwasi-emulated-getpid \
-	-o "$here/git.wasm"
-ls -l "$here/git.wasm"
+	-o "${OUT:-$here}/git.wasm"
+ls -l "${OUT:-$here}/git.wasm"
