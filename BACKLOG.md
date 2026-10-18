@@ -709,9 +709,11 @@ shared memory, memory64 (and GC), each with `supports(...)`.
       (`/dev/null`, `save_state` of merge, `chmod` renamed to a no-op) and about 100 lines of POSIX stubs. Works on `wasmtime`, `node`, `bun`, `wasm3`:
       init, add, commit, log, status, diff, show, branch, checkout, tag, describe, reset, cherry-pick, rebase, rm, merge (ort), `fsck --strict` clean.
       Does not work: the network (libcurl and `git-remote-http` as a process), `stash` and everything that starts a child process.
-      Checked that libgit2 (`git.py`, with the network) and this git work on the same directory, so the way to a whole client is a
-      dispatcher: `clone/fetch/push` to libgit2, the rest to real git. **Not done:** the dispatcher, a run on `jscontext` (the module is 3.4 MB and
-      may be slow to compile without JIT), tests, a decision on committing the binary.
+      `git.py` is now the dispatcher the PoC pointed to: `clone/fetch/push` and the fetch of `pull` go to libgit2 (B-510), everything
+      else to this git (`git-real.wasm`, committed next to `git.py`); tests in `tests/test_git_example.py` (a diverged `pull` merges, `push -u`).
+      **Not done:** a run on `jscontext` (the module is 3.4 MB and may be slow to compile without JIT) and in StaSh; `stash` and anything that
+      starts a child; the network inside git itself (libcurl shim). **Known problem:** Bun 1.4.2 crashes with a segmentation fault in
+      `git-real.wasm` on `git checkout` of another branch (also `git checkout -`); the two tests that need it are skipped on `bun`.
 
 ## Known problems of the examples (not the API)
 

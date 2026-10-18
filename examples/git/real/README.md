@@ -5,7 +5,7 @@ This directory is the other way: **git itself**, from the `git-2.56.0` tarball, 
 so the command line, the options and the output are git's own, and every command of git that does not need a
 process or the network is there.
 
-    ZIG="python3 -m ziglang" examples/git/real/build.sh     # writes git-real.wasm (3.4 MB; 30 s with 8 cores)
+    ZIG="python3 -m ziglang" examples/git/real/build.sh     # writes ../git-real.wasm (3.4 MB; 30 s with 8 cores)
 
 It imports only `wasi_snapshot_preview1` (34 functions). The module needs `-C /` in front (WASI starts in `/`, which is
 the preopened root of the repository) and `--no-pager`; the host should also pass `-c gc.auto=0 -c maintenance.auto=false`
@@ -33,7 +33,7 @@ directory**, because they write the same repository format. Checked: `clone` by 
 `origin/main: ahead 1`), `push` by libgit2, the server has the commit, `git fsck --strict` is clean. So a `git` command can send
 `clone`, `fetch`, `push` (and `ls-remote`) to libgit2 and everything else to this module; `pull` is a `fetch` by libgit2
 and a `merge FETCH_HEAD` by git. That gives merge, rebase, stash-free workflows and every option of git, with the
-network that already works. Not written yet: the dispatcher itself.
+network that already works. The dispatcher is `git.py` of the parent directory.
 
 ## What a pure git would take
 

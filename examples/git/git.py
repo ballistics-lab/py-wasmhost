@@ -1,32 +1,50 @@
-"""A git client: libgit2 built to WebAssembly (git.wasm, see build.sh) run by wasmhost, with Python as its WASI host.
+"""A git client for Pythonista and anywhere wasmhost runs: git itself, plus libgit2 for the network, as WebAssembly.
 
     python examples/git/git.py clone https://github.com/user/repo
-    python examples/git/git.py status | add -A | commit -m msg | log -n 5 | diff [--cached]
-    python examples/git/git.py branch [name | -d name] | checkout <ref> | remote [add name url]
-    python examples/git/git.py fetch | pull | push [remote [branch]]
+    python examples/git/git.py status | add -A | commit -m msg | log | diff | merge | rebase | tag | reset | ...
+    python examples/git/git.py pull | push | fetch
 
-In Pythonista, copy this file and git.wasm to StaSh's bin directory (as `git.py`) and `git status` is a command of
-the shell. Files: the module sees the root of the repository as `/work` (found by going up from the current
-directory). The network: WASI preview1 has no sockets, so the module asks this host for the connection
-(`wasmhost_net`) and libgit2's own HTTP client talks over it, with TLS done here by `ssl`. Credentials for https:
-GIT_USERNAME and GIT_PASSWORD, or GIT_TOKEN (a token, used as the password). The committer: GIT_AUTHOR_NAME and
-GIT_AUTHOR_EMAIL, else user.name and user.email of the repository's config. Not supported: ssh remotes, merge (pull
-only fast-forwards), rebase, stash.
+Two modules share the repository on disk (they write the same format):
+
+- `git-real.wasm`, git 2.56 itself (real/build.sh): every command that does not need the network or a child process,
+  with git's own options and output: add, commit, log, diff, status, branch, checkout, merge, rebase, cherry-pick,
+  reset, tag, rm, mv, show, config, and the rest.
+- `git.wasm`, libgit2 with a small command line (build.sh): `clone`, `fetch` and `push`, and the `fetch` of `pull`.
+  WASI preview1 has no sockets, so the module asks this host for the connection (`wasmhost_net`) and libgit2's own HTTP
+  client talks over it, with TLS done here by `ssl`.
+
+In Pythonista, copy this file, git.wasm and git-real.wasm to StaSh's bin directory (as `git.py`) and `git status` is a
+command of the shell. The root of the repository is found by going up from the current directory. Credentials for
+https: GIT_USERNAME and GIT_PASSWORD, or GIT_TOKEN (a token, used as the password). `git config --global` is kept in
+$WASMGIT_HOME (default ~/.wasmgit), where a first run writes defaults (main as the first branch, no automatic gc).
+Not supported: ssh remotes, `stash`, hooks, an editor, a pager (anything that starts a process), `clone --depth`,
+`push --force`.
 """
 
 import os
+import shlex
 import socket
 import ssl
 import sys
 import urllib.request
 
-import wasmhost
+try:
+    import wasmhost
+except (
+    ImportError
+):  # run from an unpacked archive of the repository (a ZIP from GitHub), where wasmhost is not installed
+    sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "..", "src"))
+    import wasmhost
+
 from wasmhost.wasi import preview1
 
-WASM_URL = "https://raw.githubusercontent.com/ballistics-lab/py-wasmhost/main/examples/git/git.wasm"
+BASE_URL = "https://raw.githubusercontent.com/ballistics-lab/py-wasmhost/main/examples/git/"
+NETWORK = ("clone", "fetch", "push")  # the commands that libgit2 runs; the rest is git
 PASSED_ENV = ("GIT_USERNAME", "GIT_PASSWORD", "GIT_TOKEN", "GIT_AUTHOR_NAME", "GIT_AUTHOR_EMAIL")
 TIMEOUT = 60
-MOUNT = "/work"  # where the module sees the root of the repository
+MOUNT = "/work"  # where libgit2 sees the root of the repository
+HOME = "/home"  # where both see their home, for `git config --global`
+DEFAULT_CONFIG = "[init]\n\tdefaultBranch = main\n[gc]\n\tauto = 0\n[maintenance]\n\tauto = false\n"
 
 
 def cache_root():
@@ -42,20 +60,32 @@ def cache_root():
     return os.path.join(".", ".cache")
 
 
-def find_wasm():
-    beside = os.path.join(os.path.dirname(os.path.abspath(__file__)), "git.wasm")
+def find_wasm(name):
+    """NAME ("git.wasm", "git-real.wasm") beside this file, else in the cache, downloaded once."""
+    beside = os.path.join(os.path.dirname(os.path.abspath(__file__)), name)
     if os.path.exists(beside):
         return beside
-    cached = os.path.join(cache_root(), "git", "git.wasm")
+    cached = os.path.join(cache_root(), "git", name)
     if not os.path.exists(cached):
-        print(f"downloading {WASM_URL}", file=sys.stderr, flush=True)
+        print(f"downloading {BASE_URL + name}", file=sys.stderr, flush=True)
         os.makedirs(os.path.dirname(cached), exist_ok=True)
-        with urllib.request.urlopen(WASM_URL, timeout=120) as resp:  # noqa: S310
+        with urllib.request.urlopen(BASE_URL + name, timeout=300) as resp:  # noqa: S310
             data = resp.read()
         with open(cached + ".part", "wb") as f:  # so that an interrupted download is not taken for a whole file
             f.write(data)
         os.replace(cached + ".part", cached)
     return cached
+
+
+def home_directory():
+    """The directory for `git config --global`, with defaults in it on the first run."""
+    home = os.environ.get("WASMGIT_HOME") or os.path.join(os.path.dirname(cache_root()) or ".", ".wasmgit")
+    os.makedirs(home, exist_ok=True)
+    config = os.path.join(home, ".gitconfig")
+    if not os.path.exists(config):
+        with open(config, "w") as f:
+            f.write(DEFAULT_CONFIG)
+    return home
 
 
 def tls_context():
@@ -136,15 +166,22 @@ class Network:
         return {"wasmhost_net": {name: getattr(self, name) for name in ("connect", "read", "write", "close")}}
 
 
-def run(argv, cwd=None, wasm=None, **options):
-    """Run `git ARGV` in CWD (default: the current directory); the exit code."""
-    root, inside = repository_root(os.path.abspath(cwd or os.getcwd()))
+def identity(env):
+    """The committer is the author unless the environment says otherwise."""
+    for who in ("NAME", "EMAIL"):
+        if f"GIT_AUTHOR_{who}" in env:
+            env.setdefault(f"GIT_COMMITTER_{who}", env[f"GIT_AUTHOR_{who}"])
+
+
+def run_libgit2(argv, root, inside, wasm=None, **options):
+    """`git ARGV` by libgit2 (the network commands), with ROOT as /work and INSIDE the way in it from ROOT."""
     # Not "/": libgit2 never looks for .git in the root directory of the path it walks up.
-    env = {"HOME": MOUNT, "LG2_CWD": MOUNT if inside == "." else f"{MOUNT}/{inside.replace(os.sep, '/')}"}
+    env = {"HOME": HOME, "LG2_CWD": MOUNT if inside == "." else f"{MOUNT}/{inside}"}
     env.update({name: os.environ[name] for name in PASSED_ENV if name in os.environ})
-    wasi = preview1.Preview1(["git", *argv], env, {MOUNT: root})
+    identity(env)
+    wasi = preview1.Preview1(["git", *argv], env, {MOUNT: root, HOME: home_directory()})
     network = Network(wasi)
-    with open(wasm or find_wasm(), "rb") as f:
+    with open(wasm or find_wasm("git.wasm"), "rb") as f:
         module = wasmhost.Module(f.read(), **options)
     instance = wasmhost.Instance(module, {**wasi.imports(), **network.imports()})
     try:
@@ -155,5 +192,110 @@ def run(argv, cwd=None, wasm=None, **options):
         wasi.close()
 
 
+def run_git(argv, root, inside, wasm=None, out=None, **options):
+    """`git ARGV` by git itself, ROOT being / (WASI starts in /, so `-C` goes to where the user is)."""
+    env = {
+        "HOME": HOME,
+        "GIT_EXEC_PATH": "/.exec",
+        "GIT_CONFIG_NOSYSTEM": "1",
+        "GIT_TEMPLATE_DIR": "",
+        "GIT_MERGE_AUTOEDIT": "no",
+    }
+    env.update({name: os.environ[name] for name in PASSED_ENV if name in os.environ})
+    identity(env)
+    here = "/" if inside == "." else f"/{inside}"
+    args = ["git", "-C", here, "--no-pager", *argv]
+    wasi = preview1.Preview1(args, env, {"/": root, HOME: home_directory()}, stdout=out)
+    with open(wasm or find_wasm("git-real.wasm"), "rb") as f:
+        module = wasmhost.Module(f.read(), **options)
+    try:
+        return wasi.run(module)
+    finally:
+        wasi.close()
+
+
+def split_pull(args):
+    """(options, remote, branch) of `git pull [options] [remote [branch]]`."""
+    options = [a for a in args if a.startswith("-")]
+    names = [a for a in args if not a.startswith("-")]
+    return options, (names[0] if names else None), (names[1] if len(names) > 1 else None)
+
+
+def run(argv, cwd=None, wasm=None, real_wasm=None, **options):
+    """Run `git ARGV` in CWD (default: the current directory); the exit code."""
+    argv = list(argv)
+    start = os.path.abspath(cwd or os.getcwd())
+    while argv[:1] == ["-C"] and len(argv) > 2:  # `git -C dir ...`
+        start = os.path.abspath(os.path.join(start, argv[1]))
+        argv = argv[2:]
+    root, inside = repository_root(start)
+    inside = "." if inside == "." else inside.replace(os.sep, "/")
+    args = {"wasm": wasm, **options}
+    git = {"wasm": real_wasm, **options}
+    command = next((a for a in argv if not a.startswith("-")), None)
+    if command in NETWORK:
+        rest = argv[argv.index(command) + 1 :]
+        pushing = command == "push"
+        upstream = [a for a in rest if a in ("-u", "--set-upstream")] if pushing else []
+        if pushing and any(a in ("-f", "--force", "--force-with-lease") for a in rest):
+            print("git push: forcing is not supported", file=sys.stderr)
+            return 1
+        names = [a for a in rest if not a.startswith("-")] if pushing else rest
+        code = run_libgit2([command, *names], root, inside, **args)
+        if code == 0 and upstream:
+            remote, branch = (names + [None, None])[:2]
+            if branch is None:  # the current branch
+                shown = []
+                run_git(["symbolic-ref", "--short", "HEAD"], root, inside, out=shown.append, **git)
+                branch = b"".join(shown).decode().strip()
+            code = run_git(["branch", "--set-upstream-to", f"{remote or 'origin'}/{branch}"], root, inside, **git)
+        return code
+    if command == "pull":
+        flags, remote, branch = split_pull(argv[argv.index("pull") + 1 :])
+        code = run_libgit2(["fetch", *([remote] if remote else [])], root, inside, **args)
+        if code:
+            return code
+        target = f"{remote or 'origin'}/{branch}" if branch else "@{u}"
+        verb = "rebase" if "--rebase" in flags else "merge"
+        keep = [f for f in flags if f != "--rebase" and (verb == "merge" or f in ("--autostash",))]
+        return run_git([verb, *keep, target], root, inside, **git)
+    return run_git(argv, root, inside, **git)
+
+
+def prompt():
+    """Without arguments (Pythonista's play button): a prompt that takes `git` commands, `cd`, `pwd` and `exit`."""
+    documents = os.path.expanduser("~/Documents")
+    here = os.path.join(documents, "git") if os.path.isdir(documents) else os.getcwd()
+    os.makedirs(here, exist_ok=True)
+    print(f"git in {here}; `cd DIR`, `pwd`, `exit`; try: clone https://github.com/user/repo")
+    while True:
+        try:
+            line = input(f"git {os.path.basename(here)}> ").strip()
+        except EOFError:
+            print()
+            return 0
+        except KeyboardInterrupt:
+            print()
+            continue
+        words = shlex.split(line)
+        if words[:1] in (["exit"], ["quit"]):
+            return 0
+        if words[:1] == ["pwd"]:
+            print(here)
+        elif words[:1] == ["cd"]:
+            target = os.path.abspath(os.path.join(here, os.path.expanduser(words[1] if len(words) > 1 else "~")))
+            if os.path.isdir(target):
+                here = target
+            else:
+                print(f"cd: {target}: no such directory")
+        elif words:
+            if words[0] == "git":
+                words = words[1:]
+            try:
+                run(words, cwd=here)
+            except Exception as exc:  # noqa: BLE001 -- keep the prompt alive
+                print(f"git: {exc}")
+
+
 if __name__ == "__main__":
-    sys.exit(run(sys.argv[1:]))
+    sys.exit(run(sys.argv[1:]) if len(sys.argv) > 1 else prompt())

@@ -1,5 +1,5 @@
 #!/bin/sh
-# PoC: the real git (git.git, not libgit2) built to WASI with `zig cc`. Writes ./git-real.wasm.
+# PoC: the real git (git.git, not libgit2) built to WASI with `zig cc`. Writes ../git-real.wasm.
 #   ZIG="python3 -m ziglang" ./build.sh        # needs make, curl, tar, xz; about five minutes
 # The network does not work in this build (see README.md): no libcurl, and no processes for a remote helper.
 set -eu
@@ -79,5 +79,5 @@ LDFLAGS = -L$work/zlib
 EXTLIBS = $work/wasi_compat.o -lwasi-emulated-mman -lwasi-emulated-signal -lwasi-emulated-process-clocks -lwasi-emulated-getpid
 EOF
 make -C "$src" -j"$(nproc)" git
-cp "$src/git" "$here/git-real.wasm"
-ls -l "$here/git-real.wasm"
+cp "$src/git" "$here/../git-real.wasm"
+ls -l "$here/../git-real.wasm"
