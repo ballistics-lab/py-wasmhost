@@ -777,6 +777,17 @@ unused functions in the shared `_JS` script. What it does change: "CPython on ma
     failed; for 132 the failing step is `pytest --wasm-backend wasmtime` (what the log's tail shows is the last step, which passed with 419 passed). The same job was green in the other runs (125, 127, 130, 133 and 134 among them). None of the three commits touched the code on that
     path. So "seen once" is out of date. The step output of the failed `wasmtime` step was not read (the tool gives only the tail of a log): reading it is the first thing to do.
 
+- **2026-10-18, branch `claude/git-client-pythonista`: the same segmentation fault on CPython 3.10, macOS, backend `jsc`: the first time off PyPy.** Tests run 204
+  (`0946b42`), the job `macos-latest / 3.10`, the step `pytest --wasm-backend jsc (macOS, JavaScriptCore.framework)` died after 17 s with
+  `Fatal Python error: Segmentation fault` in `tests/test_git_example.py::test_a_local_repository_from_a_subdirectory[jsc]`. The stack is the one above, from a host
+  function that reads memory: `Preview1.path_filestat_get` -> `_resolve` -> `_string` -> `_read` -> `Memory.read` -> `JSBackend.memory_read` -> `_run` ->
+  `CApi.evaluate` -> `CApi._text` (`JSValueToStringCopy`). The other 13 jobs of run 204 were green, among them `jscontext` on the same macOS job (451 passed), and the
+  same job was green on run 203 (`986675c`) and on run 202; so it is not every run. The earlier note "CPython on macOS: clean" is out of date.
+  What is not known: how often (seen once; not re-run yet, and the rule above is to re-run once and take a second failure as real); whether the git test raises the
+  rate. It is a guess that it does: git calls the host thousands of times (`path_filestat_get`, `fd_read`), each of which reads memory from JavaScript, so a test that
+  makes many such calls has more chances to meet it than the older tests; nothing was measured. The code that is in question is in `src/` (`_capi.py`), not in
+  the example. The git tests are not skipped on `jsc`, so that the flake stays visible.
+
 ## General definition of done
 
 Code, tests in `tests/` on all backends that can do it (the rest are skipped with a reason), an **updated
