@@ -52,15 +52,20 @@ else that starts a child process (hooks, an editor, a pager, `gc`, `submodule`, 
 - **Processes.** There are none on WASI (and none in Pythonista), so libgit2's process and ssh-command code is replaced
   by stubs that fail (`stubs/process.c`).
 
+## Licenses
+
+The two modules are built from git (GPL-2.0) and libgit2 (GPL-2.0 with a linking exception), so they are not under this
+repository's MIT license. See [`NOTICE`](NOTICE) for the licenses, the exact source versions and their checksums.
+
 ## Building `git.wasm`
 
 `zig cc` is the C compiler for `wasm32-wasi` (it has wasi-libc inside, so no wasi-sdk), and the sources of libgit2 1.9.0
 are the ones in the `libgit2-sys` crate on crates.io (no GitHub needed):
 
-    uv pip install ziglang
+    uv pip install ziglang==0.17.0        # the version the committed modules were built with
     ZIG="python3 -m ziglang" examples/git/build.sh      # needs cmake, ninja, curl; writes examples/git/git.wasm
 
-`build.sh` copies `stubs/process.c` and `stubs/socket.c` over the two files of libgit2 that need processes and sockets,
+`build.sh` checks the SHA-256 of what it downloads (and gives a byte-identical module in any directory). It copies `stubs/process.c` and `stubs/socket.c` over the two files of libgit2 that need processes and sockets,
 and links `lg2.c` and `compat.c` (the few POSIX calls, such as `getuid`, that wasi-libc lacks). The module imports only
 `wasi_snapshot_preview1` and `wasmhost_net`, and uses no instructions beyond what `wasm3` runs.
 

@@ -9,9 +9,17 @@ ZIG=${ZIG:-python3 -m ziglang}
 crate=libgit2-sys-0.18.1+1.9.0
 mkdir -p "$work/bin"
 
+# the sources are the ones that were built from, not whatever is served now
+sha256() { if command -v sha256sum > /dev/null; then sha256sum "$1" | cut -d' ' -f1; else shasum -a 256 "$1" | cut -d' ' -f1; fi; }
+verify() { [ "$(sha256 "$1")" = "$2" ] || { echo "build.sh: the checksum of $1 is not $2" >&2; exit 1; }; }
+want_zig=0.17.0
+have_zig=$($ZIG version 2>/dev/null || true)
+[ "$have_zig" = "$want_zig" ] || echo "build.sh: the committed modules were built with zig $want_zig; this is '${have_zig:-not found}'" >&2
+
 if [ ! -d "$work/src/$crate" ]; then
 	mkdir -p "$work/src"
 	curl -fsSL -o "$work/crate.tgz" "https://static.crates.io/crates/libgit2-sys/$crate.crate"
+	verify "$work/crate.tgz" e1dcb20f84ffcdd825c7a311ae347cce604a6f084a767dec4a4929829645290e
 	tar xzf "$work/crate.tgz" -C "$work/src"
 fi
 src=$work/src/$crate/libgit2
@@ -19,7 +27,7 @@ cp "$here/stubs/process.c" "$src/src/util/unix/process.c"
 cp "$here/stubs/socket.c" "$src/src/libgit2/streams/socket.c"
 
 for tool in cc ar ranlib; do
-	args=""; [ $tool = cc ] && args="-target wasm32-wasi"
+	args=""; [ $tool = cc ] && args="-target wasm32-wasi -ffile-prefix-map=$here=/lg2 -ffile-prefix-map=$work=/build"
 	printf '#!/bin/sh\nexec %s %s %s "$@"\n' "$ZIG" "$tool" "$args" > "$work/bin/z$tool"
 	chmod +x "$work/bin/z$tool"
 done

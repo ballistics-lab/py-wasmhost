@@ -9,14 +9,22 @@ ZIG=${ZIG:-python3 -m ziglang}
 version=2.56.0
 mkdir -p "$work/bin"
 
+# the sources are the ones that were built from, not whatever is served now
+sha256() { if command -v sha256sum > /dev/null; then sha256sum "$1" | cut -d' ' -f1; else shasum -a 256 "$1" | cut -d' ' -f1; fi; }
+verify() { [ "$(sha256 "$1")" = "$2" ] || { echo "build.sh: the checksum of $1 is not $2" >&2; exit 1; }; }
+want_zig=0.17.0
+have_zig=$($ZIG version 2>/dev/null || true)
+[ "$have_zig" = "$want_zig" ] || echo "build.sh: the committed modules were built with zig $want_zig; this is '${have_zig:-not found}'" >&2
+
 for tool in cc ar ranlib; do
-	args=""; [ $tool = cc ] && args="-target wasm32-wasi"
+	args=""; [ $tool = cc ] && args="-target wasm32-wasi -ffile-prefix-map=$here=/lg2 -ffile-prefix-map=$work=/build"
 	printf '#!/bin/sh\nexec %s %s %s "$@"\n' "$ZIG" "$tool" "$args" > "$work/bin/z$tool"
 	chmod +x "$work/bin/z$tool"
 done
 
 if [ ! -d "$work/git-$version" ]; then
 	curl -fsSL -o "$work/git.tar.xz" "https://mirrors.edge.kernel.org/pub/software/scm/git/git-$version.tar.xz"
+	verify "$work/git.tar.xz" 26c56c296b38c0695b26fa95f475f1d01704d2d38e73465ca30b0b2f5dc789d3
 	tar xf "$work/git.tar.xz" -C "$work"
 fi
 src=$work/git-$version
@@ -25,6 +33,7 @@ src=$work/git-$version
 if [ ! -f "$work/zlib/libz.a" ]; then
 	crate=libgit2-sys-0.18.1+1.9.0
 	curl -fsSL -o "$work/crate.tgz" "https://static.crates.io/crates/libgit2-sys/$crate.crate"
+	verify "$work/crate.tgz" e1dcb20f84ffcdd825c7a311ae347cce604a6f084a767dec4a4929829645290e
 	tar xzf "$work/crate.tgz" -C "$work" "$crate/libgit2/deps/zlib"
 	mkdir -p "$work/zlib"
 	cp "$work/$crate/libgit2/deps/zlib/zlib.h" "$work/$crate/libgit2/deps/zlib/zconf.h" "$work/zlib/"
