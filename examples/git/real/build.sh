@@ -55,6 +55,8 @@ if ! grep -q __wasi__ "$src/builtin/merge.c"; then
 	sed -i '/^static int save_state(struct object_id \*stash)$/,/^{$/{s|^{$|{\n#ifdef __wasi__\n\treturn -1; /* no processes: nothing is saved */\n#endif|}' "$src/builtin/merge.c"
 fi
 
+# `prefix` is $(HOME) by default and is compiled into the module (the template and exec paths), which would make the bytes depend on
+# the home directory of whoever builds; the paths are not used (the host passes GIT_EXEC_PATH and an empty GIT_TEMPLATE_DIR).
 cat > "$src/config.mak" <<EOF
 CC = $work/bin/zcc
 AR = $work/bin/zar
@@ -78,6 +80,7 @@ NO_INSTALL_HARDLINKS = 1
 NO_MMAP = 1
 NO_POSIX_GOODIES = 1
 NO_RUST = 1
+prefix = /usr
 HAVE_SYSINFO =
 NO_UNCOMPRESS2 =
 SKIP_DASHED_BUILT_INS = 1
