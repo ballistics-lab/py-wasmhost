@@ -715,6 +715,18 @@ shared memory, memory64 (and GC), each with `supports(...)`.
       starts a child; the network inside git itself (libcurl shim). **Known problem:** Bun 1.4.2 crashes with a segmentation fault in
       `git-real.wasm` on `git checkout` of another branch (also `git checkout -`); the two tests that need it are skipped on `bun`.
 
+- [~] **B-512** (2026-10-18) The git modules: where they run, and how they are built. `examples/git/` runs on `wasmtime`, `wasm3`, `node`,
+      `jsc` (macOS; WebKitGTK with and without JIT) and `jscontext` (CI on macOS through rubicon-objc, Tests run 201 green; and the owner on a
+      device, PythonIDE/Pythonista). **Not on:** `gi-jsc` (takes no host functions, so no WASI and no `wasmhost_net`) and `pyodide` (its Python has no
+      `os.link` and no sockets; the tests skip it). **`bun`: partly**: Bun 1.4.2 crashes with a segmentation fault in `git-real.wasm` on a
+      `git checkout` of another branch, so the two tests that need it are skipped on `bun`. Not read: whether each git test ran (not skipped)
+      on `jsc` and `jscontext` in CI, only that the jobs are green. Builds: `build.sh` and `real/build.sh` check the SHA-256 of the libgit2-sys
+      crate and of `git-2.56.0.tar.xz` (both agree with the index of crates.io and `sha256sums` of kernel.org), warn if zig is not 0.17.0,
+      and give byte-identical modules in any directory (`-ffile-prefix-map`; checked in two). `examples/git/NOTICE` lists the licenses (git
+      GPL-2.0; libgit2 GPL-2.0 with the linking exception) and the sources. The binaries are committed, so the repository ships GPL-licensed
+      binaries next to MIT code; the owner decides whether to keep that. Not done: the libgit2 source comes from the crate `libgit2-sys`
+      only because github.com was closed to the assistant's session; the official archive is the place for it.
+
 ## Known problems of the examples (not the API)
 
 - `examples/wasm/lua.wasm` was built without `longjmp`: any script error (syntax, `error()`, `pcall`) kills the
