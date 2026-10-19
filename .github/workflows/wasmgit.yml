@@ -1,0 +1,74 @@
+name: wasmgit wheel
+
+# Builds the wheel of examples/git/ (the `wasmgit` project): its setup.py compiles git and libgit2 to WebAssembly with
+# `zig cc` (build.sh, real/build.sh), so this needs cmake, ninja and make and runs on Linux. The wheel is py3-none-any
+# and goes up as an artifact; nothing is published. The job checks that the modules in the wheel are the ones that are
+# committed in examples/git/ (the build is reproducible), and that the wheel works in a fresh environment.
+
+on:
+  push:
+    paths:
+      - "examples/git/**"
+      - ".github/workflows/wasmgit.yml"
+  pull_request:
+    paths:
+      - "examples/git/**"
+      - ".github/workflows/wasmgit.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  wheel:
+    name: wheel (py3-none-any)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0 # setuptools_scm reads the tags of the whole repository (root = "../..")
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@1c37ad07a6a961277cf70c0d37d6f313000f5884
+
+      - name: Install the build tools
+        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends cmake ninja-build make
+
+      - name: Build the wheel
+        working-directory: examples/git
+        run: uv build --wheel -o dist
+
+      - name: The modules are the committed ones
+        working-directory: examples/git
+        run: |
+          set -eu
+          for module in git.wasm git-real.wasm; do
+            built=$(unzip -p dist/*.whl "wasmgit/$module" | sha256sum | cut -d' ' -f1)
+            committed=$(sha256sum "$module" | cut -d' ' -f1)
+            if [ "$built" = "$committed" ]; then
+              echo "$module: same as the committed one ($built)"
+            else
+              echo "::warning::$module in the wheel ($built) differs from the committed one ($committed); rebuild and commit it"
+            fi
+          done
+
+      - name: Smoke test in a fresh environment
+        working-directory: examples/git
+        run: |
+          set -eu
+          uv venv "$RUNNER_TEMP/venv"
+          uv pip install --python "$RUNNER_TEMP/venv/bin/python" dist/*.whl
+          export WASMGIT_HOME="$RUNNER_TEMP/home" GIT_AUTHOR_NAME=CI GIT_AUTHOR_EMAIL=ci@example.com WASMHOST_BACKEND=node
+          mkdir "$RUNNER_TEMP/repo" && cd "$RUNNER_TEMP/repo"
+          "$RUNNER_TEMP/venv/bin/wasmgit" init
+          echo hello > a.txt
+          "$RUNNER_TEMP/venv/bin/wasmgit" add a.txt
+          "$RUNNER_TEMP/venv/bin/python" -m wasmgit commit -m first
+          "$RUNNER_TEMP/venv/bin/wasmgit" log --oneline
+          git fsck --strict
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: wasmgit-wheel
+          path: examples/git/dist/*.whl
+          if-no-files-found: error

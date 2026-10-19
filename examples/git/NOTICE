@@ -1,0 +1,40 @@
+Third-party software in the WebAssembly modules of this directory
+=================================================================
+
+The files of this repository are MIT (see ../../LICENSE) except what is said here. `git.wasm` and `git-real.wasm` are
+binaries built from other projects' source code, so they are under those projects' licenses, not under the MIT license of
+this repository. This is not legal advice; read the licenses.
+
+git-real.wasm
+-------------
+- git 2.56.0, https://git-scm.com. GNU General Public License, version 2 only (git's COPYING). Includes parts under the GNU
+  LGPL 2.1 (xdiff, the regex of compat/regex, from the GNU C Library) and the MIT-style license of sha1dc.
+  Source: https://mirrors.edge.kernel.org/pub/software/scm/git/git-2.56.0.tar.xz
+  SHA-256 26c56c296b38c0695b26fa95f475f1d01704d2d38e73465ca30b0b2f5dc789d3
+- zlib (the copy carried by libgit2), zlib license.
+- Changes to git: the two small patches in real/build.sh (sanitize_stdfds in setup.c, save_state in builtin/merge.c), the
+  options in the config.mak that real/build.sh writes, and real/wasi_compat.c and real/wasi_compat.h, which are linked into
+  the module (stubs for the POSIX calls that WASI does not have).
+
+git.wasm
+--------
+- libgit2 1.9.0, https://libgit2.org. GNU General Public License, version 2, with the libgit2 linking exception (COPYING of
+  libgit2). Bundled: zlib (zlib license), PCRE (BSD), the SHA-1 collision detection code (MIT), wildmatch (BSD), xdiff (LGPL
+  2.1), and others listed in libgit2's COPYING.
+  Source: the crate libgit2-sys 0.18.1+1.9.0, which carries libgit2's source in libgit2/,
+  https://static.crates.io/crates/libgit2-sys/libgit2-sys-0.18.1+1.9.0.crate
+  SHA-256 e1dcb20f84ffcdd825c7a311ae347cce604a6f084a767dec4a4929829645290e
+- Changes to libgit2: stubs/process.c and stubs/socket.c replace two of its files (processes and sockets, which WASI does
+  not have); lg2.c (the command line) and compat.c are linked into the module.
+
+Both modules
+------------
+- wasi-libc and the compiler runtime, from the `zig cc` that builds them (https://ziglang.org, version 0.17.0 from the
+  PyPI package `ziglang`): wasi-libc is under the licenses of musl (MIT) and of wasi-libc (Apache-2.0 with LLVM exceptions,
+  MIT, BSD).
+
+The corresponding source
+------------------------
+The sources above, at exactly these versions and checksums, together with the files of this directory, are the source of the
+two modules: `build.sh` and `real/build.sh` download the archives, check the checksums, apply the changes and build them. A
+rebuild gives the same bytes (the compiler is told to leave the build directories out of the module).

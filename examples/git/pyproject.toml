@@ -1,0 +1,51 @@
+[build-system]
+# ziglang is the wasm32 C compiler (clang + wasi libc) that build.sh and real/build.sh use; setup.py runs them when
+# the .wasm modules are not in src/wasmgit/ yet. cmake, ninja and make must be installed (the CI workflow does that).
+requires = ["setuptools>=77", "setuptools_scm>=8", "ziglang==0.17.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "wasmgit"
+dynamic = ["version"]
+description = "git for Pythonista and anywhere wasmhost runs: git and libgit2 built to WebAssembly, with the network served by the host"
+readme = "README.md"
+authors = [{ name = "o-murphy", email = "thehelixpg@gmail.com" }]
+# git is GPL-2.0-only and the wheel carries it, so the whole is GPL-2.0-only (see NOTICE)
+license = "GPL-2.0-only"
+license-files = ["LICENSE", "NOTICE"]
+requires-python = ">=3.10"
+keywords = ["git", "webassembly", "wasm", "wasi", "pythonista", "libgit2"]
+classifiers = [
+    "Intended Audience :: Developers",
+    "Natural Language :: English",
+    "Operating System :: OS Independent",
+    "Operating System :: iOS",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3 :: Only",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Programming Language :: Python :: Implementation :: CPython",
+    "Programming Language :: Python :: Implementation :: PyPy",
+    "Topic :: Software Development :: Version Control :: Git",
+    "Typing :: Typed",
+]
+dependencies = ["wasmhost>=0.1.0"]
+
+[project.scripts]
+# Not `git`: that is the real one (and StaSh's own), and `git-NAME` would become the subcommand `git NAME`.
+wasmgit = "wasmgit.__main__:main_cli"
+
+[tool.setuptools]
+package-dir = { "" = "src" }
+packages = ["wasmgit"]
+include-package-data = false
+
+[tool.setuptools.package-data]
+wasmgit = ["*.wasm", "py.typed"]
+
+[tool.setuptools_scm]
+# This project is in examples/git/ of the wasmhost repository, whose tags give the version
+root = "../.."
+fallback_version = "0.0.0"

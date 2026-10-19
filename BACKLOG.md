@@ -88,12 +88,12 @@ it works on the device with its hybrid host: clang and lld compiled C and C++ in
 **To do first, if the owner has not said otherwise:**
 0. ~~Pyodide work~~ Done: merged in PR #12, CI green, B-701d closed, README "What has run where" has a `pyodide` column (only the self-test is `yes (CI)`; the rest is `?`). Next: the owner tags `v0.1.0`.
 1. ~~On the device: the self-test after the rename~~ Done 2026-10-07 by the owner: Pythonista 41/41 with the wheel after the rename (call 37 us, batch of 3 94 us); all the examples run on the device (see above).
-2. The CI of the newest commit, and the macOS/PyPy flake (below): it has now come back three times in the eleven runs 124 to 134 on the branch of that time, so "seen once" is out of date; the owner chose to treat it as a flake, but it may be worth the guesses in its entry.
-3. The first CI run after Python 3.15 is released (the matrix is unpinned).
+2. The CI of the newest commit. `Tests` and `Pre-commit` were green on `b80e8d9` (runs 183 and 234 on `main`, 184 and 235 on the tag `v0.1.0`; checked 2026-10-16). The macOS/PyPy failure is not a flake: it is a reproducible crash on PyPy 3.11, macOS arm64, backend `jsc` (see its entry below); `pypy-linux.yml` is run by hand only, so it no longer reddens PRs.
+3. ~~The first CI run after Python 3.15 is released~~ Done: 3.15 is stable (owner, 2026-10-12), the matrix stays unpinned and was green on `b80e8d9`.
 4. B-405 when upstream merges pywasm3's two PRs (#13, #14); B-406 is closed (option b: leave it, documented).
-5. Then the owner picks: B-203 (`externref`), a binary channel for node/bun (about 50 MB/s through the pipe and JSON now), B-006 (CI for examples), or B-503 (the `openat` sandbox, the only open entry of phase 5).
+5. Nothing else is ready to start: B-006 was closed and B-203 deferred (2026-10-16), B-303, B-304a and B-503 are deferred (below). The faster transfer for node/bun is done and closed (a side file, B-302, 2026-10-16).
 
-**Deferred by owner decision:** B-303 (until it is really needed), B-304a (examples on asyncio), B-503 (the `openat` sandbox, until it is needed), stubs for the imports of a module in `wasmhost run` (the owner: not now), `wasmhost.vfs`, Deno (B-701b: a bug in Deno itself). **Waiting for the owner:** the branch name and
+**Deferred by owner decision:** B-203 (`externref`; 2026-10-16: no consumer now and none expected), B-303 (until it is really needed), B-304a (examples on asyncio), B-503 (the `openat` sandbox, until it is needed), stubs for the imports of a module in `wasmhost run` (the owner: not now), `wasmhost.vfs`, Deno (B-701b: a bug in Deno itself). **Waiting for the owner:** the branch name and
 tidying (B-003), `coreutils.wasm` stays in git (B-004), `tiny-bclibc-wasm` (B-803). **Not covered by tests:** `examples/wasmclang.py` (run by hand on wasmtime and node on 2026-10-07: the same output before and after the change), `jslinux.py`
 (`bellard.org` is blocked in the assistant's environment; the owner ran it on the device), `coremark.py` (the owner ran it on the device); the "Examples" step in CI runs only `basic.py` and `imports.py` (B-006).
 
@@ -115,7 +115,7 @@ tidying (B-003), `coreutils.wasm` stays in git (B-004), `tiny-bclibc-wasm` (B-80
 
 Owner decision: everything is done in one working branch (the owner opens the PR and tidies the branch). Each step comes with tests, a step in the
 self-test and a green pre-commit, and is a separate commit. Done so far, in order: B-201 (steps 1-4), B-304, B-204, B-507, B-509, B-202, B-301, B-302,
-then phase 4 (B-401 to B-404), then B-501, B-502, B-504 and B-505 (done 2026-10-07). The detail of each is in its own entry below. Open: B-203, B-303, B-304a, B-006, phase 5 (B-503 only) and phase 6.
+then phase 4 (B-401 to B-404), then B-501, B-502, B-504 and B-505 (done 2026-10-07). The detail of each is in its own entry below. Open, all deferred or far: B-203, B-303, B-304a, phase 5 (B-503 only) and phase 6 (B-006 was closed 2026-10-16).
 
 ## Accepted API decisions
 
@@ -165,7 +165,7 @@ It changes nothing in the API, it only makes the documentation truthful.
       import), "table: made on its own, imported, shared" (functions through `call_indirect` between instances, null,
       `grow`, `externref` is rejected) and "custom sections". Backends without `import.memory`/`import.table` (wasm3)
       honestly say «не підтримується» (that is, "not supported"). The modules in `_selftest.py` are checked by `tests/test_selftest.py`.
-- [ ] **B-006** CI: the "Examples" step runs only `basic.py` and `imports.py`. `coreutils.py` is covered through
+- [x] **B-006** (CLOSED 2026-10-16 on the owner's word: no wider coverage is needed; the examples that need a large download or a terminal stay manual) CI: the "Examples" step runs only `basic.py` and `imports.py`. `coreutils.py` is covered through
       `pytest` (`tests/test_coreutils_example.py`), and `wasmclang.py` is not run in CI at all (it needs
       a download of ~60 MB). Decide whether it is worth it: a light smoke test with an artifact cache, or leave it as manual.
       As of 2026-10-06 the ones left without tests are `examples/wasmclang.py`, `examples/jslinux.py` and `examples/coremark.py`
@@ -282,8 +282,38 @@ Done when: for an arbitrary module an import object can be assembled automatical
       name on every call.
       Self-test: a step about `Function` with a known and an unknown signature, `type()` and resolution; ordinary tests.
 - [x] **B-202** (DONE: `Table(..., init)` and `grow(delta, init)`, filling through `table_set` at the API level, so on the JS engines N calls for a table of N entries; tests in `test_memory_table.py`, a step in the self-test) `Table(kind, initial, maximum, init)`: the initial value.
-- [ ] **B-203** `externref` and `funcref` as values of globals and tables (right now only numbers) and `Table("externref", …)`.
+- [ ] **B-203** (DEFERRED 2026-10-16 on the owner's word: no consumer now and none expected; revisit when one appears) `externref` and `funcref` as values of globals and tables (right now only numbers) and `Table("externref", …)`.
       A design decision: how to hold Python objects on the engine side (a registry with handles, release).
+      **Design notes (2026-10-16, nothing built; the owner has not chosen yet).** Ways to release a handle: (1) the registry lives as long as the `Instance` (simplest, no dangling
+      handle, leaks in long-lived instances); (2) a scope, `with inst.refs() as refs:`, that clears its handles on exit, with `weakref.finalize` plus a `ResourceWarning` as a safety net
+      for a scope that was not closed (the `open()` / `with open()` pattern); a handle carries a generation so a stale one raises `ValueError` and does not reach another object; (3) a host
+      import `drop(ref)` that the module calls (the `wasm-bindgen` way, needs a cooperating module); (4) the engine's native `externref` and its own GC; (5) Python's GC alone: rejected,
+      it only sees the Python wrapper and not what the module still holds; (6) do nothing: a user's own dict plus `i32` keys already works today. `funcref` most likely needs no registry
+      (`Function` objects stand for it). Table slots and globals can be cleared on scope exit; linear memory cannot be scanned.
+      **wasm3 (checked 2026-10-16, pywasm3 `4c1334e`, wasm3 `21f029a`, built and run in a scratch venv):** the engine has `externref` (`c_m3Type_externref`, a host handle
+      `const void* ref`, `d_m3HasRefTypes`); a module with `ref.null extern` / `ref.is_null` and an `externref` table with `table.get` loads and runs. **pywasm3 cannot pass the
+      value:** `put_arg_on_stack` / `set_tagged_value` take only i32, i64, f32, f64, so a call with an `externref` parameter silently drops the argument (`None`, `0` and `object()`
+      all read as null inside the module, no error), and pywasm3 has no tables API (`export_table` here is a placeholder). Native `externref` on wasm3 needs a change in pywasm3
+      (argument conversion and tables), not in wasmhost; until then `supports("table.externref")` stays False there. Not checked: a non-null `externref` through the engine, and
+      whether wasm3 allows `table.get` / `table.set` on `externref` tables beyond the one `table.get` run above.
+      **Related entries (2026-10-16):** B-201 (done) is the precedent for the registry: `Function` is cached by the engine's key (`(store_id, index)` on wasmtime, `===` in the shim's registry
+      on the JS engines) and called by `handle`; `externref` can extend that to any object. B-304 (a lock per backend) already serialises the registry. B-406 (an `Instance` is freed only by
+      the cyclic collector) is why GC-driven release is not reliable. B-505 notes the first real user: Pyodide's `pyodide.asm.wasm` has `externref` in 149 function types and 280 imported
+      globals, so `import.global` on wasm3 (`supports("import.global")` is False) is a neighbouring limit to settle together. B-601 (`Tag` / `Exception`, `exnref`) and B-604 (GC types) are the
+      same kind of opaque engine reference: make the registry general so they can reuse it. B-405 does not unblock wasm3 `externref` as written (its two PRs are about Python 3.15 and the
+      GIL); that needs a separate pywasm3 PR for `externref` arguments and tables.
+      **Measured on Pyodide (2026-10-16, `pyodide.asm.wasm` of pyodide 314.0.7, 9.6 MB, read with wasmhost's own parser; scratch scripts, nothing in the repository).**
+      `examples/pyodide.py` does not go through the Python API at all: it uses wasmhost as a JavaScript engine (`JSBackend.evaluate`) and Pyodide's own JS instantiates the module with
+      the engine's `WebAssembly`, so B-203 would not change that example. The module itself: 268 function imports (254 `env`, 14 `wasi_snapshot_preview1`), 280 imported globals (all
+      mutable `i32`, module `GOT.func`), 149 imports and 76 of the 7415 function exports with `externref` in their type, 1141 exported globals, 2 tags, one exported table.
+      With stub imports through the Python API: **node** compiles (0.5 s) and instantiates (0.2 s), all 8558 exports there, so `externref` in the types does not stop linking;
+      **wasmtime** fails to compile (`legacy_exceptions feature required for try instruction`, offset 5950063; not about `externref`; whether enabling them helps was not tried);
+      **wasm3** parses the module and stops at the imported globals (`can't make a global on its own`, `import.global`), before `externref` matters. So Pyodide is not a case that
+      needs B-203: using the module for real means Python implementations of the 254 `env` imports (Emscripten's JS runtime), and an `externref` there is a JS value that Python cannot do
+      anything with, so a handle registry would not help.
+      **A small bug found by the same probe (not fixed):** an `externref` *argument* is refused everywhere (`NotImplementedError: externref values are not supported`), but an `externref`
+      *result* is not: node raises `ValueError: could not convert string to float: 'null'`, wasmtime returns `()` as if it had succeeded, wasm3 raises `TypeError: unknown type 7`.
+      It should be the same `NotImplementedError` on every backend (with a test); `Global("externref")` is a `ValueError` and `Table("externref")` a `NotImplementedError`, also not alike.
 - [x] **B-204** (DONE: the `Ref` tuple, `CallStep.outs`, `tests/test_batch_multi_value.py`, a step in the self-test; it was: this is code, not just documentation: `Batch.call` currently raises `NotImplementedError("multi-value results in a batch")`, the README describes this; waiting for a decision about the shape of the result, `Ref` or a tuple of `Ref`) Multi-value in `Batch`: a tuple of results in a batch (right now the README says "not supported").
 
 Backends: wasmtime (fully), wasm3 (partly), the JS engines (through wrappers); what does not exist is marked
@@ -316,6 +346,41 @@ Done when: `instance.exports.table.get(0)(1, 2)` works where the engine allows i
       64 KiB 1052 / 1169; the buffers are intact at all sizes (1 byte to 8 MiB); a call 36-42 µs, a batch of 3 81-84 µs; selftest 36/36.**
       Next, the bottleneck of node/bun is the pipe and JSON (~50 MB/s): a binary channel or a larger read chunk. `jscontext`
       on Pythonista has the same path through the C API: measure `wasmhost bench` on the device.
+      **Baseline re-measured 2026-10-16** (`wasmhost bench --buffer KIB --repeat 5`, Linux, 4 cores, `main` at `b80e8d9`; MB/s, write / read; one run each, the spread between runs is large,
+      only factors mean something): `node` 64 KiB 50 / 61, 1 MiB 61 / 71, 8 MiB 44 / 61; `bun` 49 / 75, 59 / 103, 45 / 105; `wasmtime` 6480 / 6588, 8786 / 1529, 5838 / 1404. The size of the
+      buffer hardly matters, so it is the throughput of the stream and not a per-message cost; a call (64-71 us on `node`, 70-92 on `bun`, 41 on `wasmtime`) and a batch of 3 (99-123 us
+      on `node`, 149-156 on `wasmtime`) are not slower through the pipe, so the bytes are the cost. Not measured: Windows, macOS. Plan (owner, 2026-10-16): try a larger read chunk and
+      length-prefixed raw bytes instead of base64 as one experiment; an extra pipe (fd 3) is out, `Popen(pass_fds=...)` does not work on Windows; a side file (path/offset/length over
+      the pipe) is plan B.
+      **Prototype of 2026-10-16 (a stand-alone micro-benchmark, not a change to `_js.py`; nothing in the repository).** It compares three transports between Python and a long-lived
+      `node` / `bun` process, MB/s write / read, best of 5 (the spread is large, only factors mean something): A the way it is today (a JSON line with the base64 inside the script that
+      `vm.runInContext` runs), B a JSON line with base64 and no `vm`, C a JSON header line followed by the raw bytes (length-prefixed). `node`, read chunk 64 KiB: 64 KiB buffer
+      A 83 / 53, B 101 / 55, C 677 / 325; 1 MiB A 35 / 56, B 120 / 65, C 1228 / 553; 8 MiB A 29 / 51, B 42 / 53, C 1057 / 558. `bun`: C 885-1023 write, 443-740 read on 1-8 MiB. The data
+      came back intact in every C run. What it says: dropping base64 and JSON for the bytes is worth 10-35 times, much more than the earlier guess of 2-3 times; a larger read chunk (1 MiB)
+      changes little (it helps A and B a bit on small buffers); compiling the script in `vm` is not the cost (B is only a little faster than A); base64 gets worse on big buffers (~30-40
+      MB/s at 8 MiB) while raw bytes stay near 1 GB/s. The read side of C is slower than the write side because the prototype builds the answer with `Buffer.concat` (one copy more);
+      not tried: writing the header and the bytes separately. **Not proved:** the real protocol puts the data inside the `eval` scripts, also inside a `Batch` and in nested host calls,
+      so a binary frame has to fit there; the pipes would have to be binary (the code uses `universal_newlines=True` now); Windows and macOS were not measured, and Windows was the
+      reason to ask. Scripts: `scratchpad/proto/loop.js` and `bench.py` of the session (not kept in the repository).
+      **Plan B measured the same day (D, a side file):** Python writes the bytes to a file, only the path and the length go over the pipe, and Node reads the file straight into the
+      memory (`fs.readSync(fd, memory, ...)`; the prototype used a `Buffer` of the size of a wasm memory, not a real `WebAssembly.Memory`) and writes it out the same way for a read.
+      MB/s, write / read, `/dev/shm`: `node` 64 KiB 764 / 784, 1 MiB 1330 / 1351, 8 MiB 1987 / 2364; `bun` 817 / 736, 2260 / 2337, 2444 / 2432. On `/tmp` (a disk, so the page cache): `node`
+      239 / 244, 1405 / 1443, 1929 / 2086; `bun` 292 / 312, 1566 / 1485, 1802 / 2229. So from about 1 MiB a file is two to three times faster than raw bytes over the pipe (C: 450-1100),
+      near 2 GB/s, and on small buffers it is worse (the cost of opening and truncating a file), so it would need a threshold (about 256 KiB, to be measured) and the pipe below it. `wasmtime`
+      on the same machine: write 5800-8800, read 1400-1500 (the copy that makes `bytes`), so a file is as fast as `wasmtime` for reading and 3-4 times slower for writing. Nothing between two
+      processes gets below one copy through the kernel; real shared memory needs a native extension (Node has no `mmap`, `SharedArrayBuffer` stays in one process), which the project does
+      not have, and an engine in the same process (`jsc`, `wasmtime`) is the other way. Risks of a side file, not tried: a private temporary directory (`tempfile`, mode 0700) and removing
+      it on `close`, file locking on Windows, and `/dev/shm` exists only on Linux (macOS and Windows would use the temporary directory). One run each, 4 cores.
+      **DONE for `node` and `bun`, 2026-10-16, CLOSED on the owner's word the same day, with the limits listed below as they are (`NodeBackend`, `tests/test_side_file.py`, README "Big buffers on Node and Bun"; CI of the branch was green on Windows, macOS and Linux, after one re-run of a `jsc` crash that is the known one).**
+      `Memory.read` / `Memory.write` of `_side_min` = 16 KiB or more go through the side file (`WASMHOST_SIDE` tells Node which file; the context gets `__sideRead(view)` and `__sideWrite(view)`
+      and no path, so a script there cannot reach another file); the directory is made with `tempfile.mkdtemp` (mode 0700), in `/dev/shm` if it is writable, and goes with `close()`; if it
+      cannot be made the pipe carries everything as before. The threshold was measured on the real code: the file wins from 4 KiB in `/dev/shm` and from 8 KiB on a disk (`/tmp`), 16 KiB
+      is the cautious value. `wasmhost bench --buffer KIB --repeat 5`, MB/s write / read, before -> after: `node` 64 KiB 50 / 61 -> 542 / 306, 1 MiB 61 / 71 -> 1533 / 1289, 8 MiB 44 / 61 ->
+      2322 / 1950; `bun` 49 / 75 -> 775 / 470, 59 / 103 -> 1603 / 1562, 45 / 105 -> 2430 / 2694. Tested on `node` and `bun` (14 tests: sizes around the threshold, which way each size
+      goes, a shorter write over a longer one, out of bounds, the directory is private and removed, no directory, a host function moving 1 MiB inside a call); the whole suite passes on both.
+      **Not done / not checked:** Windows and macOS (CI will say; the code opens the file with `open(..., buffering=0)` and uses no POSIX-only call, but Windows file locking was not tried);
+      `Batch.read` / `Batch.write` and `put_bytes` / `get_bytes` still use the pipe (hex or base64); no self-test step, because the self-test runs on devices where there is no `node` and
+      the transport is not a new capability; the read side could be a little quicker (the prototype lost one copy to `Buffer.concat`, here it is the `bytes` that `f.read` makes).
       JSC without JIT is turned off with the variable `JSC_useJIT=false` before the process starts (`jsc` has no `--jitless` of its own; `typeof
       WebAssembly` remains `object`, wasm runs on the LLInt interpreter).
       Computation inside wasm itself (`fib(30)` recursive / a loop of 1e8 iterations), integers only, no memory:
@@ -625,6 +690,45 @@ shared memory, memory64 (and GC), each with `supports(...)`.
       only `echo`/variables/loops work, there are no pipes, `$(...)`, here-doc, redirections, `exit N` loses the status.
       **wasi-shell/wasibox** (oligamiq's crates) is not confirmed (the docs are unavailable). `wasmsh` was cancelled by the owner.
 
+- [~] **B-510** (2026-10-18) A git client for Pythonista (to be used as a StaSh command): `examples/git/` (`git.py`, `git.wasm`,
+      `lg2.c`, `build.sh`) and `tests/test_git_example.py` (3 tests, run on `wasmtime`, `wasm3`, `node` and `bun`; 12 passes). libgit2 1.9.0
+      (the sources are in the `libgit2-sys` crate) built with `zig cc -target wasm32-wasi`, a command line of our own on top
+      (`init clone status add commit log diff branch checkout remote fetch pull(ff) push`), `git.py` is the WASI host.
+      WASI preview1 has no sockets, so the connection is a `git_stream` served by four imports `wasmhost_net.connect/read/write/close`
+      (`stubs/socket.c`), and the host (`socket` + `ssl`) does the TCP and the TLS; libgit2's own HTTP client runs on it.
+      Checked: clone, commit, push, fast-forward pull against a real `git http-backend`, Basic authentication
+      (`GIT_USERNAME` + `GIT_TOKEN`), the TLS certificate check (a self-signed one is refused), a command from a subdirectory,
+      the repository passes `git fsck --strict`. **Not done, so not `[x]`:** a run on `jscontext` on a device (speed without JIT, the TLS roots
+      in Pythonista: `certifi` is the fallback); a run on StaSh itself; GitHub with a real token (no access from here); merge, rebase, stash,
+      tag, reset, ssh; `git.wasm` is 840 KB and is committed, so it must be rebuilt with `build.sh` when `lg2.c` changes. Findings:
+      libgit2 never looks for `.git` in `/`, so the repository root is mounted as `/work`; on wasm32 libgit2 picks
+      `__builtin_umul_overflow(unsigned*)` for `size_t` (`unsigned long`), hence `-Wno-incompatible-pointer-types`.
+
+- [~] **B-511** (2026-10-18) PoC: the real git built to WASI, `examples/git/real/` (`build.sh`, `wasi_compat.c/.h`, `README.md`; the binary
+      `git-real.wasm`, 3.4 MB, is not committed). git 2.56.0 from the kernel.org tarball + zlib of `libgit2-sys`, `zig cc`, 3 small patches
+      (`/dev/null`, `save_state` of merge, `chmod` renamed to a no-op) and about 100 lines of POSIX stubs. Works on `wasmtime`, `node`, `bun`, `wasm3`:
+      init, add, commit, log, status, diff, show, branch, checkout, tag, describe, reset, cherry-pick, rebase, rm, merge (ort), `fsck --strict` clean.
+      Does not work: the network (libcurl and `git-remote-http` as a process), `stash` and everything that starts a child process.
+      `git.py` is now the dispatcher the PoC pointed to: `clone/fetch/push` and the fetch of `pull` go to libgit2 (B-510), everything
+      else to this git (`git-real.wasm`, committed next to `git.py`); tests in `tests/test_git_example.py` (a diverged `pull` merges, `push -u`).
+      **Not done:** a run on `jscontext` (the module is 3.4 MB and may be slow to compile without JIT) and in StaSh; `stash` and anything that
+      starts a child; the network inside git itself (libcurl shim). **Known problem:** Bun 1.4.2 crashes with a segmentation fault in
+      `git-real.wasm` on `git checkout` of another branch (also `git checkout -`); the two tests that need it are skipped on `bun`.
+
+- [~] **B-512** (2026-10-18) The git modules: where they run, and how they are built. `examples/git/` runs on `wasmtime`, `wasm3`, `node`,
+      `jsc` (macOS; WebKitGTK with and without JIT) and `jscontext` (CI on macOS through rubicon-objc, Tests run 201 green; and the owner on a
+      device, PythonIDE/Pythonista). **Not on:** `gi-jsc` (takes no host functions, so no WASI and no `wasmhost_net`) and `pyodide` (its Python has no
+      `os.link` and no sockets; the tests skip it). **`bun`: partly**: Bun 1.4.2 crashes with a segmentation fault in `git-real.wasm` on a
+      `git checkout` of another branch, so the two tests that need it are skipped on `bun`. Read from the logs of Tests run 202 (2026-10-18):
+      the 4 tests of `tests/test_git_example.py` PASSED on `jscontext` (macOS 3.10, 3.15, 3.15t), on `jsc` (macOS, and WebKitGTK with JIT on and
+      off), `wasmtime`, `node` and `wasm3` (Linux, macOS, Windows, also PyPy); on `bun` 2 passed and 2 skipped; on `gi-jsc` all 4 skipped. The
+      Pyodide job runs without `-v`, so its skips are not listed one by one (394 passed, 94 skipped in all). Builds: `build.sh` and `real/build.sh` check the SHA-256 of the libgit2-sys
+      crate and of `git-2.56.0.tar.xz` (both agree with the index of crates.io and `sha256sums` of kernel.org), warn if zig is not 0.17.0,
+      and give byte-identical modules in any directory (`-ffile-prefix-map`; checked in two). `examples/git/NOTICE` lists the licenses (git
+      GPL-2.0; libgit2 GPL-2.0 with the linking exception) and the sources. The binaries are committed, so the repository ships GPL-licensed
+      binaries next to MIT code; the owner decides whether to keep that. Not done: the libgit2 source comes from the crate `libgit2-sys`
+      only because github.com was closed to the assistant's session; the official archive is the place for it.
+
 ## Known problems of the examples (not the API)
 
 - `examples/wasm/lua.wasm` was built without `longjmp`: any script error (syntax, `error()`, `pcall`) kills the
@@ -645,6 +749,13 @@ and not Linux (ubuntu, PyPy 3.11, 30 repeats: clean; CPython on macOS: clean). R
 array instead of a `byref` (commit `561e9ec`, reverted): 3 of the 3 finished shards of 30 repeats crashed (repeats 2, 9 and one more), which is no better than before.
 **Not tried:** reading the memory through `get_bytes` (a typed array, C API) instead of `readB64` while a host function runs; running the module with a
 smaller program that only calls a host function that reads memory. The earlier notes follow.
+**A crash on CPython, at another place (2026-10-16, run `Tests` 190 on `79e9f14`, branch `backlog-triage`).** The job `macos-latest / 3.15`, step `pytest --wasm-backend jsc`, ended with
+`Fatal Python error: Segmentation fault` (exit code 139) on CPython 3.15.0 (Homebrew, arm64). The Python stack: `_capi.py` `evaluate` (line 126) <- `_jsc.py` `evaluate` <- `examples/pyodide.py` `_eval` (line 549) <-
+`Pyodide.__init__` (line 503) <- `tests/test_pyodide_example.py::test_python_runs_in_pyodide[jsc]`; the C stack names `JavaScriptCore`, `JSC::typedArrayViewProtoGetterFuncBuffer` (the `.buffer` getter of a typed array).
+So it is **not PyPy, not `JSValueToStringCopy`, and not from inside a host function**: the same `ctypes` entry into the JavaScriptCore C API (`evaluate`) on macOS arm64, a different place. The step stopped after 22 s,
+and the rest of the job (447 tests of the `jscontext` step) passed. A re-run of the job on the same commit (attempt 2) was green, and the `jsc` step of `3.10`, `3.15t` and `pypy3.11` in attempt 1 was green too.
+That makes it one sample on CPython, not a rate, and it does not say that the change of that commit played no part: the commit adds only a side-file path to `NodeBackend` (node and bun), which `jsc` never calls, and two
+unused functions in the shared `_JS` script. What it does change: "CPython on macOS: clean" above was true of 30 repeats of one test and is not a promise for the suite; the guesses about PyPy's JIT are not the whole story.
 
 - **A segmentation fault on `macos-latest / pypy3.11`, in the step `pytest --wasm-backend wasmtime`.** Run 37613538125
   (`main`, `7f3c548`, only `publish.yml` changed since a green run). The process died in
@@ -665,6 +776,17 @@ smaller program that only calls a host function that reads memory. The earlier n
     test_lua_runs_as_a_program_of_the_shell[jsc]`, in the ctypes call `JSValueToStringCopy` (`_capi.py`, `_text`, called from `evaluate`, here from a host function: `fd_write`). Run 131 (`6f782dc`) and run 132 (`c06ac9e`): the same job
     failed; for 132 the failing step is `pytest --wasm-backend wasmtime` (what the log's tail shows is the last step, which passed with 419 passed). The same job was green in the other runs (125, 127, 130, 133 and 134 among them). None of the three commits touched the code on that
     path. So "seen once" is out of date. The step output of the failed `wasmtime` step was not read (the tool gives only the tail of a log): reading it is the first thing to do.
+
+- **2026-10-18, branch `claude/git-client-pythonista`: the same segmentation fault on CPython 3.10, macOS, backend `jsc`.** (Not the first time off PyPy: the branch `backlog-triage`, not yet in `main`, records one on CPython 3.15 on 2026-10-16, at another place in the same C API; this one is at the same place as the PyPy crashes.) Tests run 204
+  (`0946b42`), the job `macos-latest / 3.10`, the step `pytest --wasm-backend jsc (macOS, JavaScriptCore.framework)` died after 17 s with
+  `Fatal Python error: Segmentation fault` in `tests/test_git_example.py::test_a_local_repository_from_a_subdirectory[jsc]`. The stack is the one above, from a host
+  function that reads memory: `Preview1.path_filestat_get` -> `_resolve` -> `_string` -> `_read` -> `Memory.read` -> `JSBackend.memory_read` -> `_run` ->
+  `CApi.evaluate` -> `CApi._text` (`JSValueToStringCopy`). The other 13 jobs of run 204 were green, among them `jscontext` on the same macOS job (451 passed), and the
+  same job was green on run 203 (`986675c`) and on run 202; so it is not every run. The earlier note "CPython on macOS: clean" is out of date (so says the 3.15 record too).
+  What is not known: how often (seen once; not re-run yet, and the rule above is to re-run once and take a second failure as real); whether the git test raises the
+  rate. It is a guess that it does: git calls the host thousands of times (`path_filestat_get`, `fd_read`), each of which reads memory from JavaScript, so a test that
+  makes many such calls has more chances to meet it than the older tests; nothing was measured. The code that is in question is in `src/` (`_capi.py`), not in
+  the example. The git tests are not skipped on `jsc`, so that the flake stays visible.
 
 ## General definition of done
 

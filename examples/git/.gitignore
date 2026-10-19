@@ -1,0 +1,7 @@
+.build/
+real/.build/
+src/wasmgit/*.wasm
+dist/
+build/
+*.egg-info/
+__pycache__/

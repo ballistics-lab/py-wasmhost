@@ -2,7 +2,7 @@ name: Tests
 
 # Builds the package from source and runs the suite once per backend, selected with pytest's --wasm-backend
 # (see tests/conftest.py; a backend that can't start fails the step, it is never skipped). Coverage is not
-# collected here: tiny-bclibc-wasm runs the same backends through wasmhost and combines it there.
+# collected here (see coverage.yml); tiny-bclibc-wasm also runs the same backends through wasmhost and combines it there.
 #
 #   test:     every OS x CPython oldest/newest (also free-threaded 3.15t) + PyPy, on wasmtime and on Node (both
 #             available on every runner), and on wasm3 where pywasm3 installs (CPython 3.11+; built from git).

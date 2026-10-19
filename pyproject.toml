@@ -62,6 +62,7 @@ dev = [
     "pre-commit>=4.6.2",
     "pyright>=1.1.414",
     "pytest>=9.1.1",
+    "pytest-cov>=7.0.0",
     "ruff>=0.16.8",
     "wasmtime>=49.0.0",
     # The real Objective-C JSContext on a Mac, for tests/test_macos.py (Pythonista's objc_util exists only there)
@@ -89,3 +90,10 @@ line-length = 120
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "UP", "B"]
+
+[tool.coverage.run]
+source = ["wasmhost"]
+
+[tool.coverage.paths]
+# Data from runners of other OSes (macOS jsc/jscontext jobs) is combined on Linux.
+source = ["src/", "*/src/", "*\\src\\"]
