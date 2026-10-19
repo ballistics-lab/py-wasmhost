@@ -1,0 +1,159 @@
+name: Coverage
+
+# Line coverage of src/wasmhost: one job per backend (CPython 3.12), then a job that combines the data of all
+# of them (the paths of macOS runners are mapped by [tool.coverage.paths]) and sends it to Codecov. The matrix of tests.yml stays free of coverage.
+
+on:
+  push:
+    branches:
+      - "main"
+    paths:
+      - "pyproject.toml"
+      - "src/**"
+      - "tests/**"
+      - ".github/workflows/coverage.yml"
+  pull_request:
+    paths:
+      - "pyproject.toml"
+      - "src/**"
+      - "tests/**"
+      - ".github/workflows/coverage.yml"
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    name: ${{ matrix.backend }}
+    runs-on: ${{ matrix.os }}
+    defaults:
+      run:
+        shell: bash
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest]
+        backend: [wasmtime, node, bun, wasm3]
+        include:
+          # The system JavaScriptCore, and a real Objective-C JSContext through rubicon-objc: macOS only.
+          - { os: macos-latest, backend: jsc }
+          - { os: macos-latest, backend: jscontext }
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0 # setuptools_scm needs tags for the package version
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@1c37ad07a6a961277cf70c0d37d6f313000f5884
+        with:
+          python-version: "3.12"
+          enable-cache: true
+
+      - name: Install
+        run: uv sync --locked
+
+      - name: Set up Bun
+        if: ${{ matrix.backend == 'bun' }}
+        uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
+
+      - name: Run coverage
+        run: uv run --locked pytest --cov --cov-report= --wasm-backend ${{ matrix.backend }}
+        env:
+          COVERAGE_FILE: .coverage.${{ matrix.backend }}
+
+      - name: Upload coverage data
+        if: ${{ !cancelled() }} # keep the data even if this backend's tests fail
+        uses: actions/upload-artifact@v7
+        with:
+          name: coverage-data-${{ matrix.backend }}
+          path: .coverage.${{ matrix.backend }}
+          include-hidden-files: true
+          retention-days: 1
+          if-no-files-found: error
+
+  # WebKitGTK's JavaScriptCore on Linux, through PyGObject (gi-jsc) and through its C API (jsc). python3-gi is built for the
+  # distribution's own Python, so this is a venv of that interpreter with its site-packages visible (as in tests.yml).
+  test-jsc:
+    name: ${{ matrix.backend }} (WebKitGTK)
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        backend: [gi-jsc, jsc]
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+
+      - name: Install JavaScriptCore + PyGObject
+        run: |
+          sudo apt-get update -q
+          sudo apt-get install -y -q gir1.2-javascriptcoregtk-4.1 python3-gi
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@1c37ad07a6a961277cf70c0d37d6f313000f5884
+
+      - name: Install into a system-site-packages venv
+        run: |
+          uv venv --system-site-packages --python /usr/bin/python3 .venv
+          uv pip install -e . pytest pytest-cov
+
+      - name: Run coverage
+        run: .venv/bin/python -m pytest --cov --cov-report= --wasm-backend ${{ matrix.backend }}
+        env:
+          COVERAGE_FILE: .coverage.${{ matrix.backend }}
+
+      - name: Upload coverage data
+        if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@v7
+        with:
+          name: coverage-data-${{ matrix.backend }}
+          path: .coverage.${{ matrix.backend }}
+          include-hidden-files: true
+          retention-days: 1
+          if-no-files-found: error
+
+  merge:
+    needs: [test, test-jsc]
+    if: ${{ !cancelled() }}
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write # Codecov OIDC upload
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@1c37ad07a6a961277cf70c0d37d6f313000f5884
+        with:
+          python-version: "3.12"
+          enable-cache: true
+
+      - name: Install
+        run: uv sync --locked
+
+      - name: Download coverage data
+        uses: actions/download-artifact@v8
+        with:
+          pattern: coverage-data-*
+          merge-multiple: true
+
+      - name: Combine coverage
+        run: |
+          uv run --locked coverage combine
+          uv run --locked coverage xml
+          uv run --locked coverage report
+
+      - name: Upload coverage to Codecov
+        uses: codecov/codecov-action@v7
+        with:
+          use_oidc: true
+          files: ./coverage.xml
+          fail_ci_if_error: true
