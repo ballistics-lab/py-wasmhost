@@ -30,7 +30,7 @@ import urllib.request
 import wasmhost
 from wasmhost.wasi import preview1
 
-BASE_URL = "https://raw.githubusercontent.com/ballistics-lab/py-wasmhost/main/examples/git/"
+BASE_URL = "https://raw.githubusercontent.com/natify-sh/py-wasmhost/main/examples/git/"
 NETWORK = ("clone", "fetch", "push")  # the commands that libgit2 runs; the rest is git
 PASSED_ENV = ("GIT_USERNAME", "GIT_PASSWORD", "GIT_TOKEN", "GIT_AUTHOR_NAME", "GIT_AUTHOR_EMAIL")
 TIMEOUT = 60

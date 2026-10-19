@@ -59,7 +59,7 @@ import urllib.request
 import wasmhost
 from wasmhost.wasi import preview1
 
-WASM_URL = "https://raw.githubusercontent.com/ballistics-lab/py-wasmhost/examples/zigcc/examples/wasm/coreutils.wasm"
+WASM_URL = "https://raw.githubusercontent.com/natify-sh/py-wasmhost/examples/zigcc/examples/wasm/coreutils.wasm"
 LUA_URL = "https://registry.npmjs.org/@antonz/lua-wasi/-/lua-wasi-5.4.6.tgz"  # Lua 5.4.6 built to WASI, MIT
 # The directory is preopened as "/" and as ".": a C library of the first WASI snapshot takes relative paths against ".".
 PREOPENS = ("/", ".")
