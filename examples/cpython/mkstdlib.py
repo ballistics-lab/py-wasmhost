@@ -15,6 +15,9 @@ import zipfile
 SKIP = {"test", "tests", "idlelib", "turtledemo", "tkinter", "ensurepip", "lib2to3", "__pycache__", "site-packages"}
 
 
+HERE = os.path.dirname(os.path.abspath(__file__))
+
+
 def main(lib, builddir, out):
     names = []
     for root, dirs, files in os.walk(lib):
@@ -23,12 +26,13 @@ def main(lib, builddir, out):
             if name.endswith(".py") and not name.startswith("test_") and not name.startswith("_test"):
                 names.append(os.path.join(root, name))
     names += [os.path.join(builddir, f) for f in os.listdir(builddir) if f.startswith("_sysconfigdata")]
+    names.append(os.path.join(HERE, "sitecustomize.py"))  # what WASI lacks and pip imports, run at every start
     with (
         tempfile.TemporaryDirectory() as tmp,
         zipfile.ZipFile(out, "w", zipfile.ZIP_DEFLATED, compresslevel=9) as archive,
     ):
         for path in names:
-            base = lib if path.startswith(lib) else builddir
+            base = lib if path.startswith(lib) else os.path.dirname(path)
             name = os.path.relpath(path, base)[:-3] + ".pyc"
             cfile = os.path.join(tmp, "x.pyc")
             py_compile.compile(path, cfile=cfile, dfile=name[:-1], doraise=True, optimize=0)
