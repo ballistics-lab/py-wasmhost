@@ -10,7 +10,7 @@ import os
 import sys
 import types
 
-for folder in sorted(glob.glob("/site*")):
+for folder in ["/site", *(f"/site{n}" for n in range(1, 10))]:  # preopened folders are not listed in `/`
     for wheel in glob.glob(folder + "/pip-*.whl"):
         sys.path.insert(0, wheel)
 os.getuid = os.geteuid = lambda: 0
