@@ -47,6 +47,10 @@ both in a bare JavaScript engine:
 - `examples/jslinux.py`: a Linux virtual machine (JSLinux, riscv64 or x86_64 Alpine), with its console on your
   terminal.
 
+`examples/cpython/` runs the official CPython (3.15, built to `wasm32-wasip1` with wasi-sdk, not Pyodide) on `wasmhost.wasi.preview1`:
+`python.wasm` and its standard library are committed, `build.sh` makes them from python/cpython, and `run.py` runs them
+(`python examples/cpython/run.py -c "print(1)"`). No processes, sockets or `dlopen` there, as WASI preview1 has none.
+
 Both keep their downloads in `$WASMHOST_CACHE`, else `~/.cache/wasmhost`, else `./.cache` where there is no usable
 home directory (PythonIDE).
 
