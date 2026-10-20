@@ -1,7 +1,7 @@
 #!/bin/sh
 # Builds python.wasm and lib/python315.zip: the official CPython (python/cpython, branch 3.15) for wasm32-wasip1, with
 # the build that CPython itself ships (Platforms/WASI) and the wasi-sdk it asks for. Needs: git, curl, tar, make, a C
-# compiler and python3 (for the build Python that the cross build needs), llvm-strip or strip optional.
+# compiler and python3 (for the build Python that the cross build needs).
 #   ./build.sh            # output: ./python.wasm and ./lib/python315.zip
 # Nothing has to run WebAssembly while it builds, so there is no wasmtime step. Sources and the SDK go to $WORK
 # (default ./.build), which is not committed.
@@ -9,6 +9,7 @@ set -eu
 here=$(cd "$(dirname "$0")" && pwd)
 work=${WORK:-$here/.build}
 cpython_commit=1c6794eb7d0f015c38b2fa7868912c4859f1293c # 3.15.0+dev of 2026-10-20
+zlib_commit=51b7f2abdade71cd9bb0e7a373ef2610ec6f9daf # zlib 1.3.1; wasi-sdk has none, and python.wasm needs it for pip and wheels
 sdk=33
 mkdir -p "$work"
 
@@ -38,8 +39,31 @@ git -C "$src" fetch -q --depth 1 origin "$cpython_commit"
 git -C "$src" checkout -q --detach FETCH_HEAD
 
 export WASI_SDK_PATH=$work/wasi-sdk-$sdk.0-$arch
+
+# zlib: its sources are a dozen C files, compiled by hand into a static library that CPython links in
+zsrc=$work/zlib
+if [ ! -d "$zsrc/.git" ]; then
+	mkdir -p "$zsrc"
+	git -C "$zsrc" init -q
+	git -C "$zsrc" remote add origin https://github.com/madler/zlib
+fi
+git -C "$zsrc" fetch -q --depth 1 origin "$zlib_commit"
+git -C "$zsrc" checkout -q --detach FETCH_HEAD
+zout=$work/zlib-wasi
+mkdir -p "$zout/include" "$zout/lib" "$zout/obj"
+for c in adler32 compress crc32 deflate gzclose gzlib gzread gzwrite inflate infback inftrees inffast trees uncompr zutil; do
+	"$WASI_SDK_PATH/bin/clang" --target=wasm32-wasip1 --sysroot="$WASI_SDK_PATH/share/wasi-sysroot" -O2 -DHAVE_UNISTD_H -D_LARGEFILE64_SOURCE=1 \
+		-c "$zsrc/$c.c" -o "$zout/obj/$c.o"
+done
+rm -f "$zout/lib/libz.a"
+"$WASI_SDK_PATH/bin/llvm-ar" rcs "$zout/lib/libz.a" "$zout"/obj/*.o
+cp "$zsrc/zlib.h" "$zsrc/zconf.h" "$zout/include/"
+
 mkdir -p "$work/logs"
-(cd "$src" && python3 Platforms/WASI build --quiet --logdir "$work/logs" --host-runner true)
+# the zlib arguments are for the WASI build only: the build Python is a native one, which they would break
+(cd "$src" && python3 Platforms/WASI build-python --quiet --logdir "$work/logs" &&
+	python3 Platforms/WASI build-host --quiet --logdir "$work/logs" --host-runner true \
+		ZLIB_CFLAGS="-I$zout/include" ZLIB_LIBS="-L$zout/lib -lz")
 
 cross=$src/cross-build/wasm32-wasip1
 if command -v llvm-strip > /dev/null; then strip=llvm-strip; else strip="$WASI_SDK_PATH/bin/llvm-strip"; fi
