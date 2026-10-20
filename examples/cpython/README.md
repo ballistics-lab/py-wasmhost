@@ -11,6 +11,17 @@ python examples/cpython/run.py --dir ~/data:/data -c "print(open('/data/a.txt').
 python examples/cpython/run.py --site ~/packages -c "import six"      # packages of pure Python, put on sys.path
 ```
 
+`run.py` is only a convenience: `python.wasm` is a plain WASI command (`_start`, imports of `wasi_snapshot_preview1` only), so the
+command of the package runs it too, if it is told where the standard library is:
+
+```sh
+python -m wasmhost run --dir examples/cpython::/py --env PYTHONHOME=/py --argv0 /py/python.wasm \
+    examples/cpython/python.wasm -- -c "import sys; print(sys.platform)"
+```
+
+(Checked on Node. There is no current folder in that program: give one with another `--dir HOST::/`, and `--dir HOST::/site` with
+`PYTHONPATH=/site` for packages.)
+
 | File                | What it is                                                                                         |
 | ------------------- | -------------------------------------------------------------------------------------------------- |
 | `python.wasm`       | CPython with zlib linked in, 7.9 MB (the debug information is stripped)                            |
