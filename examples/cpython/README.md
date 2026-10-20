@@ -75,9 +75,13 @@ left alone.
 
 - **An interactive prompt.** `input()` at a prompt works differently on iOS (keys do not work as in a terminal), as in the other
   examples of this repository; left for later.
-- **The network through the host.** A host function is a plain Python callable and works the same on every backend (the way
-  `examples/git/` gets the network for libgit2), so a bridge needs no JavaScript. It has not been written: `python.wasm` would need a
-  module that calls it in place of `_socket`.
+- **The network.** Deliberately not built here. A bridge through the host Python is possible (a host function is a plain Python
+  callable and works the same on every backend, the way `examples/git/` gets the network for libgit2), but it would be a second
+  Pyodide-like layer on top of CPython: a `socket` and an `ssl` made up in Python, and a way in for the program (a C module in
+  `python.wasm`, or names under a folder that the host answers). The plan is to wait for CPython to support WASI properly instead:
+  WASI 0.2 has `wasi:sockets` (TCP, UDP, name lookup) and 0.3 adds async. That is TCP only, so HTTPS still needs TLS in the program
+  (`ssl`) or a WASI interface for it, and `wasmhost` would need a preview2 host (the Component Model), which only some backends can
+  run. Until then the host does the downloading (`pip download`) and the program installs from a folder.
 - **Compiled extensions** linked into `python.wasm` (for example the C part of `py-ballisticcalc`).
 - **`sqlite3`, `bz2`, `lzma`.**
 - **Start time** was measured only on Node: about 1 s for `python -c pass`, 0.7 s of it compiling the module. On `jscontext` (no JIT on
