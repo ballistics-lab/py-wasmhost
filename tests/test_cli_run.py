@@ -113,6 +113,18 @@ def test_argv0_names_the_program(session: str, tmp_path: Path) -> None:
     assert _run.split_command(["--argv0", "tool", "a.wasm", "x"]) == (["--argv0", "tool"], "a.wasm", ["x"])
 
 
+def test_inherit_env_gives_all_the_variables_and_env_wins(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("WASMHOST_TEST_A", "from the host")
+    monkeypatch.setenv("WASMHOST_TEST_B", "from the host")
+    assert "WASMHOST_TEST_A" not in _run._environment([])
+    assert "WASMHOST_TEST_A" not in _run._environment(["WASMHOST_TEST_B"])
+    everything = _run._environment(["WASMHOST_TEST_B=set"], inherit=True)
+    assert everything["WASMHOST_TEST_A"] == "from the host"
+    assert everything["WASMHOST_TEST_B"] == "set"
+    assert _run.build_parser().parse_args(["--inherit-env"]).inherit_env is True
+    assert _run.split_command(["--inherit-env", "a.wasm", "x"]) == (["--inherit-env"], "a.wasm", ["x"])
+
+
 def test_a_module_without_a_start_function_exits_quietly(
     capsys: pytest.CaptureFixture[str], session: str, arith: str
 ) -> None:
@@ -192,7 +204,9 @@ def test_a_real_program_with_a_folder(capsys: pytest.CaptureFixture[str], sessio
     assert _cli.main(["run", "--backend", session, "--argv0", "coreutils", program, "false"]) == 1
 
 
-def test_a_real_program_with_variables_and_an_exit_code(capsys: pytest.CaptureFixture[str], session: str) -> None:
+def test_a_real_program_with_variables_and_an_exit_code(
+    capsys: pytest.CaptureFixture[str], session: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
     """Lua: what follows the module is the program's (`-e` is not a host option), `--env`, the exit code."""
     need_imports()
     lua = str(EXAMPLES / "lua.wasm")
@@ -201,3 +215,9 @@ def test_a_real_program_with_variables_and_an_exit_code(capsys: pytest.CaptureFi
     )
     assert capsys.readouterr().out == "bar\tlua.wasm\n"
     assert _cli.main(["run", "--backend", session, lua, "-e", "os.exit(7)"]) == 7
+    monkeypatch.setenv("WASMHOST_TEST_FOO", "inherited")
+    assert (
+        _cli.main(["run", "--backend", session, "--inherit-env", lua, "-e", "print(os.getenv('WASMHOST_TEST_FOO'))"])
+        == 0
+    )
+    assert capsys.readouterr().out == "inherited\n"
