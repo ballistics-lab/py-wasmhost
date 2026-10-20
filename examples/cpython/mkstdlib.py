@@ -28,10 +28,10 @@ def main(lib, builddir, out):
             base = lib if path.startswith(lib) else builddir
             name = os.path.relpath(path, base)[:-3] + ".pyc"
             cfile = os.path.join(tmp, "x.pyc")
-            compiled = py_compile.compile(path, cfile=cfile, dfile=name[:-1], doraise=True, optimize=0)
+            py_compile.compile(path, cfile=cfile, dfile=name[:-1], doraise=True, optimize=0)
             # a fixed time, so that the same sources give the same zip
             info = zipfile.ZipInfo(name, (1980, 1, 1, 0, 0, 0))
-            with open(compiled, "rb") as file:
+            with open(cfile, "rb") as file:
                 archive.writestr(info, file.read())
     print(f"{out}: {len(names)} modules, {os.path.getsize(out)} bytes")
 
