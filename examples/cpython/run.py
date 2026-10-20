@@ -8,6 +8,10 @@
     python examples/cpython/run.py --dir ~/data:/data -c "print(open('/data/a.txt').read())"
     python examples/cpython/run.py --site ~/packages -c "import six"   # packages of pure Python, put on sys.path
 
+    pip download pip six -d wheels                 # the network is the host's: pip in WASI has no sockets
+    python examples/cpython/run.py --site wheels --dir pkgs:/pkgs /py/pip_main.py \\
+        install --no-index --find-links /site --target /pkgs six
+
 What it can't do is what WASI preview1 can't: no processes (`subprocess`), no sockets (`urllib` fails), no `dlopen` (an
 extension module has to be linked into `python.wasm`, so a wheel with compiled code, even a `wasm32` one, can't be
 loaded: those on PyPI are for Emscripten/Pyodide), and wasi-sdk has no sqlite3. zlib is linked in (`build.sh`).
