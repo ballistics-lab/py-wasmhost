@@ -66,6 +66,9 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--env", action="append", default=[], metavar="NAME[=VALUE]", help="set a variable (NAME alone: copy it)"
     )
+    parser.add_argument(
+        "--inherit-env", action="store_true", help="give the program all the variables of this process (--env wins)"
+    )
     parser.add_argument("--argv0", metavar="ARGV0", help="the program's argv[0] (default: the module's path)")
     parser.add_argument("--invoke", metavar="FUNCTION", help="call an exported function with the arguments")
     parser.add_argument("--max-memory", type=int, metavar="PAGES", help="the most 64 KiB pages a memory may have")
@@ -132,8 +135,8 @@ def _preopens(specs: Sequence[str]) -> dict[str, str]:
     return result
 
 
-def _environment(specs: Sequence[str]) -> dict[str, str]:
-    result: dict[str, str] = {}
+def _environment(specs: Sequence[str], inherit: bool = False) -> dict[str, str]:
+    result: dict[str, str] = dict(os.environ) if inherit else {}
     for spec in specs:
         name, has_value, value = spec.partition("=")
         if has_value:
@@ -206,7 +209,7 @@ def run(host_args: Sequence[str], path: str, program_args: Sequence[str]) -> int
         module = Module(wasm)
         wasi = Preview1(
             args=[args.argv0 if args.argv0 is not None else os.path.basename(path), *program_args],
-            env=_environment(args.env),
+            env=_environment(args.env, args.inherit_env),
             preopens=_preopens(args.dir),
             stdin=sys.stdin.buffer,
             stdout=_write(sys.stdout),

@@ -47,6 +47,10 @@ both in a bare JavaScript engine:
 - `examples/jslinux.py`: a Linux virtual machine (JSLinux, riscv64 or x86_64 Alpine), with its console on your
   terminal.
 
+`examples/cpython/` runs the official CPython (3.15, built to `wasm32-wasip1` with wasi-sdk, not Pyodide) on `wasmhost.wasi.preview1`:
+`python.wasm` and its standard library are committed, `build.sh` makes them from python/cpython, and `run.py` runs them
+(`python examples/cpython/run.py -c "print(1)"`). No processes, sockets or `dlopen` there, as WASI preview1 has none.
+
 Both keep their downloads in `$WASMHOST_CACHE`, else `~/.cache/wasmhost`, else `./.cache` where there is no usable
 home directory (PythonIDE).
 
@@ -571,7 +575,7 @@ there as `wasmhost self test` and `wasmhost bench`.
 command (`wasmhost.wasi.Wasip1`) and its exit code is the command's; `--invoke FUNCTION` calls an exported function
 instead, the words after the module being its arguments (`wasmhost run --invoke add m.wasm 2 3` prints `5`; one result
 per line, a float as Rust prints it: `0.5`, `NaN`, `inf`). Options: `--backend`, `--dir HOST[::GUEST]` (repeatable),
-`--readonly`, `--env NAME[=VALUE]`, `--argv0 NAME` (the default is the module's file name), `--max-memory PAGES`, `--timeout SECONDS`, `--fuel UNITS`. `--runtime NAME` is `--backend NAME`. A trap exits with 134, as in
+`--readonly`, `--env NAME[=VALUE]`, `--inherit-env` (all the variables of the process; `--env` wins), `--argv0 NAME` (the default is the module's file name), `--max-memory PAGES`, `--timeout SECONDS`, `--fuel UNITS`. `--runtime NAME` is `--backend NAME`. A trap exits with 134, as in
 wasmtime; any other error with 1. Everything after the module belongs to the program. Only the WASI functions are provided: a module that imports others (`examples/coremark.py`'s `env.clock_ms`) does not link, as in `wasmtime`; programs like that are run from Python, as the examples do.
 
 `python -m wasmhost bench [--backend NAME] [--no-jit] [--buffer KIB]` times a call, a batch of three, moving a buffer in and
