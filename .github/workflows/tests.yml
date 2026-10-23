@@ -117,6 +117,13 @@ jobs:
         with:
           node-version: 24
 
+      # fusedwasi (the WASI host) is pure Python and not released: its source is put on the path inside Pyodide (FUSEDWASI_SRC).
+      - uses: actions/checkout@v7
+        with:
+          repository: natify-sh/fusedwasi
+          ref: wasi-p2
+          path: fusedwasi-src
+
       - name: Install Pyodide
         run: npm install --no-save --prefix "$RUNNER_TEMP/pyodide" pyodide@314.0.7
 
@@ -124,11 +131,15 @@ jobs:
       - name: Self-test on the pyodide backend
         working-directory: ${{ runner.temp }}/pyodide
         run: node "$GITHUB_WORKSPACE/tests/pyodide_run.mjs" selftest
+        env:
+          FUSEDWASI_SRC: ${{ github.workspace }}/fusedwasi-src/src
 
       - name: pytest --wasm-backend pyodide
         if: ${{ !cancelled() }}
         working-directory: ${{ runner.temp }}/pyodide
         run: node "$GITHUB_WORKSPACE/tests/pyodide_run.mjs" pytest
+        env:
+          FUSEDWASI_SRC: ${{ github.workspace }}/fusedwasi-src/src
 
   jsc:
     name: WebKitGTK JavaScriptCore
@@ -151,7 +162,8 @@ jobs:
       - name: Install into a system-site-packages venv
         run: |
           uv venv --system-site-packages --python /usr/bin/python3 .venv
-          uv pip install -e . pytest
+          # fusedwasi is not released: from git, as [tool.uv.sources] says (uv pip does not read it)
+          uv pip install -e . pytest "fusedwasi @ git+https://github.com/natify-sh/fusedwasi@wasi-p2"
 
       - name: pytest --wasm-backend gi-jsc (JIT on)
         run: .venv/bin/python -m pytest -v --wasm-backend gi-jsc

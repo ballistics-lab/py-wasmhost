@@ -101,7 +101,7 @@ jobs:
       - name: Install into a system-site-packages venv
         run: |
           uv venv --system-site-packages --python /usr/bin/python3 .venv
-          uv pip install -e . pytest pytest-cov
+          uv pip install -e . pytest pytest-cov "fusedwasi @ git+https://github.com/natify-sh/fusedwasi@wasi-p2"  # fusedwasi is not released: from git
 
       - name: Run coverage
         run: .venv/bin/python -m pytest --cov --cov-report= --wasm-backend ${{ matrix.backend }}

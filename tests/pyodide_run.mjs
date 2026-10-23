@@ -35,20 +35,28 @@ const py = await loadPyodide({
   packageBaseUrl: `https://cdn.jsdelivr.net/pyodide/v${version}/full/`,
 });
 py.mountNodeFS("/repo", repo);
+// fusedwasi (the WASI host of wasmhost) is pure Python: $FUSEDWASI_SRC is the folder "src" of its source tree (the one that holds the package fusedwasi), put on the
+// path; without it fusedwasi has to be installed in Pyodide (micropip).
+const fusedwasi = process.env.FUSEDWASI_SRC;
+if (fusedwasi) py.mountNodeFS("/fusedwasi_src", fusedwasi);
 py.globals.set("args", rest);
 
 let code;
 if (mode === "selftest") {
   code = `
-import sys
+import os, sys
 sys.path.insert(0, "/repo/src")
+if os.path.isdir("/fusedwasi_src"):
+    sys.path.insert(0, "/fusedwasi_src")
 from wasmhost import _cli
 status = _cli.main(["self", "test", "--backend", "pyodide"])
 `;
 } else if (mode === "pytest") {
   await py.loadPackage(["pytest", "packaging"]);
   code = `
-import os, pytest
+import os, sys, pytest
+if os.path.isdir("/fusedwasi_src"):
+    sys.path.insert(0, "/fusedwasi_src")
 os.chdir("/repo")
 status = pytest.main(["-q", "-p", "no:cacheprovider", "--wasm-backend", "pyodide", "tests", *args.to_py()])
 `;

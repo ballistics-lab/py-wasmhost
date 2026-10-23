@@ -3,7 +3,7 @@
 WebAssembly from **CPython, PyPy and Pythonista**, with the JavaScript WebAssembly API: modules, instances, memory,
 globals, and host functions (Python callables the module calls). It runs on whichever backend is available:
 JavaScriptCore's `JSContext` in Pythonista on iOS, JavaScriptCore, Node or Bun on a computer, or, when installed,
-wasmtime or wasm3. Plain Python, no dependencies, no C extension of its own.
+wasmtime or wasm3. Plain Python, no C extension of its own; its one dependency, [fusedwasi](https://github.com/natify-sh/fusedwasi), is pure Python too (it is the WASI host).
 
 [![license]][MIT]
 [![pypi]][PyPiUrl]
@@ -507,12 +507,15 @@ engines, about 5 times slower on a tight loop).
 ## WASI
 
 `wasmhost.wasi.preview1` is a host for `wasi_snapshot_preview1` (WASI 0.1), the interface that Rust (`wasm32-wasip1`), wasi-sdk, Zig and
-most "command line" modules are built against: all 46 functions of the specification, in plain Python, standard library only. It also
+most "command line" modules are built against: all 46 functions of the specification, in plain Python. The calls themselves are those of the package
+`fusedwasi` (`fusedwasi.p1`, a dependency of wasmhost: pure Python, `py3-none-any`, nothing else to install), the Python twin of the C core that `wasmext` builds into
+its modules; the two are tested against each other with the same scripts of calls. `wasmhost.wasi.preview1` gives them the shape wasmhost has: the options below,
+the import objects of the engines, and the tables of the specification. It also
 offers `wasi_unstable`, the first snapshot, which older toolchains (wasienv, wasm-clang) still produce and which the Lua build of
 `examples/coreutils.py` imports from. It is checked against the specification's own `witx` files of both snapshots (names, signatures,
 the numbers of errors and flags, the layout of the records), and its self-test step runs a small WASI program of each on every backend.
 
-It runs on the `pyodide` backend too (wasmhost inside Pyodide; the self-test step and the tests pass there), with what Emscripten
+It runs on the `pyodide` backend too (wasmhost inside Pyodide; the self-test step and the tests pass there; with fusedwasi as the host the self-test was run again, 35 of 35, and the whole suite is the CI job "Pyodide"), with what Emscripten
 lacks: the files a program sees are Pyodide's virtual file system (on Node a real folder can be mounted with `mountNodeFS`), there are no
 symbolic links (`path_symlink` and `path_readlink` fail). Python there has no per-thread CPU clock, so `thread_cputime_id` reads the process's CPU
 clock, which is the same thing with one thread.
@@ -520,9 +523,9 @@ clock, which is the same thing with one thread.
 ```python
 import sys
 from wasmhost import Module
-from wasmhost.wasi.preview1 import Wasip1
+from wasmhost.wasi.preview1 import Preview1
 
-wasi = Wasip1(
+wasi = Preview1(
     args=["prog", "-v"],
     env={"HOME": "/"},
     preopens={"/": "some/folder"},
@@ -532,12 +535,14 @@ wasi = Wasip1(
 code = wasi.run(Module(open("prog.wasm", "rb").read()))  # the exit code: what `proc_exit` was given, else 0
 ```
 
-- **Names.** `wasmhost.wasi` is a package with a module for each version of WASI: `preview1` is WASI 0.1, with the class `Wasip1`,
-  which the package exports too (`from wasmhost.wasi import Wasip1`). A class has the version in its name, so a later `Wasip2`
+- **Names.** `wasmhost.wasi` is a package with a module for each version of WASI: `preview1` is WASI 0.1, with the class `Preview1`,
+  which the package exports too (`from wasmhost.wasi import Preview1`). A class has the version in its name, so a later `Wasip2`
   cannot be taken for it.
 - **Folders.** `preopens` maps the name the program sees to a folder of the host; several can be given, and a name that leaves its
-  folder (`..`, an absolute name, a link that points out) is refused with `ENOTCAPABLE`. The check and the open are two steps, so
-  another process changing the folder in between can still get past it.
+  folder (`..`, an absolute name, a link that points out) is refused with `ENOTCAPABLE`. On POSIX a name is walked from the folder one step at a time with `openat`, and a link met on the way is read and
+  its target put in front of the rest of the name, so there is no gap between the check and the open (a name that passes through a folder that is not there
+  is `ENOENT`, not `ENOTCAPABLE`: it is walked as it comes). On Windows there is no `openat`: a name is resolved by hand and checked against the real
+  paths, and the check and the open are two steps, so another process changing the folder in between can still get past it.
 - **Read-only.** `readonly=True` makes every preopen read-only, `readonly={"data"}` only the ones of those names. The rights that change
   something are taken away from the folder (and so from what is opened in it), so a call that would write, make, remove, rename or
   link answers `ENOTCAPABLE`, and a file opened with every right asked for is opened for reading only.
@@ -548,7 +553,9 @@ code = wasi.run(Module(open("prog.wasm", "rb").read()))  # the exit code: what `
   object has both snapshots, and the engine links the one a module asks for.
 - **`wasi_unstable`** is the same calls with four differences (the order of `whence`, one right less, a 32-bit link count in
   `filestat`, and a clock subscription with an extra field) and no `sock_accept`.
-- **Not supported:** sockets (`ENOTSOCK`), signals (`ENOSYS`). A host function that sleeps (`poll_oneoff`) is outside what
+- **Errors.** A read of standard output and a write to standard input are `EBADF`; a name that is not UTF-8 is `ENOENT` on POSIX (a name is bytes
+  there); a seek by 0 bytes from the current position needs only the right to tell. These are the answers of fusedwasi, and so of `wasmext`.
+- **Not supported:** sockets (`ENOTSOCK`), signals (`ENOSYS`: `proc_raise` does not end the program here, whereas in `wasmext` and in fusedwasi it does). A host function that sleeps (`poll_oneoff`) is outside what
   `timeout` and `fuel` can stop.
 
 ## Try it on a device
@@ -572,7 +579,7 @@ documented`) and counts as passed. If something fails, send the whole output. On
 there as `wasmhost self test` and `wasmhost bench`.
 
 `wasmhost run [OPTIONS] module.wasm [-- ARGUMENTS]` runs a module along the lines of `wasmtime run` (the results, the exit codes and the options were compared with wasmtime 48.0.5; `--invoke` with too many words is an error here, and the `-W`/`-O`/... groups are not there). A module with `_start` is a WASI
-command (`wasmhost.wasi.Wasip1`) and its exit code is the command's; `--invoke FUNCTION` calls an exported function
+command (`wasmhost.wasi.Preview1`) and its exit code is the command's; `--invoke FUNCTION` calls an exported function
 instead, the words after the module being its arguments (`wasmhost run --invoke add m.wasm 2 3` prints `5`; one result
 per line, a float as Rust prints it: `0.5`, `NaN`, `inf`). Options: `--backend`, `--dir HOST[::GUEST]` (repeatable),
 `--readonly`, `--env NAME[=VALUE]`, `--inherit-env` (all the variables of the process; `--env` wins), `--argv0 NAME` (the default is the module's file name), `--max-memory PAGES`, `--timeout SECONDS`, `--fuel UNITS`. `--runtime NAME` is `--backend NAME`. A trap exits with 134, as in
