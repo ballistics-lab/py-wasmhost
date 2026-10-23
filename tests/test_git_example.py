@@ -64,9 +64,9 @@ def git(
 def skip_on_bun(backend: str) -> None:
     if backend == "bun":
         pytest.skip(
-            "Bun 1.4.2 crashes (segmentation fault or illegal instruction) in git-real.wasm: on `git checkout` of "
-            "another branch, and on `git commit` from a subdirectory with the stat of fusedwasi (node, JSC and wasmtime "
-            "run it fine)"
+            'Bun 1.4.2 crashes (`panic: Segmentation fault`, "Bun has crashed") in git-real.wasm: on `git checkout` of '
+            "another branch, and, depending on the timing of the host (how many round trips it makes), on `status` and "
+            "`commit` from a subdirectory (node, JSC and wasmtime run it fine)"
         )
 
 
