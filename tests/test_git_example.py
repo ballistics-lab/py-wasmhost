@@ -63,7 +63,11 @@ def git(
 
 def skip_on_bun(backend: str) -> None:
     if backend == "bun":
-        pytest.skip("Bun 1.4.2 crashes (segmentation fault) in git-real.wasm on `git checkout` of another branch")
+        pytest.skip(
+            "Bun 1.4.2 crashes (segmentation fault or illegal instruction) in git-real.wasm: on `git checkout` of "
+            "another branch, and on `git commit` from a subdirectory with the stat of fusedwasi (node, JSC and wasmtime "
+            "run it fine)"
+        )
 
 
 def real_git(*args: str, cwd: Path) -> str:
@@ -72,8 +76,9 @@ def real_git(*args: str, cwd: Path) -> str:
 
 
 def test_a_local_repository_from_a_subdirectory(
-    git: Callable[..., int], tmp_path: Path, capfd: pytest.CaptureFixture[str]
+    git: Callable[..., int], tmp_path: Path, capfd: pytest.CaptureFixture[str], session: str
 ) -> None:
+    skip_on_bun(session)
     run = git
     assert run("init") == 0
     deep = tmp_path / "sub" / "deep"

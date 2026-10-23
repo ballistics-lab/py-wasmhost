@@ -189,6 +189,11 @@ wheels = [
 ]
 
 [[package]]
+name = "fusedwasi"
+version = "0.0.0"
+source = { git = "https://github.com/natify-sh/fusedwasi?branch=wasi-p2#f98b1288a3b847e2fe3e36a51be93d046e2167fa" }
+
+[[package]]
 name = "identify"
 version = "2.6.20"
 source = { registry = "https://pypi.org/simple" }
@@ -559,6 +564,9 @@ wheels = [
 [[package]]
 name = "wasmhost"
 source = { editable = "." }
+dependencies = [
+    { name = "fusedwasi" },
+]
 
 [package.optional-dependencies]
 gi-jsc = [
@@ -583,6 +591,7 @@ dev = [
 
 [package.metadata]
 requires-dist = [
+    { name = "fusedwasi", git = "https://github.com/natify-sh/fusedwasi?branch=wasi-p2" },
     { name = "pygobject", marker = "sys_platform == 'linux' and extra == 'gi-jsc'", specifier = ">=3.42" },
     { name = "wasmtime", marker = "extra == 'wasmtime'", specifier = ">=49.0.0" },
 ]

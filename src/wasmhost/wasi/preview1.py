@@ -2,9 +2,11 @@
 
 The 46 functions of the specification (the `legacy/preview1` witx files of the WebAssembly/WASI repository, branch
 `wasi-0.1`), over directories of the real file system, with standard streams, arguments, an environment, clocks and
-random bytes. Sockets, threads and signals are not supported: those calls answer as the specification allows
-(`ENOTSOCK`, `ENOSYS`). The first snapshot, `wasi_unstable` (what older toolchains still produce), is offered too,
-from the same object: see UNSTABLE below for the four things in which it differs. Standard library only.
+random bytes. The calls themselves are those of the package `fusedwasi` (`fusedwasi.p1`, the Python twin of the C core
+that `wasmext` builds into its modules); this module is the shape `wasmhost` gives them: the options of the host
+(`args`, `env`, `preopens`, `stdin`, `stdout`, `stderr`, `readonly`), the import objects of the engines, and the tables
+of the specification. Sockets are not supported (`ENOTSOCK`). The first snapshot, `wasi_unstable` (what older toolchains
+still produce), is offered too, from the same object: see UNSTABLE below for the four things in which it differs.
 
     wasi = Preview1(args=["prog", "-v"], preopens={"/": "some/dir"}, stdout=sys.stdout.buffer.write)
     code = wasi.run(module)           # the exit code of `_start`
@@ -24,15 +26,14 @@ steps, so this is not proof against another process that changes the directory i
 
 from __future__ import annotations
 
-import errno as _errno
-import functools
 import os
-import stat
 import struct
 import sys
-import time
-from collections.abc import Callable, Collection, Iterable, Mapping, Sequence
-from typing import Any, Literal, Protocol, TypeVar
+from collections.abc import Callable, Collection, Mapping, Sequence
+from typing import Any, Protocol
+
+from fusedwasi.p1 import wasi_p1, wasi_p1_unstable
+from fusedwasi.p1.wasi_p1_core import E_PIPE, Exit, State, WasiError, errno_of
 
 from .._api import Instance, Module
 from .._binary import i32, i64
@@ -151,49 +152,56 @@ _SNAPSHOT_AWARE = frozenset({"fd_seek", "fd_fdstat_get", "fd_filestat_get", "pat
 
 # The wasm signature of each function: the parameters (the specification's results other than the errno are
 # pointers, added at the end) and the results. The tests compare this table with the witx file.
-SIGNATURES: dict[str, tuple[tuple[str, ...], tuple[str, ...]]] = {}
-_F = TypeVar("_F", bound=Callable[..., object])
-
-
-def _call(*params: str, results: tuple[str, ...] = (i32,)) -> Callable[[_F], _F]:
-    def register(fn: _F) -> _F:
-        SIGNATURES[fn.__name__] = (params, results)
-        return fn
-
-    return register
-
-
-# Python's errno numbers -> WASI's (the position in the table).
-_HOST_ERRNO: dict[int, int] = {}
-for _value, _name in enumerate(TABLES["errno"]):
-    _host = getattr(_errno, "E" + _name.upper(), None)
-    if _host is not None and _value:
-        _HOST_ERRNO.setdefault(_host, _value)
-
-_STDIN_RIGHTS = Rights.fd_read | Rights.fd_filestat_get | Rights.poll_fd_readwrite | Rights.fd_fdstat_set_flags
-_STDOUT_RIGHTS = (
-    Rights.fd_write | Rights.fd_filestat_get | Rights.poll_fd_readwrite | Rights.fd_fdstat_set_flags | Rights.fd_sync
-)
-_WRITE_RIGHTS = Rights.fd_write | Rights.fd_datasync | Rights.fd_allocate | Rights.fd_filestat_set_size
-# Every right that changes something in a folder or in a file: a read-only preopen is one without them, and so is
-# whatever is opened from it (a directory hands down no more than it has).
-_MUTATING_RIGHTS = (
-    _WRITE_RIGHTS
-    | Rights.fd_filestat_set_times
-    | Rights.path_create_directory
-    | Rights.path_create_file
-    | Rights.path_link_source
-    | Rights.path_link_target
-    | Rights.path_rename_source
-    | Rights.path_rename_target
-    | Rights.path_filestat_set_size
-    | Rights.path_filestat_set_times
-    | Rights.path_symlink
-    | Rights.path_remove_directory
-    | Rights.path_unlink_file
-)
-_O_BINARY = getattr(os, "O_BINARY", 0)
-_O_NOFOLLOW = getattr(os, "O_NOFOLLOW", 0)
+SIGNATURES: dict[str, tuple[tuple[str, ...], tuple[str, ...]]] = {
+    "args_get": ((i32, i32), (i32,)),
+    "args_sizes_get": ((i32, i32), (i32,)),
+    "environ_get": ((i32, i32), (i32,)),
+    "environ_sizes_get": ((i32, i32), (i32,)),
+    "clock_res_get": ((i32, i32), (i32,)),
+    "clock_time_get": ((i32, i64, i32), (i32,)),
+    "random_get": ((i32, i32), (i32,)),
+    "sched_yield": ((), (i32,)),
+    "proc_exit": ((i32,), ()),
+    "proc_raise": ((i32,), (i32,)),
+    "poll_oneoff": ((i32, i32, i32, i32), (i32,)),
+    "fd_read": ((i32, i32, i32, i32), (i32,)),
+    "fd_pread": ((i32, i32, i32, i64, i32), (i32,)),
+    "fd_write": ((i32, i32, i32, i32), (i32,)),
+    "fd_pwrite": ((i32, i32, i32, i64, i32), (i32,)),
+    "fd_seek": ((i32, i64, i32, i32), (i32,)),
+    "fd_tell": ((i32, i32), (i32,)),
+    "fd_advise": ((i32, i64, i64, i32), (i32,)),
+    "fd_allocate": ((i32, i64, i64), (i32,)),
+    "fd_datasync": ((i32,), (i32,)),
+    "fd_sync": ((i32,), (i32,)),
+    "fd_close": ((i32,), (i32,)),
+    "fd_renumber": ((i32, i32), (i32,)),
+    "fd_fdstat_get": ((i32, i32), (i32,)),
+    "fd_fdstat_set_flags": ((i32, i32), (i32,)),
+    "fd_fdstat_set_rights": ((i32, i64, i64), (i32,)),
+    "fd_filestat_get": ((i32, i32), (i32,)),
+    "fd_filestat_set_size": ((i32, i64), (i32,)),
+    "fd_filestat_set_times": ((i32, i64, i64, i32), (i32,)),
+    "fd_prestat_get": ((i32, i32), (i32,)),
+    "fd_prestat_dir_name": ((i32, i32, i32), (i32,)),
+    "fd_readdir": ((i32, i32, i32, i64, i32), (i32,)),
+    "path_create_directory": ((i32, i32, i32), (i32,)),
+    "path_filestat_get": ((i32, i32, i32, i32, i32), (i32,)),
+    "path_filestat_set_times": ((i32, i32, i32, i32, i64, i64, i32), (i32,)),
+    "path_link": ((i32, i32, i32, i32, i32, i32, i32), (i32,)),
+    "path_open": ((i32, i32, i32, i32, i32, i64, i64, i32, i32), (i32,)),
+    "path_readlink": ((i32, i32, i32, i32, i32, i32), (i32,)),
+    "path_remove_directory": ((i32, i32, i32), (i32,)),
+    "path_rename": ((i32, i32, i32, i32, i32, i32), (i32,)),
+    "path_symlink": ((i32, i32, i32, i32, i32), (i32,)),
+    "path_unlink_file": ((i32, i32, i32), (i32,)),
+    "sock_accept": ((i32, i32, i32), (i32,)),
+    "sock_recv": ((i32, i32, i32, i32, i32, i32), (i32,)),
+    "sock_send": ((i32, i32, i32, i32, i32), (i32,)),
+    "sock_shutdown": ((i32, i32), (i32,)),
+}
+# The functions of `wasi_unstable`: those of the snapshot but sock_accept.
+UNSTABLE_SIGNATURES = {name: sig for name, sig in SIGNATURES.items() if name not in _NOT_IN_UNSTABLE}
 
 
 class WasiExit(Exception):  # noqa: N818 -- WASI's proc_exit
@@ -202,60 +210,6 @@ class WasiExit(Exception):  # noqa: N818 -- WASI's proc_exit
     def __init__(self, code: int) -> None:
         super().__init__(code)
         self.code = code
-
-
-class _Fail(Exception):
-    """An error code to hand back to the program."""
-
-    def __init__(self, code: int) -> None:
-        super().__init__(code)
-        self.code = code
-
-
-class _Memory(Protocol):
-    def read(self, offset: int, length: int) -> bytes: ...
-    def write(self, offset: int, data: bytes) -> object: ...
-    def __len__(self) -> int: ...
-
-
-class _Entry:
-    """One open file descriptor of the program."""
-
-    def __init__(self, kind: str, rights: int, inheriting: int = 0, *, host_path: str = "", osfd: int = -1) -> None:
-        self.kind = kind  # stdin, stdout, stderr, dir, file
-        self.rights = rights
-        self.inheriting = inheriting
-        self.host_path = host_path  # a directory's real path (the world of its names), or a file's
-        self.osfd = osfd
-        self.flags = 0  # fdflags
-        self.filetype = Filetype.directory if kind == "dir" else Filetype.character_device
-        self.preopen: bytes | None = None  # the name the program was given, for a preopened directory
-        self.listing: list[tuple[bytes, int, int]] | None = None  # fd_readdir: (name, inode, filetype)
-
-
-def _s64(value: int) -> int:
-    return value - (1 << 64) if value >= 1 << 63 else value
-
-
-def _filetype_of(mode: int) -> int:
-    if stat.S_ISDIR(mode):
-        return Filetype.directory
-    if stat.S_ISREG(mode):
-        return Filetype.regular_file
-    if stat.S_ISLNK(mode):
-        return Filetype.symbolic_link
-    if stat.S_ISCHR(mode):
-        return Filetype.character_device
-    if stat.S_ISBLK(mode):
-        return Filetype.block_device
-    if stat.S_ISSOCK(mode):
-        return Filetype.socket_stream
-    return Filetype.unknown
-
-
-def _inside(path: str, base: str) -> bool:
-    path, base = os.path.normcase(path), os.path.normcase(base)
-    return path == base or path.startswith(base if base.endswith(os.sep) else base + os.sep)
 
 
 class _Source:
@@ -273,9 +227,6 @@ class _Source:
         self.pos += len(chunk)
         return chunk
 
-    def remaining(self) -> int:
-        return len(self.data) - self.pos if self.reader is None else 0
-
 
 def _sink(target: Callable[[bytes], object] | Any | None, fallback: Any) -> Callable[[bytes], object]:
     """Standard output or error: a callable that takes bytes, or an object with `write(bytes)`; None is the
@@ -285,6 +236,10 @@ def _sink(target: Callable[[bytes], object] | Any | None, fallback: Any) -> Call
     if callable(target):
         return target
     return target.write
+
+
+def _host_error(caught: OSError) -> WasiError:
+    return WasiError(errno_of(caught.errno))
 
 
 class Preview1:
@@ -314,11 +269,6 @@ class Preview1:
         self._stdin = _Source(stdin)
         self._stdout = _sink(stdout, lambda: sys.stdout)
         self._stderr = _sink(stderr, lambda: sys.stderr)
-        self._fds: dict[int, _Entry] = {
-            0: _Entry("stdin", _STDIN_RIGHTS),
-            1: _Entry("stdout", _STDOUT_RIGHTS),
-            2: _Entry("stderr", _STDOUT_RIGHTS),
-        }
         names: set[str] = set()
         if isinstance(readonly, str):
             names = {readonly}
@@ -326,15 +276,22 @@ class Preview1:
             names = {str(name) for name in readonly}
         if unknown := names - set(preopens or {}):
             raise ValueError(f"readonly: no preopen of that name: {sorted(unknown)}")
+        directories: list[tuple[str, str, bool]] = []
         for name, host in (preopens or {}).items():
             real = os.path.realpath(host)
             if not os.path.isdir(real):
                 raise NotADirectoryError(f"preopen {name!r}: {os.fspath(host)!r} is not a directory")
-            allowed = ALL_RIGHTS & ~_MUTATING_RIGHTS if readonly is True or name in names else ALL_RIGHTS
-            entry = _Entry("dir", allowed, allowed, host_path=real)
-            entry.preopen = str(name).encode("utf-8")
-            self._fds[self._free_fd()] = entry
+            directories.append((real, str(name), not (readonly is True or name in names)))
         self.memory: _Memory | None = None
+        self._current: Any = None  # the memory as the call in progress sees it: a view, where the engine can give one
+        self._state = State(
+            self._memory_of_the_call,
+            args=self.args,
+            env=self.env,
+            preopens=directories,
+            stdin_read=self._read_stdin,
+            stdout_write=self._write_stdout,
+        )
 
     # --- running
 
@@ -342,8 +299,11 @@ class Preview1:
         """The import object: every function of both snapshots, `wasi_snapshot_preview1` and `wasi_unstable`, to give to
         `Instance(module, wasi.imports())`; the engine links the ones the module imports."""
         return {
-            SNAPSHOT: {name: self._bind_call(name, params, False) for name, (params, _) in SIGNATURES.items()},
-            UNSTABLE: {name: self._bind_call(name, params, True) for name, (params, _) in UNSTABLE_SIGNATURES.items()},
+            SNAPSHOT: {name: self._bind_call(wasi_p1, name, params) for name, (params, _) in SIGNATURES.items()},
+            UNSTABLE: {
+                name: self._bind_call(wasi_p1_unstable, name, params)
+                for name, (params, _) in UNSTABLE_SIGNATURES.items()
+            },
         }
 
     def bind(self, instance: Instance) -> None:
@@ -382,13 +342,7 @@ class Preview1:
 
     def close(self) -> None:
         """Close the files the program opened (and forget all its descriptors)."""
-        for entry in self._fds.values():
-            if entry.osfd >= 0:
-                try:
-                    os.close(entry.osfd)
-                except OSError:
-                    pass
-        self._fds.clear()
+        self._state.close_all()
 
     def __enter__(self) -> Preview1:
         return self
@@ -396,677 +350,61 @@ class Preview1:
     def __exit__(self, *exc: object) -> None:
         self.close()
 
-    def _bind_call(self, name: str, params: tuple[str, ...], legacy: bool) -> Callable[..., int | None]:
-        method = getattr(self, name)
-        if legacy and name in _SNAPSHOT_AWARE:
-            method = functools.partial(method, legacy=True)
-        masks = tuple(MASK32 if p == i32 else MASK64 for p in params)
+    # --- what the host gives the calls of fusedwasi
 
-        def call(*args: int) -> int | None:
-            try:
-                method(*[a & m for a, m in zip(args, masks, strict=False)])
-            except _Fail as fail:
-                return fail.code
-            except BrokenPipeError:  # a sink may raise it bare, without an errno
-                return Errno.pipe
-            except OSError as exc:
-                return _HOST_ERRNO.get(exc.errno or 0, Errno.io)
-            except IndexError:  # the memory's own bounds check
-                return Errno.fault
-            except NotImplementedError:
-                return Errno.nosys
-            return Errno.success
-
-        if name == "proc_exit":  # does not come back: the exception goes through
-            return lambda *args: method(*[a & m for a, m in zip(args, masks, strict=False)])
-        return call
-
-    # --- the program's memory
-
-    def _mem(self) -> _Memory:
+    def _memory_of_the_call(self) -> Any:
         if self.memory is None:
             raise RuntimeError("the program has no memory yet: bind(instance) first")
-        return self.memory
+        return self._current if self._current is not None else self.memory
 
-    def _read(self, ptr: int, size: int) -> bytes:
-        mem = self._mem()
-        if ptr + size > len(mem):
-            raise _Fail(Errno.fault)
-        return bytes(mem.read(ptr, size)) if size else b""
-
-    def _write(self, ptr: int, data: bytes) -> None:
-        mem = self._mem()
-        if ptr + len(data) > len(mem):
-            raise _Fail(Errno.fault)
-        if data:
-            mem.write(ptr, data)
-
-    def _put(self, ptr: int, fmt: str, *values: int) -> None:
-        self._write(ptr, struct.pack(fmt, *values))
-
-    def _iovs(self, ptr: int, count: int) -> list[tuple[int, int]]:
-        return list(STRUCTS["iovec"].iter_unpack(self._read(ptr, 8 * count)))
-
-    def _string(self, ptr: int, size: int) -> str:
+    def _read_stdin(self, capacity: int) -> bytes:
         try:
-            text = self._read(ptr, size).decode("utf-8")
-        except UnicodeDecodeError:
-            raise _Fail(Errno.ilseq) from None
-        if "\0" in text:
-            raise _Fail(Errno.inval)
-        return text
+            return self._stdin.read(capacity)
+        except OSError as caught:
+            raise _host_error(caught) from None
 
-    # --- descriptors
+    def _write_stdout(self, fd: int, data: bytes) -> None:
+        try:
+            (self._stdout if fd == 1 else self._stderr)(data)
+        except BrokenPipeError:  # a sink may raise it bare, without an errno
+            raise WasiError(E_PIPE) from None
+        except OSError as caught:
+            raise _host_error(caught) from None
 
-    def _free_fd(self) -> int:
-        fd = 0
-        while fd in self._fds:
-            fd += 1
-        return fd
+    def _bind_call(self, table: Any, name: str, params: tuple[str, ...]) -> Callable[..., int | None]:
+        function = getattr(table, name)
+        if (
+            name == "proc_raise"
+        ):  # there are no signals to raise here: the program goes on (fusedwasi ends it with the signal)
 
-    def _entry(self, fd: int, right: int = 0) -> _Entry:
-        entry = self._fds.get(fd)
-        if entry is None:
-            raise _Fail(Errno.badf)
-        if right and entry.rights & right != right:  # all the rights asked for, not any of them
-            raise _Fail(Errno.notcapable)
-        return entry
+            def _raise(signal: int) -> int:
+                return Errno.inval if (signal & MASK32) >= len(TABLES["signal"]) else Errno.nosys
 
-    def _file(self, fd: int, right: int = 0) -> _Entry:
-        entry = self._entry(fd)
-        if entry.kind == "dir":
-            raise _Fail(Errno.isdir)
-        return self._entry(fd, right)
+            return _raise
+        masks = tuple(MASK32 if p == i32 else MASK64 for p in params)
+        state = self._state
 
-    def _dir(self, fd: int, right: int = 0) -> _Entry:
-        entry = self._entry(fd)
-        if entry.kind != "dir":  # what it is comes before what it may do
-            raise _Fail(Errno.notdir)
-        return self._entry(fd, right)
-
-    def _resolve(self, fd: int, right: int, ptr: int, size: int, follow: bool) -> tuple[_Entry, str]:
-        """The host path of a name under the directory `fd`; the name may not leave that directory. With `follow`
-        False the last component is not looked through (it may be a link: unlink, rename, symlink, lstat)."""
-        base = self._dir(fd, right)
-        name = self._string(ptr, size)
-        if name.startswith("/") or os.path.isabs(name):
-            raise _Fail(Errno.notcapable)
-        if not name:
-            raise _Fail(Errno.noent)
-        path = os.path.normpath(os.path.join(base.host_path, name))
-        real = (
-            os.path.realpath(path)
-            if follow
-            else os.path.join(os.path.realpath(os.path.dirname(path)), os.path.basename(path))
-        )
-        if not _inside(path, base.host_path) or not _inside(real, base.host_path):
-            raise _Fail(Errno.notcapable)
-        return base, path
-
-    # --- arguments, environment
-
-    @_call(i32, i32)
-    def args_get(self, argv: int, argv_buf: int) -> None:
-        self._strings(self.args, argv, argv_buf)
-
-    @_call(i32, i32)
-    def args_sizes_get(self, argc: int, size: int) -> None:
-        self._sizes(self.args, argc, size)
-
-    @_call(i32, i32)
-    def environ_get(self, environ: int, environ_buf: int) -> None:
-        self._strings(self.env, environ, environ_buf)
-
-    @_call(i32, i32)
-    def environ_sizes_get(self, count: int, size: int) -> None:
-        self._sizes(self.env, count, size)
-
-    def _strings(self, items: Iterable[str], table: int, buf: int) -> None:
-        pointers: list[int] = []
-        data = b""
-        for item in items:
-            pointers.append(buf + len(data))
-            data += item.encode("utf-8") + b"\0"
-        self._write(table, struct.pack(f"<{len(pointers)}I", *pointers))
-        self._write(buf, data)
-
-    def _sizes(self, items: Sequence[str], count: int, size: int) -> None:
-        total = sum(len(item.encode("utf-8")) + 1 for item in items)
-        self._put(count, "<I", len(items))
-        self._put(size, "<I", total)
-
-    # --- clocks, random, scheduling
-
-    _CLOCKS: dict[int, tuple[Literal["time", "monotonic", "process_time", "thread_time"], Callable[[], int]]] = {
-        # clockid -> (the time module's name for it, the reading in nanoseconds)
-        Clockid.realtime: ("time", time.time_ns),
-        Clockid.monotonic: ("monotonic", time.monotonic_ns),
-        Clockid.process_cputime_id: ("process_time", time.process_time_ns),
-    }
-    if hasattr(time, "thread_time_ns"):
-        _CLOCKS[Clockid.thread_cputime_id] = ("thread_time", time.thread_time_ns)
-    else:  # Python on Emscripten (Pyodide): no such clock, and one thread, so the thread's CPU time is the process's
-        _CLOCKS[Clockid.thread_cputime_id] = ("process_time", time.process_time_ns)
-
-    @_call(i32, i32)
-    def clock_res_get(self, clock_id: int, ptr: int) -> None:
-        if clock_id not in self._CLOCKS:
-            raise _Fail(Errno.inval)
-        resolution = time.get_clock_info(self._CLOCKS[clock_id][0]).resolution
-        self._put(ptr, "<Q", max(1, round(resolution * 1e9)))
-
-    @_call(i32, i64, i32)
-    def clock_time_get(self, clock_id: int, precision: int, ptr: int) -> None:
-        if clock_id not in self._CLOCKS:
-            raise _Fail(Errno.inval)
-        self._put(ptr, "<Q", self._CLOCKS[clock_id][1]() & MASK64)
-
-    @_call(i32, i32)
-    def random_get(self, buf: int, size: int) -> None:
-        if buf + size > len(self._mem()):  # before asking the system for that many bytes
-            raise _Fail(Errno.fault)
-        self._write(buf, os.urandom(size))
-
-    @_call()
-    def sched_yield(self) -> None:
-        time.sleep(0)
-
-    @_call(i32, results=())
-    def proc_exit(self, code: int) -> None:
-        raise WasiExit(code)
-
-    @_call(i32)
-    def proc_raise(self, signal: int) -> None:
-        if signal >= len(TABLES["signal"]):
-            raise _Fail(Errno.inval)
-        raise _Fail(Errno.nosys)  # there are no signals to raise here
-
-    @_call(i32, i32, i32, i32)
-    def poll_oneoff(self, in_ptr: int, out_ptr: int, count: int, nevents: int, legacy: bool = False) -> None:
-        if count == 0:
-            raise _Fail(Errno.inval)
-        stride = (UNSTABLE_STRUCTS if legacy else STRUCTS)["subscription"].size
-        raw = self._read(in_ptr, stride * count)
-        events: list[bytes] = []
-        deadlines: list[tuple[int, int, int]] = []  # (wake-up in ns from now, userdata, error)
-        pack = STRUCTS["event"].pack
-        for i in range(count):
-            userdata, tag = struct.unpack_from("<QB", raw, stride * i)
-            if tag == Eventtype.clock:
-                if legacy:
-                    _, clock_id, timeout, _, flags = _SUB_CLOCK_UNSTABLE.unpack_from(raw, stride * i + 16)
-                else:
-                    clock_id, timeout, _, flags = _SUB_CLOCK.unpack_from(raw, stride * i + 16)
-                if clock_id not in self._CLOCKS:
-                    events.append(pack(userdata, Errno.inval, Eventtype.clock, 0, 0))
-                    continue
-                wait = (
-                    timeout - self._CLOCKS[clock_id][1]()
-                    if flags & Subclockflags.subscription_clock_abstime
-                    else timeout
-                )
-                deadlines.append((max(0, wait), userdata, 0))
-            elif tag in (Eventtype.fd_read, Eventtype.fd_write):
-                (fd,) = _SUB_FD.unpack_from(raw, stride * i + 16)
-                entry = self._fds.get(fd)
-                if entry is None:
-                    events.append(pack(userdata, Errno.badf, tag, 0, 0))
-                else:  # files, directories and the standard streams are always ready
-                    events.append(pack(userdata, Errno.success, tag, self._ready_bytes(entry, tag), 0))
-            else:
-                raise _Fail(Errno.inval)
-        if not events and deadlines:  # nothing is ready: sleep until the first clock
-            first = min(d[0] for d in deadlines)
-            time.sleep(first / 1e9)
-            deadlines = [d for d in deadlines if d[0] <= first]
-            events = [pack(userdata, error, Eventtype.clock, 0, 0) for _, userdata, error in deadlines]
-        else:  # something is ready: clocks that have already run out go with it
-            events += [pack(u, e, Eventtype.clock, 0, 0) for wait, u, e in deadlines if wait == 0]
-        self._write(out_ptr, b"".join(events))
-        self._put(nevents, "<I", len(events))
-
-    def _ready_bytes(self, entry: _Entry, tag: int) -> int:
-        if tag == Eventtype.fd_read and entry.kind == "stdin":
-            return self._stdin.remaining()
-        if tag == Eventtype.fd_read and entry.kind == "file":
+        def call(*args: int) -> int | None:
+            masked = [a & m for a, m in zip(args, masks, strict=False)]
+            view: memoryview | None = None
+            take_view: Callable[[], memoryview] | None = getattr(self.memory, "view", None)
+            if take_view is not None:  # an engine that has its memory in this process: no copy
+                try:
+                    view = take_view()
+                except NotImplementedError:
+                    view = None
+            self._current = view
             try:
-                return max(0, os.fstat(entry.osfd).st_size - os.lseek(entry.osfd, 0, os.SEEK_CUR))
-            except OSError:
-                return 0
-        return 0
+                return function(state, *masked)  # type: ignore[no-any-return]
+            except Exit as exit_:  # proc_exit does not come back: the exception goes through
+                raise WasiExit(exit_.code) from None
+            finally:
+                self._current = None
 
-    # --- files: reading, writing, position
-
-    @_call(i32, i32, i32, i32)
-    def fd_read(self, fd: int, iovs: int, count: int, nread: int) -> None:
-        entry = self._file(fd, Rights.fd_read)
-        self._put(nread, "<I", self._gather(entry, self._iovs(iovs, count), None))
-
-    @_call(i32, i32, i32, i64, i32)
-    def fd_pread(self, fd: int, iovs: int, count: int, offset: int, nread: int) -> None:
-        entry = self._file(fd)
-        if entry.kind != "file":
-            raise _Fail(Errno.spipe)  # what it is comes before what it may do
-        self._entry(fd, Rights.fd_read | Rights.fd_seek)
-        self._put(nread, "<I", self._gather(entry, self._iovs(iovs, count), offset))
-
-    def _gather(self, entry: _Entry, iovs: list[tuple[int, int]], offset: int | None) -> int:
-        """Read into the buffers one after another, until one comes back short; the total."""
-        total = 0
-        for ptr, size in iovs:
-            if ptr + size > len(self._mem()):
-                raise _Fail(Errno.fault)
-            if not size:
-                continue
-            if entry.kind == "stdin":
-                data = self._stdin.read(size)
-            elif entry.kind == "file":
-                data = (
-                    self._pread(entry.osfd, size, total + offset) if offset is not None else os.read(entry.osfd, size)
-                )
-            else:
-                raise _Fail(Errno.badf)
-            self._write(ptr, data)
-            total += len(data)
-            if len(data) < size:
-                break
-        return total
-
-    @staticmethod
-    def _pread(osfd: int, size: int, offset: int) -> bytes:
-        if hasattr(os, "pread"):
-            return os.pread(osfd, size, offset)
-        here = os.lseek(osfd, 0, os.SEEK_CUR)  # Windows: no pread, so seek there and back
-        try:
-            os.lseek(osfd, offset, os.SEEK_SET)
-            return os.read(osfd, size)
-        finally:
-            os.lseek(osfd, here, os.SEEK_SET)
-
-    @staticmethod
-    def _pwrite(osfd: int, data: bytes, offset: int) -> int:
-        if hasattr(os, "pwrite"):
-            return os.pwrite(osfd, data, offset)
-        here = os.lseek(osfd, 0, os.SEEK_CUR)
-        try:
-            os.lseek(osfd, offset, os.SEEK_SET)
-            return os.write(osfd, data)
-        finally:
-            os.lseek(osfd, here, os.SEEK_SET)
-
-    @_call(i32, i32, i32, i32)
-    def fd_write(self, fd: int, iovs: int, count: int, nwritten: int) -> None:
-        entry = self._file(fd, Rights.fd_write)
-        self._put(nwritten, "<I", self._scatter(entry, self._iovs(iovs, count), None))
-
-    @_call(i32, i32, i32, i64, i32)
-    def fd_pwrite(self, fd: int, iovs: int, count: int, offset: int, nwritten: int) -> None:
-        entry = self._file(fd)
-        if entry.kind != "file":
-            raise _Fail(Errno.spipe)
-        self._entry(fd, Rights.fd_write | Rights.fd_seek)
-        self._put(nwritten, "<I", self._scatter(entry, self._iovs(iovs, count), offset))
-
-    def _scatter(self, entry: _Entry, iovs: list[tuple[int, int]], offset: int | None) -> int:
-        data = b"".join(self._read(ptr, size) for ptr, size in iovs)
-        if entry.kind == "stdout":
-            self._stdout(data)
-        elif entry.kind == "stderr":
-            self._stderr(data)
-        elif entry.kind == "file":
-            if offset is not None:
-                return self._pwrite(entry.osfd, data, offset)
-            if entry.flags & Fdflags.append:
-                os.lseek(entry.osfd, 0, os.SEEK_END)
-            return os.write(entry.osfd, data)
-        else:
-            raise _Fail(Errno.badf)
-        return len(data)
-
-    @_call(i32, i64, i32, i32)
-    def fd_seek(self, fd: int, offset: int, whence: int, ptr: int, legacy: bool = False) -> None:
-        entry = self._file(fd)
-        names = UNSTABLE_TABLES["whence"] if legacy else TABLES["whence"]
-        if whence >= len(names):
-            raise _Fail(Errno.inval)
-        if entry.kind != "file":
-            raise _Fail(Errno.spipe)
-        offset = _s64(offset)
-        if not entry.rights & Rights.fd_seek and not (
-            offset == 0 and names[whence] == "cur" and entry.rights & Rights.fd_tell
-        ):
-            raise _Fail(Errno.notcapable)
-        how = {"set": os.SEEK_SET, "cur": os.SEEK_CUR, "end": os.SEEK_END}[names[whence]]
-        self._put(ptr, "<Q", os.lseek(entry.osfd, offset, how))
-
-    @_call(i32, i32)
-    def fd_tell(self, fd: int, ptr: int) -> None:
-        entry = self._file(fd, Rights.fd_tell)
-        if entry.kind != "file":
-            raise _Fail(Errno.spipe)
-        self._put(ptr, "<Q", os.lseek(entry.osfd, 0, os.SEEK_CUR))
-
-    @_call(i32, i64, i64, i32)
-    def fd_advise(self, fd: int, offset: int, length: int, advice: int) -> None:
-        entry = self._entry(fd, Rights.fd_advise)
-        if advice >= len(TABLES["advice"]):
-            raise _Fail(Errno.inval)
-        if entry.kind == "dir":
-            raise _Fail(Errno.badf)
-        if entry.kind != "file":
-            raise _Fail(Errno.spipe)
-        if hasattr(os, "posix_fadvise"):
-            hint = getattr(os, "POSIX_FADV_" + TABLES["advice"][advice].upper(), None)
-            if hint is not None:
-                os.posix_fadvise(entry.osfd, offset, length, hint)
-
-    @_call(i32, i64, i64)
-    def fd_allocate(self, fd: int, offset: int, length: int) -> None:
-        entry = self._file(fd, Rights.fd_allocate)
-        if entry.kind != "file":
-            raise _Fail(Errno.badf)
-        if hasattr(os, "posix_fallocate"):
-            os.posix_fallocate(entry.osfd, offset, length)
-        elif os.fstat(entry.osfd).st_size < offset + length:
-            os.ftruncate(entry.osfd, offset + length)
-
-    @_call(i32)
-    def fd_datasync(self, fd: int) -> None:
-        entry = self._entry(fd, Rights.fd_datasync)
-        if entry.kind == "file":
-            getattr(os, "fdatasync", os.fsync)(entry.osfd)
-
-    @_call(i32)
-    def fd_sync(self, fd: int) -> None:
-        entry = self._entry(fd, Rights.fd_sync)
-        if entry.kind == "file":
-            os.fsync(entry.osfd)
-
-    @_call(i32)
-    def fd_close(self, fd: int) -> None:
-        entry = self._entry(fd)
-        del self._fds[fd]
-        if entry.osfd >= 0:
-            os.close(entry.osfd)
-
-    @_call(i32, i32)
-    def fd_renumber(self, source: int, target: int) -> None:
-        entry = self._entry(source)
-        old = self._entry(target)
-        if source != target:
-            if old.osfd >= 0:
-                os.close(old.osfd)
-            self._fds[target] = entry
-            del self._fds[source]
-
-    # --- descriptors' own state
-
-    @_call(i32, i32)
-    def fd_fdstat_get(self, fd: int, ptr: int, legacy: bool = False) -> None:
-        entry = self._entry(fd)
-        keep = UNSTABLE_ALL_RIGHTS if legacy else ALL_RIGHTS  # the first snapshot has no right for sock_accept
-        self._put(
-            ptr, STRUCTS["fdstat"].format, entry.filetype, entry.flags, entry.rights & keep, entry.inheriting & keep
-        )
-
-    @_call(i32, i32)
-    def fd_fdstat_set_flags(self, fd: int, flags: int) -> None:
-        entry = self._entry(fd, Rights.fd_fdstat_set_flags)
-        if flags >> len(TABLES["fdflags"]):
-            raise _Fail(Errno.inval)
-        entry.flags = flags  # append is honoured by fd_write; the others are only recorded
-
-    @_call(i32, i64, i64)
-    def fd_fdstat_set_rights(self, fd: int, base: int, inheriting: int) -> None:
-        entry = self._entry(fd)
-        if base & ~entry.rights or inheriting & ~entry.inheriting:  # rights can be given up, never gained
-            raise _Fail(Errno.notcapable)
-        entry.rights, entry.inheriting = base, inheriting
-
-    @_call(i32, i32)
-    def fd_filestat_get(self, fd: int, ptr: int, legacy: bool = False) -> None:
-        entry = self._entry(fd, Rights.fd_filestat_get)
-        if entry.kind == "file":
-            self._put_stat(ptr, os.fstat(entry.osfd), legacy)
-        elif entry.kind == "dir":
-            self._put_stat(ptr, os.stat(entry.host_path), legacy)
-        else:
-            self._put_filestat(ptr, legacy, 0, 0, Filetype.character_device, 1, 0, 0, 0, 0)
-
-    def _put_stat(self, ptr: int, st: os.stat_result, legacy: bool) -> None:
-        self._put_filestat(
-            ptr,
-            legacy,
-            st.st_dev & MASK64,
-            st.st_ino & MASK64,
-            _filetype_of(st.st_mode),
-            st.st_nlink,
-            st.st_size,
-            st.st_atime_ns,
-            st.st_mtime_ns,
-            st.st_ctime_ns,
-        )
-
-    def _put_filestat(self, ptr: int, legacy: bool, *fields: int) -> None:
-        # the first snapshot counts links in 32 bits, and its record is laid out differently
-        self._put(ptr, (UNSTABLE_STRUCTS if legacy else STRUCTS)["filestat"].format, *fields)
-
-    @_call(i32, i64)
-    def fd_filestat_set_size(self, fd: int, size: int) -> None:
-        entry = self._file(fd, Rights.fd_filestat_set_size)
-        if entry.kind != "file":
-            raise _Fail(Errno.inval)
-        os.ftruncate(entry.osfd, size)
-
-    @_call(i32, i64, i64, i32)
-    def fd_filestat_set_times(self, fd: int, atim: int, mtim: int, flags: int) -> None:
-        entry = self._entry(fd, Rights.fd_filestat_set_times)
-        if entry.kind in ("stdin", "stdout", "stderr"):
-            raise _Fail(Errno.badf)
-        target: int | str = entry.osfd if entry.kind == "file" and os.utime in os.supports_fd else entry.host_path
-        self._set_times(target, atim, mtim, flags, True)
-
-    @staticmethod
-    def _set_times(target: int | str, atim: int, mtim: int, flags: int, follow: bool) -> None:
-        both = Fstflags.atim | Fstflags.atim_now, Fstflags.mtim | Fstflags.mtim_now
-        if flags >> len(TABLES["fstflags"]) or flags & both[0] == both[0] or flags & both[1] == both[1]:
-            raise _Fail(Errno.inval)
-        st = os.stat(target, follow_symlinks=follow) if isinstance(target, str) else os.fstat(target)
-        now = time.time_ns()
-        a = atim if flags & Fstflags.atim else now if flags & Fstflags.atim_now else st.st_atime_ns
-        m = mtim if flags & Fstflags.mtim else now if flags & Fstflags.mtim_now else st.st_mtime_ns
-        if isinstance(target, str) and os.utime not in os.supports_follow_symlinks:
-            os.utime(target, ns=(a, m))
-        elif isinstance(target, str):
-            os.utime(target, ns=(a, m), follow_symlinks=follow)
-        else:
-            os.utime(target, ns=(a, m))
-
-    # --- preopened directories, directory listing
-
-    @_call(i32, i32)
-    def fd_prestat_get(self, fd: int, ptr: int) -> None:
-        entry = self._entry(fd)
-        if entry.preopen is None:
-            raise _Fail(Errno.badf)
-        self._put(ptr, STRUCTS["prestat"].format, Preopentype.dir, len(entry.preopen))
-
-    @_call(i32, i32, i32)
-    def fd_prestat_dir_name(self, fd: int, ptr: int, size: int) -> None:
-        entry = self._entry(fd)
-        if entry.preopen is None:
-            raise _Fail(Errno.badf)
-        if size < len(entry.preopen):
-            raise _Fail(Errno.nametoolong)
-        self._write(ptr, entry.preopen)
-
-    @_call(i32, i32, i32, i64, i32)
-    def fd_readdir(self, fd: int, buf: int, size: int, cookie: int, used: int) -> None:
-        entry = self._dir(fd, Rights.fd_readdir)
-        if cookie == 0 or entry.listing is None:
-            entry.listing = self._list(entry.host_path)
-        out = b""
-        for index in range(cookie, len(entry.listing)):
-            name, inode, kind = entry.listing[index]
-            out += STRUCTS["dirent"].pack(index + 1, inode, len(name), kind) + name
-            if len(out) >= size:
-                break
-        out = out[:size]
-        self._write(buf, out)
-        self._put(used, "<I", len(out))
-
-    @staticmethod
-    def _list(path: str) -> list[tuple[bytes, int, int]]:
-        rows: list[tuple[bytes, int, int]] = []
-        for name in [".", "..", *sorted(os.listdir(path))]:
-            try:
-                st = os.lstat(os.path.join(path, name))
-            except OSError:  # gone since the listing was made
-                continue
-            rows.append((name.encode("utf-8"), st.st_ino & MASK64, _filetype_of(st.st_mode)))
-        return rows
-
-    # --- paths
-
-    @_call(i32, i32, i32)
-    def path_create_directory(self, fd: int, ptr: int, size: int) -> None:
-        _, path = self._resolve(fd, Rights.path_create_directory, ptr, size, False)
-        os.mkdir(path)
-
-    @_call(i32, i32, i32, i32, i32)
-    def path_filestat_get(self, fd: int, flags: int, ptr: int, size: int, out: int, legacy: bool = False) -> None:
-        follow = bool(flags & Lookupflags.symlink_follow)
-        _, path = self._resolve(fd, Rights.path_filestat_get, ptr, size, follow)
-        self._put_stat(out, os.stat(path) if follow else os.lstat(path), legacy)
-
-    @_call(i32, i32, i32, i32, i64, i64, i32)
-    def path_filestat_set_times(self, fd: int, flags: int, ptr: int, size: int, atim: int, mtim: int, fst: int) -> None:
-        follow = bool(flags & Lookupflags.symlink_follow)
-        _, path = self._resolve(fd, Rights.path_filestat_set_times, ptr, size, follow)
-        self._set_times(path, atim, mtim, fst, follow)
-
-    @_call(i32, i32, i32, i32, i32, i32, i32)
-    def path_link(
-        self, old_fd: int, flags: int, old_ptr: int, old_size: int, new_fd: int, new_ptr: int, new_size: int
-    ) -> None:
-        follow = bool(flags & Lookupflags.symlink_follow)
-        _, old = self._resolve(old_fd, Rights.path_link_source, old_ptr, old_size, follow)
-        _, new = self._resolve(new_fd, Rights.path_link_target, new_ptr, new_size, False)
-        os.link(old, new)
-
-    @_call(i32, i32, i32, i32, i32, i64, i64, i32, i32)
-    def path_open(
-        self,
-        fd: int,
-        dirflags: int,
-        ptr: int,
-        size: int,
-        oflags: int,
-        base: int,
-        inheriting: int,
-        fdflags: int,
-        out: int,
-    ) -> None:
-        if oflags >> len(TABLES["oflags"]) or fdflags >> len(TABLES["fdflags"]):
-            raise _Fail(Errno.inval)
-        follow = bool(dirflags & Lookupflags.symlink_follow)
-        parent, path = self._resolve(fd, Rights.path_open, ptr, size, follow)
-        if oflags & Oflags.creat and not parent.rights & Rights.path_create_file:
-            raise _Fail(Errno.notcapable)
-        if oflags & Oflags.trunc and not parent.rights & Rights.path_filestat_set_size:
-            raise _Fail(Errno.notcapable)
-        base &= parent.inheriting & ALL_RIGHTS
-        inheriting &= parent.inheriting & ALL_RIGHTS
-        try:
-            st: os.stat_result | None = os.stat(path) if follow else os.lstat(path)
-        except FileNotFoundError:
-            st = None
-        if st is not None and stat.S_ISDIR(st.st_mode):
-            if oflags & Oflags.creat and oflags & Oflags.excl:
-                raise _Fail(Errno.exist)
-            if oflags & Oflags.trunc:
-                raise _Fail(Errno.isdir)
-            entry = _Entry("dir", base, inheriting, host_path=os.path.realpath(path))
-        else:
-            if oflags & Oflags.directory:
-                raise _Fail(Errno.noent if st is None else Errno.notdir)
-            writable = bool(base & _WRITE_RIGHTS) or bool(oflags & Oflags.trunc)
-            readable = bool(base & (Rights.fd_read | Rights.fd_readdir)) or not writable
-            mode = os.O_RDWR if readable and writable else os.O_WRONLY if writable else os.O_RDONLY
-            if oflags & Oflags.creat:
-                mode |= os.O_CREAT
-            if oflags & Oflags.excl:
-                mode |= os.O_EXCL
-            if oflags & Oflags.trunc:
-                mode |= os.O_TRUNC
-            if not follow:
-                mode |= _O_NOFOLLOW
-            osfd = os.open(path, mode | _O_BINARY, 0o666)
-            kind = _filetype_of(os.fstat(osfd).st_mode)
-            if not writable:
-                base &= ~_WRITE_RIGHTS
-            entry = _Entry("file", base, inheriting, host_path=os.path.realpath(path), osfd=osfd)
-            entry.filetype = kind
-        entry.flags = fdflags
-        if entry.kind == "dir":
-            entry.filetype = Filetype.directory
-        new = self._free_fd()
-        self._fds[new] = entry
-        self._put(out, "<I", new)
-
-    @_call(i32, i32, i32, i32, i32, i32)
-    def path_readlink(self, fd: int, ptr: int, size: int, buf: int, buf_len: int, used: int) -> None:
-        _, path = self._resolve(fd, Rights.path_readlink, ptr, size, False)
-        target = os.fsencode(os.readlink(path))[:buf_len]
-        self._write(buf, target)
-        self._put(used, "<I", len(target))
-
-    @_call(i32, i32, i32)
-    def path_remove_directory(self, fd: int, ptr: int, size: int) -> None:
-        _, path = self._resolve(fd, Rights.path_remove_directory, ptr, size, False)
-        os.rmdir(path)
-
-    @_call(i32, i32, i32, i32, i32, i32)
-    def path_rename(self, old_fd: int, old_ptr: int, old_size: int, new_fd: int, new_ptr: int, new_size: int) -> None:
-        _, old = self._resolve(old_fd, Rights.path_rename_source, old_ptr, old_size, False)
-        _, new = self._resolve(new_fd, Rights.path_rename_target, new_ptr, new_size, False)
-        os.replace(old, new)
-
-    @_call(i32, i32, i32, i32, i32)
-    def path_symlink(self, old_ptr: int, old_size: int, fd: int, new_ptr: int, new_size: int) -> None:
-        target = self._string(old_ptr, old_size)  # stored as given; a link that leads out is refused when followed
-        _, path = self._resolve(fd, Rights.path_symlink, new_ptr, new_size, False)
-        os.symlink(target, path)
-
-    @_call(i32, i32, i32)
-    def path_unlink_file(self, fd: int, ptr: int, size: int) -> None:
-        _, path = self._resolve(fd, Rights.path_unlink_file, ptr, size, False)
-        if stat.S_ISDIR(os.lstat(path).st_mode):
-            raise _Fail(Errno.isdir)
-        os.unlink(path)
-
-    # --- sockets: none (a descriptor is never a socket)
-
-    @_call(i32, i32, i32)
-    def sock_accept(self, fd: int, flags: int, out: int) -> None:
-        self._socket(fd)
-
-    @_call(i32, i32, i32, i32, i32, i32)
-    def sock_recv(self, fd: int, iovs: int, count: int, flags: int, nread: int, roflags: int) -> None:
-        self._socket(fd)
-
-    @_call(i32, i32, i32, i32, i32)
-    def sock_send(self, fd: int, iovs: int, count: int, flags: int, nwritten: int) -> None:
-        self._socket(fd)
-
-    @_call(i32, i32)
-    def sock_shutdown(self, fd: int, how: int) -> None:
-        self._socket(fd)
-
-    def _socket(self, fd: int) -> None:
-        self._entry(fd)
-        raise _Fail(Errno.notsock)
+        return call
 
 
-# The functions of `wasi_unstable`: those of the snapshot but sock_accept (complete only here, once all are registered).
-UNSTABLE_SIGNATURES = {name: sig for name, sig in SIGNATURES.items() if name not in _NOT_IN_UNSTABLE}
+class _Memory(Protocol):
+    def read(self, offset: int, length: int) -> bytes: ...
+    def write(self, offset: int, data: bytes) -> object: ...
+    def __len__(self) -> int: ...

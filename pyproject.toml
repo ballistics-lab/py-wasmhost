@@ -32,7 +32,8 @@ classifiers = [
     "Topic :: Software Development :: Libraries :: Python Modules",
     "Typing :: Typed",
 ]
-dependencies = []
+# fusedwasi is the WASI 0.1 host (`fusedwasi.p1`, pure Python). Not released yet: until it is, uv takes it from git (see [tool.uv.sources]).
+dependencies = ["fusedwasi"]
 
 [project.scripts]
 wasmhost = "wasmhost._cli:main"
@@ -72,6 +73,7 @@ dev = [
 ]
 
 [tool.uv.sources]
+fusedwasi = { git = "https://github.com/natify-sh/fusedwasi", branch = "wasi-p2" }
 # pywasm3's PyPI release is years behind the API Wasm3Backend uses; build it from the repo (uv also
 # fetches its wasm3 submodule). Needs a C compiler.
 pywasm3 = { git = "https://github.com/wasm3/pywasm3", rev = "4c1334e03b29f9576e9ef265f5cf7c7d5d51a37d" } # main of 2026-09-28: exception handling API, a newer wasm3, on top of Py_mod_gil support
