@@ -554,7 +554,7 @@ code = wasi.run(Module(open("prog.wasm", "rb").read()))  # the exit code: what `
 - **`wasi_unstable`** is the same calls with four differences (the order of `whence`, one right less, a 32-bit link count in
   `filestat`, and a clock subscription with an extra field) and no `sock_accept`.
 - **Errors.** A read of standard output and a write to standard input are `EBADF`; a name that is not UTF-8 is `ENOENT` on POSIX (a name is bytes
-  there); a seek by 0 bytes from the current position needs only the right to tell. These are the answers of fusedwasi, and so of `wasmext`.
+  there) and `EINVAL` on Windows; unlinking a directory is `EISDIR` on Linux and `EPERM` on macOS (what the system says); a seek by 0 bytes from the current position needs only the right to tell. These are the answers of fusedwasi, and so of `wasmext`.
 - **Not supported:** sockets (`ENOTSOCK`), signals (`ENOSYS`: `proc_raise` does not end the program here, whereas in `wasmext` and in fusedwasi it does). A host function that sleeps (`poll_oneoff`) is outside what
   `timeout` and `fuel` can stop.
 

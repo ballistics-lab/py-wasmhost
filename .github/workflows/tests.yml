@@ -162,8 +162,7 @@ jobs:
       - name: Install into a system-site-packages venv
         run: |
           uv venv --system-site-packages --python /usr/bin/python3 .venv
-          # fusedwasi is not released: from git, as [tool.uv.sources] says (uv pip does not read it)
-          uv pip install -e . pytest "fusedwasi @ git+https://github.com/natify-sh/fusedwasi@wasi-p2"
+          uv pip install -e . pytest
 
       - name: pytest --wasm-backend gi-jsc (JIT on)
         run: .venv/bin/python -m pytest -v --wasm-backend gi-jsc

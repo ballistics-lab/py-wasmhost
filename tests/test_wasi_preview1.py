@@ -528,7 +528,8 @@ def test_mkdir_rmdir_unlink_rename(host: Host, root: Path) -> None:
     assert host.path("path_create_directory", "d") == Errno.exist
     (root / "d" / "f").write_text("x")
     assert host.path("path_remove_directory", "d") == Errno.notempty
-    assert host.path("path_unlink_file", "d") == Errno.isdir
+    # unlink of a directory: EISDIR on Linux, EPERM on macOS (what POSIX allows); the system's own answer is given
+    assert host.path("path_unlink_file", "d") in ((Errno.perm,) if sys.platform == "darwin" else (Errno.isdir,))
     assert host.path("path_unlink_file", "d/f") == 0
     assert host.path("path_remove_directory", "d") == 0
     assert host.path("path_unlink_file", "d") == Errno.noent
@@ -617,9 +618,9 @@ def test_a_directory_below_is_its_own_world(host: Host, root: Path) -> None:
 def test_bad_names(host: Host) -> None:
     assert host.open("")[0] == Errno.noent
     buf = host.put(b"\xff\xfe")
-    assert (
-        host("path_open", 3, FOLLOW, buf, 2, 0, ALL, ALL, 0, host.alloc(4)) == Errno.noent
-    )  # a name is bytes: it is simply not there
+    # a name is bytes on POSIX, so it is simply not there; Windows wants text, and says the name is invalid
+    expected = (Errno.inval,) if sys.platform == "win32" else (Errno.noent,)
+    assert host("path_open", 3, FOLLOW, buf, 2, 0, ALL, ALL, 0, host.alloc(4)) in expected
     buf = host.put(b"a\0b")
     assert host("path_open", 3, FOLLOW, buf, 3, 0, ALL, ALL, 0, host.alloc(4)) == Errno.inval
     assert host.open("x", dirfd=1)[0] == Errno.notdir
